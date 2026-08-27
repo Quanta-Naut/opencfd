@@ -2868,7 +2868,7 @@ boundary
 
 
       {/* ════════════════════ BOTTOM STATUS BAR ═════════════════════════════════ */}
-      <div className={`${displayOnly ? 'hidden' : 'shrink-0 h-6'} bg-[#F5F6F8] border-t border-[#E1E4E8] px-3 flex items-center justify-between text-[11px] font-mono text-[#69717D]`}>
+      <div className={`${displayOnly && !showMesh ? 'hidden' : 'shrink-0 h-6'} bg-[#F5F6F8] border-t border-[#E1E4E8] px-3 flex items-center justify-between text-[11px] font-mono text-[#69717D]`}>
         {/* Bottom Left: Live Cursor Position & Google Maps Style Scale Indicator */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2.5">
@@ -2897,8 +2897,24 @@ boundary
           )}
         </div>
 
-        {/* Bottom Right: Zoom level percentage */}
+        {/* Bottom Right: Mesh summary in Mesh view, zoom otherwise */}
         <div className="flex items-center gap-3 shrink-0">
+          {showMesh && meshData?.num_elements ? (() => {
+            const elements = Array.isArray(meshData.elements) ? meshData.elements : [];
+            const triangles = elements.filter((element: number[]) => element.length === 3).length;
+            const quads = elements.filter((element: number[]) => element.length === 4).length;
+            const minAngle = meshData.quality?.min_angle_degrees;
+            const skew = meshData.quality?.max_skewness;
+            return (
+              <>
+                <span><strong className="text-[#171A1F]">{meshData.num_nodes}</strong> nodes</span>
+                <span><strong className="text-[#171A1F]">{meshData.num_elements}</strong> cells</span>
+                <span><strong className="text-[#171A1F]">{triangles}</strong> tri · <strong className="text-[#171A1F]">{quads}</strong> quad</span>
+                {minAngle !== undefined && <span className={minAngle < 15 ? 'text-amber-600' : 'text-[#16A34A]'}><strong>{minAngle.toFixed(0)}°</strong> min</span>}
+                {skew !== undefined && <span>skew <strong className="text-[#171A1F]">{skew.toFixed(2)}</strong></span>}
+              </>
+            );
+          })() : null}
           <span className="text-[10px] text-[#69717D]">
             Zoom: <strong className="text-[#171A1F]">{(zoom / INITIAL_ZOOM * 100).toFixed(0)}%</strong>
           </span>

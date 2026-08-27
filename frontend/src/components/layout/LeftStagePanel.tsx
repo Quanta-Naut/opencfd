@@ -187,7 +187,23 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   // ── Single-Expanded Accordion (default: 1. Geometry expanded, others collapsed) ──
   const [expandedSection, setExpandedSection] = useState<number | null>(1);
   const [meshTopology, setMeshTopology] = useState<'unstructured' | 'structured'>('unstructured');
-  const [meshAdvancedOpen, setMeshAdvancedOpen] = useState(false);
+  const [meshAdvancedOpen, setMeshAdvancedOpen] = useState(true);
+
+  // Draft string for the y+ inputs so the field can be emptied / edited freely
+  // instead of snapping back to a fallback number on every keystroke.
+  const [yplusDraft, setYplusDraft] = useState(() => String(state.yplus.target_yplus ?? ''));
+  useEffect(() => {
+    setYplusDraft((prev) => (parseFloat(prev) === state.yplus.target_yplus ? prev : String(state.yplus.target_yplus ?? '')));
+  }, [state.yplus.target_yplus]);
+  const commitYplusDraft = (raw: string) => {
+    setYplusDraft(raw);
+    const parsed = parseFloat(raw);
+    if (Number.isFinite(parsed) && parsed > 0) updateYPlus({ target_yplus: parsed });
+  };
+  const normalizeYplusDraft = () => {
+    const parsed = parseFloat(yplusDraft);
+    if (!Number.isFinite(parsed) || parsed <= 0) setYplusDraft(String(state.yplus.target_yplus ?? 30));
+  };
   const [flowDirection, setFlowDirection] = useState<'neg_x_pos_x' | 'pos_x_neg_x' | 'neg_y_pos_y' | 'pos_y_neg_y'>('neg_x_pos_x');
 
   const toggleSection = (s: number) => {
@@ -751,7 +767,6 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           fine: 'Dense wake and near-body. Slower to solve.',
         };
         const field = 'w-full px-2 py-1 bg-[#F5F6F8] border border-[#E1E4E8] rounded font-mono focus:outline-none focus:border-[#2563EB]';
-        const q = meshData?.quality;
         return (
         <div className="p-4 space-y-4 text-xs text-[#171A1F]">
 
@@ -783,10 +798,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               <label className="block">
                 <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">Element type</span>
                 <select value={g.elementType} onChange={(e) => set({ elementType: e.target.value as typeof g.elementType })} className="w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md focus:outline-none focus:border-[#2563EB]">
-                  <option value="hybrid">Hybrid — prism layers at wall + triangles</option>
-                  <option value="tri">Triangles — fully unstructured</option>
-                  <option value="quad_dominant">Quad-dominant — mostly quads</option>
-                  <option value="quad">Quads — recombined all-quad</option>
+                  <option value="hybrid">Hybrid: prism layers at wall + triangles</option>
+                  <option value="tri">Triangles: fully unstructured</option>
+                  <option value="quad_dominant">Quad-dominant: mostly quads</option>
+                  <option value="quad">Quads: recombined all-quad</option>
                 </select>
               </label>
 
@@ -815,8 +830,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             type="number"
                             min="0.1"
                             step="1"
-                            value={state.yplus.target_yplus}
-                            onChange={(e) => updateYPlus({ target_yplus: parseFloat(e.target.value) || 1 })}
+                            value={yplusDraft}
+                            onChange={(e) => commitYplusDraft(e.target.value)}
+                            onBlur={normalizeYplusDraft}
                             className={`${field} bg-white border-blue-200`}
                           />
                         </label>
@@ -826,9 +842,16 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                         </div>
                       </div>
                       <button onClick={onApplyYPlusToMesh} className="w-full py-1.5 rounded-md bg-white border border-blue-200 text-[#1D4ED8] font-medium hover:bg-blue-50 transition-colors">
-                        Apply y⁺ sizing to first cell & layers
+                        Apply y⁺ sizing to first cell &amp; layers
                       </button>
                     </div>
+
+                    <p className="text-[10px] text-[#69717D] leading-snug mt-2">
+                      y⁺, first cell and layers size the <b>prism stack</b> against the wall
+                      (Hybrid element type). Overall cell size is the <b>Resolution</b>
+                      preset; near-wall cell size for a plain unstructured mesh is
+                      <b> Local wall / region size</b> under Advanced.
+                    </p>
                   </>
                 )}
               </div>
@@ -871,21 +894,6 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             <span>{isMeshing ? 'Generating…' : 'Generate mesh'}</span>
           </button>
 
-          {/* Last result */}
-          {meshData?.num_elements && (
-            <div className="border border-[#E1E4E8] rounded-md p-2.5 space-y-1.5 bg-[#FAFBFC]">
-              <div className="flex items-center justify-between font-mono text-[11px]">
-                <span className="text-[#69717D]">{meshData.num_nodes} nodes · {meshData.num_elements} cells</span>
-                {q && <span className={q.min_angle_degrees < 15 ? 'text-amber-600' : 'text-[#16A34A]'}>{q.min_angle_degrees?.toFixed(0)}° min</span>}
-              </div>
-              {q && (q.triangles > 0 || q.quads > 0) && (
-                <div className="font-mono text-[10px] text-[#A5ACB5]">{q.triangles} tri · {q.quads} quad · skew {q.max_skewness?.toFixed(2)}</div>
-              )}
-              {Array.isArray(meshData.warnings) && meshData.warnings.map((w: string, i: number) => (
-                <div key={i} className="text-[10px] text-amber-600 leading-snug flex gap-1"><AlertCircle className="w-3 h-3 shrink-0 mt-0.5" /><span>{w}</span></div>
-              ))}
-            </div>
-          )}
         </div>
         );
       })()}
@@ -1033,8 +1041,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 type="number"
                 min="0.1"
                 step="1"
-                value={state.yplus.target_yplus}
-                onChange={(e) => updateYPlus({ target_yplus: parseFloat(e.target.value) || 1 })}
+                value={yplusDraft}
+                onChange={(e) => commitYplusDraft(e.target.value)}
+                onBlur={normalizeYplusDraft}
                 className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded font-mono focus:outline-none focus:border-[#2563EB]"
               />
             </label>

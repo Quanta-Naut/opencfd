@@ -610,6 +610,11 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 f"'{element_type}' element type: prism layers replaced by graded near-wall cells."
             )
 
+        # Populated so the fallback ladder can re-tune the near-wall band if it
+        # has to drop the prism stack.
+        near_body = 0
+        near_body_iso_size = feature_size
+
         if wall_lines:
             first_layer = max(float(params.get("firstLayerHeightMm", 0.05)) / 1000.0, feature_span * 1e-5)
             layers = max(1, min(int(params.get("numPrismLayers", 12)), 50))
@@ -620,7 +625,18 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
             gmsh.model.mesh.field.setNumbers(wall_distance, "CurvesList", wall_lines)
             gmsh.model.mesh.field.setNumber(wall_distance, "Sampling", 300)
 
-            near_wall_target = max(min_size, feature_size)
+            # Near-wall isotropic cell size. WITH a prism stack the triangles on
+            # top just match `feature_size` (a big jump there slivers). WITHOUT
+            # one - pure tri/quad, or after the BL is dropped - keep the wall
+            # band a little finer when a boundary layer was asked for, nudged by
+            # the requested prism thickness so the layers/first-cell inputs still
+            # touch the mesh. Kept within [0.7, 1.0] x feature_size so the
+            # element count stays close to the plain result.
+            near_body_iso_size = feature_size
+            if prisms_requested:
+                thickness_ratio = max(0.0, min(1.0, thickness / max(feature_size, 1e-9)))
+                near_body_iso_size = max(min_size, feature_size * (1.0 - 0.3 * (1.0 - thickness_ratio)))
+            near_wall_target = max(min_size, feature_size) if use_prism else near_body_iso_size
 
             near_body = gmsh.model.mesh.field.add("Threshold")
             mesh_fields.append(near_body)
@@ -695,6 +711,14 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                         gmsh.model.mesh.field.setAsBoundaryLayer(0)
                     except Exception:
                         pass
+                    # Without the prism stack, keep the near-wall band a little
+                    # finer so the wall is still resolved and the layers/first
+                    # cell inputs still touch the mesh.
+                    if near_body:
+                        try:
+                            gmsh.model.mesh.field.setNumber(near_body, "SizeMin", near_body_iso_size)
+                        except Exception:
+                            pass
                     warnings.append("Boundary-layer field dropped to complete the mesh.")
 
                 recomb_mode = cfg["recomb"]
