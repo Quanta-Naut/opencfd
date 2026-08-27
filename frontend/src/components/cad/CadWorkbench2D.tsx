@@ -472,6 +472,7 @@ interface CadWorkbenchProps {
   displayOnly?: boolean;
   meshData?: any;
   showMesh?: boolean;
+  isMeshing?: boolean;
 }
 
 export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
@@ -513,6 +514,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   displayOnly = false,
   meshData,
   showMesh = false,
+  isMeshing = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -643,6 +645,31 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
   const [isLoading, setIsLoading] = useState(false);
   const [cmdText, setCmdText] = useState('Pick a tool or press L / P / R / C to start drawing.');
+  const [meshToastVisible, setMeshToastVisible] = useState(false);
+  const [meshProgress, setMeshProgress] = useState(0);
+  const meshWasActiveRef = useRef(false);
+
+  useEffect(() => {
+    if (isMeshing) {
+      meshWasActiveRef.current = true;
+      setMeshToastVisible(true);
+      setMeshProgress((value) => Math.max(value, 8));
+      const progressTimer = window.setInterval(() => {
+        setMeshProgress((value) => Math.min(94, value + Math.max(0.5, (94 - value) * 0.06)));
+      }, 140);
+      return () => window.clearInterval(progressTimer);
+    }
+
+    if (meshWasActiveRef.current) {
+      setMeshProgress(100);
+      const fadeTimer = window.setTimeout(() => {
+        setMeshToastVisible(false);
+        setMeshProgress(0);
+        meshWasActiveRef.current = false;
+      }, 2000);
+      return () => window.clearTimeout(fadeTimer);
+    }
+  }, [isMeshing]);
 
   // ── HUD ─────────────────────────────────────────────────────────────────────
   const [hud, setHud] = useState({ length: '0.000', angle: '0.0', x: '0.0000', y: '0.0000' });
@@ -1045,7 +1072,9 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     ctx.fillRect(0, 0, cw, ch);
 
     // ─── Adaptive Dynamic Grid (down to 0.2 mm) ──────────────────────────────
-    if (showGrid) {
+    // Mesh workflow views are intended for inspecting element topology; keep
+    // the CAD grid out of both the CAD and mesh render modes there.
+    if (showGrid && !showMesh) {
       const rawStep = 40 / Math.max(SCALE, 1e-6);
       const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
       const norm = rawStep / mag;
@@ -1567,7 +1596,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     setHud({ length: L, angle: ang, x: s.pt.x.toFixed(4), y: s.pt.y.toFixed(4) });
 
     // Step 2 Domain Handle Hover
-    if (currentStep === 2 && flowType === 'external' && !isDrawing) {
+    if (!displayOnly && currentStep === 2 && flowType === 'external' && !isDrawing) {
       const c = geometryBBox.chord;
       const h = geometryBBox.height;
       const effH = Math.max(0.5 * c, h);
@@ -1634,7 +1663,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     // Step 2: Domain Handle Drag start
-    if (currentStep === 2 && hoveredDomainHandle) {
+    if (!displayOnly && currentStep === 2 && hoveredDomainHandle) {
       const hasDomain = cadState.entities.some(e => e.role === 'domain_boundary');
       if (!hasDomain) {
         const newDomain = createDomainEntity(
@@ -1668,7 +1697,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       dragStart.current = { x: e.clientX, y: e.clientY };
       setMarquee(null);
     }
-  }, [pan, tool, currentStep, hoveredDomainHandle]);
+  }, [pan, tool, currentStep, hoveredDomainHandle, displayOnly]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     panning.current = false;
@@ -2623,7 +2652,7 @@ boundary
   const selectedCount = cadState.entities.filter(e => e.selected).length;
 
   return (
-    <div className="w-full h-full flex flex-col bg-white overflow-hidden" style={{ fontFamily: 'Inter, sans-serif' }}>
+    <div className="relative w-full h-full flex flex-col bg-white overflow-hidden" style={{ fontFamily: 'Inter, sans-serif' }}>
 
       {/* ═══════════════════════════════ CAD TOOLBAR ═══════════════════════════════ */}
       <div className={`shrink-0 bg-[#F5F6F8] border-b border-[#E1E4E8] px-2 py-1 flex items-center gap-1 flex-wrap ${displayOnly ? 'hidden' : ''}`}>
@@ -2920,6 +2949,18 @@ boundary
           </span>
         </div>
       </div>
+
+      {meshToastVisible && (
+        <div className="absolute right-4 bottom-10 z-40 w-72 rounded-lg border border-[#D9E2F2] bg-white/95 backdrop-blur shadow-lg px-3.5 py-3 pointer-events-none">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-[#171A1F]">{meshProgress >= 100 ? 'Mesh complete' : 'Generating mesh'}</span>
+            <span className="text-xs font-mono font-semibold text-[#2563EB]">{Math.round(meshProgress)}%</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#E8EEF8]">
+            <div className="h-full rounded-full bg-[#2563EB] transition-[width] duration-150 ease-out" style={{ width: `${meshProgress}%` }} />
+          </div>
+        </div>
+      )}
 
     </div>
   );

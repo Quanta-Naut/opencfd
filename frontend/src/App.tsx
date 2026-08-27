@@ -582,11 +582,6 @@ export function App() {
       <TopHeader
         projectName={state.geometry.name}
         onProjectNameChange={(name) => setState(prev => ({ ...prev, geometry: { ...prev.geometry, name } }))}
-        executionStatus={state.executionStatus}
-        onRunSolver={handleRunSolver}
-        onStopSolver={handleStopSolver}
-        onGenerateMesh={handleGenerateMesh}
-        isMeshing={isMeshing}
       />
 
       {/* 2. WORKFLOW NAVIGATION STRIP (36px) */}
@@ -698,9 +693,10 @@ export function App() {
         {/* Center: one shared CAD canvas; mesh mode reuses its camera and viewport */}
         <main className="flex-1 h-full min-w-0 relative bg-white overflow-hidden">
           <div className="w-full h-full">
-            <CadWorkbench2D
+              <CadWorkbench2D
               displayOnly={activeStage !== 'geometry'}
               meshData={meshData}
+              isMeshing={isMeshing}
               showMesh={activeStage === 'mesh'}
               initialEntities={cadEntities}
               onApplySketchMesh={handleApplySketchMesh}

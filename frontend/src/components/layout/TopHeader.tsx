@@ -1,24 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Play, Square, Save, MoreVertical, RefreshCw, Layers, Database, Pencil } from 'lucide-react';
+import { Save, MoreVertical, Database, Pencil } from 'lucide-react';
 
 interface TopHeaderProps {
   projectName: string;
   onProjectNameChange: (name: string) => void;
-  executionStatus: 'idle' | 'meshing' | 'running' | 'completed' | 'error';
-  onRunSolver: () => void;
-  onStopSolver: () => void;
-  onGenerateMesh: () => void;
-  isMeshing: boolean;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
   projectName,
   onProjectNameChange,
-  executionStatus,
-  onRunSolver,
-  onStopSolver,
-  onGenerateMesh,
-  isMeshing,
 }) => {
   const [showMenu, setShowMenu] = useState<boolean>(false);
   const [editing, setEditing] = useState(false);
@@ -37,23 +27,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
     if (trimmed) onProjectNameChange(trimmed);
     setEditing(false);
   };
-
-  const getStatusBadge = () => {
-    switch (executionStatus) {
-      case 'running':
-        return { text: 'RUNNING', dot: 'bg-blue-600 animate-pulse', textColor: 'text-blue-700' };
-      case 'meshing':
-        return { text: 'MESHING', dot: 'bg-amber-500 animate-pulse', textColor: 'text-amber-700' };
-      case 'completed':
-        return { text: 'CONVERGED', dot: 'bg-emerald-600', textColor: 'text-emerald-700' };
-      case 'error':
-        return { text: 'ERROR', dot: 'bg-red-600', textColor: 'text-red-700' };
-      default:
-        return { text: 'READY', dot: 'bg-emerald-600', textColor: 'text-emerald-700' };
-    }
-  };
-
-  const status = getStatusBadge();
 
   return (
     <header className="h-[52px] bg-white border-b border-[#E1E4E8] px-4 flex items-center justify-between select-none z-30 shrink-0">
@@ -93,41 +66,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         )}
       </div>
 
-      {/* Right: Status + Primary Actions */}
+      {/* Right: Project actions */}
       <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#F5F6F8] border border-[#E1E4E8] text-[11px] font-mono font-semibold">
-          <span className={`w-2 h-2 rounded-full ${status.dot}`} />
-          <span className={status.textColor}>{status.text}</span>
-        </div>
-
-        <button
-          onClick={onGenerateMesh}
-          disabled={isMeshing || executionStatus === 'running'}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium text-[#171A1F] bg-white hover:bg-[#F5F6F8] border border-[#E1E4E8] transition-colors disabled:opacity-40"
-          title="Generate Gmsh Mesh"
-        >
-          <Layers className="w-3.5 h-3.5 text-[#69717D]" />
-          <span>{isMeshing ? 'Meshing...' : 'Mesh'}</span>
-        </button>
-
-        {executionStatus === 'running' ? (
-          <button
-            onClick={onStopSolver}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-semibold text-white bg-[#DC2626] hover:bg-[#B91C1C] transition-colors shadow-xs"
-          >
-            <Square className="w-3.5 h-3.5 fill-current" />
-            <span>ABORT</span>
-          </button>
-        ) : (
-          <button
-            onClick={onRunSolver}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] transition-colors shadow-xs"
-          >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>RUN</span>
-          </button>
-        )}
-
         <div className="w-px h-4 bg-[#E1E4E8]" />
 
         <button
@@ -148,13 +88,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
           {showMenu && (
             <div className="absolute right-0 mt-1 w-48 bg-white border border-[#E1E4E8] rounded-lg shadow-lg py-1 z-50 text-xs text-[#171A1F]">
-              <button
-                onClick={() => { onGenerateMesh(); setShowMenu(false); }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#F5F6F8] flex items-center gap-2"
-              >
-                <RefreshCw className="w-3.5 h-3.5 text-[#69717D]" />
-                <span>Re-generate All Mesh</span>
-              </button>
               <button
                 onClick={() => setShowMenu(false)}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#F5F6F8] flex items-center gap-2"
