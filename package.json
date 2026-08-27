@@ -1,0 +1,20 @@
+{
+  "name": "opencfd-studio",
+  "version": "1.0.0",
+  "description": "Modern CFD Studio pairing OpenFOAM, Gmsh, and PyVista in a VS Code style desktop UI",
+  "scripts": {
+    "dev": "python3 run.py",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "build": "cd frontend && npm run build",
+    "backend": "cd backend && PYTHONPATH=. ./venv/bin/uvicorn app.main:app --reload --port 8000",
+    "frontend": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  },
+  "keywords": ["cfd", "openfoam", "gmsh", "pyvista", "tauri", "react"],
+  "author": "OpenCFD Team",
+  "license": "MIT"
+}
