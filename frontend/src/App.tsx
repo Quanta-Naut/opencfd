@@ -21,11 +21,14 @@ import {
   fetchYPlus,
   fetchTurbulenceInflow,
   generateMesh,
+  generateStructuredMesh,
   generateCaseFiles,
   fetchFieldSolution,
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
 } from './utils/api';
+import { saveProjectSession, renameProject } from './utils/projectsApi';
+import { toast } from './components/ui/Toast';
 import {
   CadWorkflowStep,
   FlowType,
@@ -38,11 +41,13 @@ import {
   validateDomainContainment,
   extractBoundaryEdges,
   validateBoundaryTags,
+  geometryFormsLoop,
 } from './types/cadWorkflow';
+import { Blocking, autoBlockingFromOutline, propagateNodeCounts, toStructuredRequest } from './types/blocking';
 
-const SESSION_STORAGE_KEY = 'opencfd_studio_session_v1';
+export const SESSION_STORAGE_KEY = 'opencfd_studio_session_v1';
 
-interface StudioSession {
+export interface StudioSession {
   state: CFDProjectState;
   cadEntities: CadEntity[];
   edgeTagMap: Record<string, BoundaryTag>;
@@ -55,21 +60,21 @@ interface StudioSession {
   lateralHeightFactor: number;
   angleOfAttackDeg: number;
   freestreamVelocity: number;
-  activeTagTool: BoundaryTag;
+  activeTagTool: BoundaryTag | null;
+  blocking?: Blocking | null;
+  hasMesh?: boolean;
 }
 
-function loadSavedSession(): Partial<StudioSession> | null {
-  try {
-    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+interface AppProps {
+  projectId: string;
+  projectName: string;
+  initialSession: Partial<StudioSession> | null;
+  onExitHome: () => void;
+  onProjectRenamed: (name: string) => void;
 }
 
-export function App() {
-  const savedSession = useMemo(() => loadSavedSession(), []);
+export function App({ projectId, projectName, initialSession, onExitHome, onProjectRenamed }: AppProps) {
+  const savedSession = initialSession;
 
   // Active workflow stage
   const [activeStage, setActiveStage] = useState<StageId>('geometry');
@@ -90,9 +95,10 @@ export function App() {
   const [lateralHeightFactor, setLateralHeightFactor] = useState(() => savedSession?.lateralHeightFactor ?? 10);
   const [angleOfAttackDeg, setAngleOfAttackDeg] = useState(() => savedSession?.angleOfAttackDeg ?? 0.0);
   const [freestreamVelocity, setFreestreamVelocity] = useState(() => savedSession?.freestreamVelocity ?? 35.0);
-  const [activeTagTool, setActiveTagTool] = useState<BoundaryTag>(() => savedSession?.activeTagTool || 'inlet');
+  const [activeTagTool, setActiveTagTool] = useState<BoundaryTag | null>(() => savedSession?.activeTagTool ?? null);
   const [edgeTagMap, setEdgeTagMap] = useState<Record<string, BoundaryTag>>(() => savedSession?.edgeTagMap || {});
   const [cadEntities, setCadEntities] = useState<CadEntity[]>(() => savedSession?.cadEntities || []);
+  const [blocking, setBlocking] = useState<Blocking | null>(() => savedSession?.blocking ?? null);
 
   // Action refs triggered from LeftStagePanel to CadWorkbench2D
   const requestGenerateDomainRef = useRef<(() => void) | null>(null);
@@ -111,29 +117,110 @@ export function App() {
 
   const geometryBBox = useMemo(() => getGeometryBBox(cadEntities), [cadEntities]);
 
-  const domainEntity = useMemo(
-    () => cadEntities.find(e => e.role === 'domain_boundary') || null,
+  // ── Fluid domain: an explicit object (the entities the user marked as the
+  // outer boundary). Ansys-style: define it once; if an edit breaks the loop the
+  // app asks you to redefine it, boundary tags are untouched.
+  const domainEntities = useMemo(
+    () => cadEntities.filter(e => e.role === 'domain_boundary'),
     [cadEntities]
   );
-
-
-  const domainValidation = useMemo(
-    () =>
-      flowType === 'external'
-        ? validateDomainContainment(domainEntity, cadEntities)
-        : { valid: true, reason: 'Internal flow' },
-    [domainEntity, cadEntities, flowType]
+  const autoDomainEntity = useMemo(() => domainEntities.find(e => e.autoDomain) || null, [domainEntities]);
+  const domainSegs = useMemo(() => domainEntities.filter(e => !e.autoDomain), [domainEntities]);
+  const closedDomainEntity = useMemo(
+    () => domainEntities.find(e => (e.isClosed || e.type === 'rectangle') && e.pts.length >= 3) || null,
+    [domainEntities]
   );
+
+  // 'auto' = generated far-field box | 'ok' = user loop still closes |
+  // 'broken' = user marked a domain but it no longer forms a closed loop |
+  // 'none' = nothing defined yet
+  const domainState: 'none' | 'auto' | 'ok' | 'broken' = useMemo(() => {
+    if (autoDomainEntity) return 'auto';
+    if (domainSegs.length === 0) return 'none';
+    return geometryFormsLoop(domainSegs) ? 'ok' : 'broken';
+  }, [autoDomainEntity, domainSegs]);
+  const domainKind: 'none' | 'auto' | 'custom' =
+    domainState === 'auto' ? 'auto' : domainState === 'ok' ? 'custom' : 'none';
+
+
+  const domainValidation = useMemo(() => {
+    if (flowType !== 'external') return { valid: true, reason: 'Internal flow' };
+    if (domainState === 'broken')
+      return { valid: false, reason: 'Domain boundary is broken - an edge was deleted or replaced. Reselect the whole outline and redefine it.' };
+    if (domainState === 'none')
+      return { valid: false, reason: 'Define the fluid domain: select your closed outline, then click "Define selected loop as the domain".' };
+    if (closedDomainEntity) return validateDomainContainment(closedDomainEntity, cadEntities);
+    return { valid: true };
+  }, [flowType, domainState, closedDomainEntity, cadEntities]);
 
   const boundaryEdges = useMemo(
     () => extractBoundaryEdges(cadEntities, flowType, edgeTagMap),
     [cadEntities, flowType, edgeTagMap]
   );
 
+  // Self-healing edge tags (Ansys "Named Selection" behaviour): every tag's
+  // location is remembered for the whole session. When an edge is redrawn (new
+  // entity id) close to where a tag used to be, it gets that tag back - even if
+  // you deleted it and redrew it several edits later.
+  const tagMemoryRef = useRef<Map<string, { mx: number; my: number; tag: BoundaryTag }>>(new Map());
+  useEffect(() => {
+    const edges = extractBoundaryEdges(cadEntities, flowType, edgeTagMap);
+    const bbox = getGeometryBBox(cadEntities);
+    const tol = Math.max(bbox.chord, bbox.height, 1) * 0.04;
+
+    // Record where each currently-explicit tag lives.
+    for (const e of edges) {
+      if (e.explicit) {
+        tagMemoryRef.current.set(e.key, { mx: e.midpoint.x, my: e.midpoint.y, tag: e.tag });
+      }
+    }
+
+    // Re-associate untagged edges to a remembered tag position.
+    const remap: Record<string, BoundaryTag> = {};
+    for (const e of edges) {
+      if (e.explicit) continue;
+      let best: { d: number; tag: BoundaryTag } | null = null;
+      for (const p of tagMemoryRef.current.values()) {
+        const d = Math.hypot(p.mx - e.midpoint.x, p.my - e.midpoint.y);
+        if (d < tol && (!best || d < best.d)) best = { d, tag: p.tag };
+      }
+      if (best) remap[e.key] = best.tag;
+    }
+
+    if (Object.keys(remap).length) {
+      setEdgeTagMap(prev => ({ ...prev, ...remap }));
+      for (const [k, tag] of Object.entries(remap)) {
+        const e = edges.find(x => x.key === k)!;
+        tagMemoryRef.current.set(k, { mx: e.midpoint.x, my: e.midpoint.y, tag });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cadEntities]);
+
+  // Flow-type change never destroys anything the user drew. The canvas handles
+  // the domain: an auto far-field box is regenerable so it is dropped on
+  // internal; a hand-drawn loop is demoted to plain geometry and kept.
+  const handleFlowTypeChange = (next: FlowType) => {
+    setFlowType(next);
+  };
+
   const boundaryValidation = useMemo(
     () => validateBoundaryTags(boundaryEdges, flowType),
     [boundaryEdges, flowType]
   );
+
+  // Signature of everything that would change the mesh - used to tell when the
+  // last-generated mesh is stale (geometry / tags / flow changed since).
+  const geomSignature = useMemo(
+    () =>
+      JSON.stringify(
+        cadEntities.map(e => ({ t: e.type, p: e.pts, c: e.isClosed, r: e.role, rad: e.radius }))
+      ) + '|' + JSON.stringify(edgeTagMap) + '|' + flowType +
+      '|' + JSON.stringify(blocking?.vertices?.map(v => v.pt) ?? null) +
+      '|' + JSON.stringify(blocking?.edges?.map(e => [e.nodes, e.law, e.ratio]) ?? null),
+    [cadEntities, edgeTagMap, flowType, blocking]
+  );
+  const meshSigRef = useRef<string | null>(null);
 
   // Master CFD Project State
 
@@ -275,32 +362,15 @@ export function App() {
     ],
   }));
 
-  // ── Auto-save Session State to Persistent Storage ──────────────────────────
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      try {
-        const sessionData: StudioSession = {
-          state,
-          cadEntities,
-          edgeTagMap,
-          cadWorkflowStep,
-          flowType,
-          domainShape,
-          domainPreset,
-          upstreamChordFactor,
-          downstreamChordFactor,
-          lateralHeightFactor,
-          angleOfAttackDeg,
-          freestreamVelocity,
-          activeTagTool,
-        };
-        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(sessionData));
-      } catch {
-        // ignore quota limits
-      }
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [
+  const [meshData, setMeshData] = useState<any>(null);
+  const [meshError, setMeshError] = useState<string | null>(null);
+  const [fieldData, setFieldData] = useState<any>(null);
+  const [caseFiles, setCaseFiles] = useState<Record<string, string>>({});
+  const [isMeshing, setIsMeshing] = useState<boolean>(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // ── Auto-save session to the project folder on disk (~/.OpenCFD/projects) ──
+  const buildSession = (): StudioSession => ({
     state,
     cadEntities,
     edgeTagMap,
@@ -314,13 +384,62 @@ export function App() {
     angleOfAttackDeg,
     freestreamVelocity,
     activeTagTool,
+    blocking,
+    hasMesh: !!meshData?.num_elements,
+  });
+  const sessionRef = useRef<StudioSession>(buildSession());
+  sessionRef.current = buildSession();
+
+  const saveWarned = useRef(false);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveProjectSession(projectId, sessionRef.current)
+        .then(() => { saveWarned.current = false; })
+        .catch((err) => {
+          console.warn('Project autosave note:', err);
+          if (!saveWarned.current) {
+            saveWarned.current = true;
+            toast('Could not autosave - check the backend connection.', 'error', 6000);
+          }
+        });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [
+    projectId,
+    state,
+    cadEntities,
+    edgeTagMap,
+    cadWorkflowStep,
+    flowType,
+    domainShape,
+    domainPreset,
+    upstreamChordFactor,
+    downstreamChordFactor,
+    lateralHeightFactor,
+    angleOfAttackDeg,
+    freestreamVelocity,
+    activeTagTool,
+    blocking,
+    meshData,
   ]);
 
-  const [meshData, setMeshData] = useState<any>(null);
-  const [fieldData, setFieldData] = useState<any>(null);
-  const [caseFiles, setCaseFiles] = useState<Record<string, string>>({});
-  const [isMeshing, setIsMeshing] = useState<boolean>(false);
-  const wsRef = useRef<WebSocket | null>(null);
+  const handleExitHome = async () => {
+    try {
+      await saveProjectSession(projectId, sessionRef.current);
+    } catch (err) {
+      console.warn('Project save-on-exit note:', err);
+    }
+    onExitHome();
+  };
+
+  const handleRenameProject = async (name: string) => {
+    onProjectRenamed(name);
+    try {
+      await renameProject(projectId, name);
+    } catch (err) {
+      console.warn('Project rename note:', err);
+    }
+  };
 
   // Auto calculate Y+ on parameter changes
   useEffect(() => {
@@ -373,22 +492,74 @@ export function App() {
     state.boundaries.turbulenceIntensityPercent,
   ]);
 
-  // Initial Mesh Generation on Mount
+  // ── Mesh gate ────────────────────────────────────────────────────────────
+  // Requirements: geometry drawn, a valid fluid domain (defined or auto), and
+  // an inlet + an outlet tag.
+  const meshGate = useMemo(() => {
+    const missing: string[] = [];
+    const drawn = cadEntities.filter(e => e.layer !== 'construction');
+    if (drawn.length === 0) missing.push('Draw or import a geometry');
+    if (flowType === 'external' && !domainValidation.valid)
+      missing.push(domainValidation.reason || 'Define the fluid domain');
+    if (!boundaryValidation.valid)
+      missing.push(boundaryValidation.reason || 'Tag at least one inlet and one outlet');
+    return { ready: missing.length === 0, missing };
+  }, [cadEntities, flowType, domainValidation, boundaryValidation]);
+
+  const meshReady = !!meshData?.num_elements;
+  // The mesh no longer matches the geometry if anything mesh-relevant changed.
+  const meshStale = !!meshData && meshSigRef.current !== null && meshSigRef.current !== geomSignature;
+
+  // One combined notice for "you edited the geometry": if the edit also broke
+  // the domain, say so in the same toast instead of firing two.
+  const lastEditNoticeRef = useRef<string>('');
   useEffect(() => {
-    if (geometryEntitiesCount > 0) handleGenerateMesh();
-  }, []);
+    const broken = domainState === 'broken';
+    const notice = broken && meshStale ? 'both' : broken ? 'domain' : meshStale ? 'mesh' : '';
+    if (notice && notice !== lastEditNoticeRef.current) {
+      lastEditNoticeRef.current = notice;
+      if (notice === 'both')
+        toast('Domain boundary broke and the mesh is now out of date. Reselect the outline in the Domain step, then regenerate the mesh.', 'error', 8000);
+      else if (notice === 'domain')
+        toast('Domain boundary broke - an edge changed. Reselect the outline in the Domain step and redefine it.', 'error', 8000);
+      else
+        toast('Geometry changed since the mesh was made - regenerate to update it.', 'info', 5000);
+    }
+    if (!notice) lastEditNoticeRef.current = '';
+  }, [domainState, meshStale]);
+
+  const stageStatus: Partial<Record<StageId, { locked: boolean; reason?: string; missing?: string[] }>> = {
+    geometry: { locked: false },
+    caseSetup: { locked: false },
+    mesh: {
+      locked: !meshGate.ready,
+      reason: 'Finish geometry, domain and boundary tagging first',
+      missing: meshGate.missing,
+    },
+    boundaries: {
+      locked: !meshGate.ready,
+      reason: 'Finish geometry, domain and boundary tagging first',
+      missing: meshGate.missing,
+    },
+    solver: { locked: !meshReady, reason: 'Generate a mesh first' },
+    results: { locked: !meshReady, reason: 'Generate a mesh first' },
+  };
 
   const handleGenerateMesh = async () => {
-    if (geometryEntitiesCount === 0) {
+    if (!meshGate.ready) {
       setState((prev) => ({
         ...prev,
-        terminalLogs: [...prev.terminalLogs, '[Gmsh] Add 2D geometry before generating a mesh.'],
+        terminalLogs: [
+          ...prev.terminalLogs,
+          `[Gmsh] Cannot mesh yet - ${meshGate.missing.join('; ')}.`,
+        ],
       }));
       return;
     }
     setIsMeshing(true);
     // A failed regeneration must not leave an old or placeholder mesh visible.
     setMeshData(null);
+    setMeshError(null);
     setFieldData(null);
     setState((prev) => ({
       ...prev,
@@ -423,6 +594,14 @@ export function App() {
       });
 
       setMeshData(mesh);
+      meshSigRef.current = geomSignature;
+
+      toast(`Mesh ready: ${mesh.num_nodes} nodes, ${mesh.num_elements} cells.`, 'success');
+      // Only surface warnings the user can act on. Routine internal fallbacks
+      // (boundary layer dropped, MeshAdapt fallback, prism-to-graded) are noise.
+      (mesh.warnings || [])
+        .filter((w: string) => /coarsen|too aggressive|cell sizes|closed loop|inlet|outlet/i.test(w))
+        .forEach((w: string) => toast(w, 'info', 7000));
 
       // Mesh generation succeeded independently of optional post-processing.
       setState((prev) => ({
@@ -451,15 +630,88 @@ export function App() {
         }));
       }
     } catch (err: any) {
+      const msg = err?.message || 'Mesh generation failed.';
+      setMeshError(msg);
+      toast(msg, 'error', 8000);
       setState((prev) => ({
         ...prev,
         executionStatus: 'error',
-        terminalLogs: [...prev.terminalLogs, `[Error] ${err.message}`],
+        terminalLogs: [...prev.terminalLogs, `[Error] ${msg}`],
       }));
     } finally {
       setIsMeshing(false);
     }
   };
+
+  // ── Structured meshing (H-block transfinite) ──────────────────────────────
+  const handleAutoBlock = () => {
+    const bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
+    if (!bk) {
+      toast('Could not auto-block this outline. Define a closed domain, or split a single block manually.', 'error', 7000);
+      return;
+    }
+    setBlocking(propagateNodeCounts(bk));
+    const n = bk.blocks.length;
+    toast(`Built ${n} block${n > 1 ? 's' : ''}. Set cell counts, then generate the structured mesh.`, 'success');
+  };
+
+  const handleGenerateStructuredMesh = async () => {
+    if (!blocking) {
+      toast('Build the block topology first.', 'info');
+      return;
+    }
+    setIsMeshing(true);
+    setMeshData(null);
+    setMeshError(null);
+    setFieldData(null);
+    setState((prev) => ({
+      ...prev,
+      executionStatus: 'meshing',
+      terminalLogs: [...prev.terminalLogs, '[Gmsh] Generating structured (transfinite) mesh...'],
+    }));
+    try {
+      const req = toStructuredRequest(propagateNodeCounts(blocking));
+      const mesh = await generateStructuredMesh(req);
+      setMeshData(mesh);
+      meshSigRef.current = geomSignature;
+      toast(`Structured mesh: ${mesh.num_nodes} nodes, ${mesh.num_elements} quads.`, 'success');
+      (mesh.warnings || [])
+        .filter((w: string) => /coarsen|too aggressive|cell sizes|tris|non-quad/i.test(w))
+        .forEach((w: string) => toast(w, 'info', 7000));
+      setState((prev) => ({
+        ...prev,
+        executionStatus: 'idle',
+        terminalLogs: [
+          ...prev.terminalLogs,
+          `[Gmsh] Structured mesh complete: ${mesh.num_nodes} nodes, ${mesh.num_elements} quads.`,
+        ],
+      }));
+      try {
+        const fields = await fetchFieldSolution(mesh, state.geometry.type, state.boundaries.inletVelocity, state.physics.regime);
+        setFieldData(fields);
+        const dicts = await generateCaseFiles(state.physics, state.boundaries, state.solver);
+        setCaseFiles(dicts);
+      } catch (postProcessError: any) {
+        setState((prev) => ({
+          ...prev,
+          terminalLogs: [...prev.terminalLogs, `[Postprocess] ${postProcessError.message}`],
+        }));
+      }
+    } catch (err: any) {
+      const msg = err?.message || 'Structured meshing failed.';
+      setMeshError(msg);
+      toast(msg, 'error', 8000);
+      setState((prev) => ({
+        ...prev,
+        executionStatus: 'error',
+        terminalLogs: [...prev.terminalLogs, `[Error] ${msg}`],
+      }));
+    } finally {
+      setIsMeshing(false);
+    }
+  };
+
+  const handleUpdateBlocking = (bk: Blocking | null) => setBlocking(bk);
 
   const handleApplySketchMesh = async (mesh: any, name: string) => {
     setMeshData(mesh);
@@ -580,17 +832,18 @@ export function App() {
     <div className="flex flex-col h-screen w-screen bg-[#F5F6F8] overflow-hidden font-sans text-[#171A1F]">
       {/* 1. TOP BAR (52px) */}
       <TopHeader
-        projectName={state.geometry.name}
-        onProjectNameChange={(name) => setState(prev => ({ ...prev, geometry: { ...prev.geometry, name } }))}
+        projectName={projectName}
+        onProjectNameChange={handleRenameProject}
+        onExitHome={handleExitHome}
       />
 
       {/* 2. WORKFLOW NAVIGATION STRIP (36px) */}
-      <WorkflowStrip activeStage={activeStage} onSelectStage={setActiveStage} />
+      <WorkflowStrip activeStage={activeStage} onSelectStage={setActiveStage} stageStatus={stageStatus} />
 
       {/* 3. THREE-COLUMN HERO WORKSPACE */}
       <div className="flex-1 flex min-h-0 relative">
-        {activeStage === 'caseSetup' ? (
-          <div className="flex-1 min-w-0 h-full">
+        {activeStage === 'caseSetup' && (
+          <div className="absolute inset-0 z-30 bg-[#F5F6F8] overflow-hidden flex">
             <CaseSetupDrawer
               state={state}
               flowType={flowType}
@@ -606,11 +859,15 @@ export function App() {
               updateBoundaries={(p) => setState((prev) => ({ ...prev, boundaries: { ...prev.boundaries, ...p } }))}
             />
           </div>
-        ) : (
-          <>
+        )}
+        {/* Workbench stays mounted under the Case Setup overlay so CAD state is
+            never lost when switching stages. */}
+        <>
         {/* Left Column: Stage Controls (280px) */}
         <LeftStagePanel
           activeStage={activeStage}
+          onSelectStage={setActiveStage}
+          stageStatus={stageStatus}
           state={state}
           updateGeometry={(p) => setState((prev) => ({ ...prev, geometry: { ...prev.geometry, ...p } }))}
           updatePhysics={(p) => setState((prev) => ({
@@ -626,8 +883,14 @@ export function App() {
           updateSolver={(p) => setState((prev) => ({ ...prev, solver: { ...prev.solver, ...p } }))}
           updatePostProcess={(p) => setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...p } }))}
           onGenerateMesh={handleGenerateMesh}
+          blocking={blocking}
+          onAutoBlock={handleAutoBlock}
+          onUpdateBlocking={handleUpdateBlocking}
+          onGenerateStructuredMesh={handleGenerateStructuredMesh}
           onApplyYPlusToMesh={handleApplyYPlusToMesh}
           meshData={meshData}
+          meshError={meshError}
+          meshStale={meshStale}
           onRunSolver={handleRunSolver}
           isMeshing={isMeshing}
           onSelectBoundary={setSelectedBoundary}
@@ -658,6 +921,7 @@ export function App() {
           cadWorkflowStep={cadWorkflowStep}
           setCadWorkflowStep={setCadWorkflowStep}
           flowType={flowType}
+          setFlowType={handleFlowTypeChange}
           domainShape={domainShape}
           setDomainShape={setDomainShape}
           domainPreset={domainPreset}
@@ -685,6 +949,8 @@ export function App() {
           onMeshHandoff={() => requestMeshHandoffRef.current?.()}
           onDownloadBlockMeshDict={() => requestDownloadBlockMeshDictRef.current?.()}
           domainValidation={domainValidation}
+          domainKind={domainKind}
+          domainState={domainState}
           boundaryValidation={boundaryValidation}
           boundaryEdgesCount={boundaryEdges.length}
           geometryEntitiesCount={geometryEntitiesCount}
@@ -696,6 +962,11 @@ export function App() {
               <CadWorkbench2D
               displayOnly={activeStage !== 'geometry'}
               meshData={meshData}
+              meshStale={meshStale}
+              blocking={blocking}
+              onUpdateBlocking={handleUpdateBlocking}
+              showBlocking={activeStage === 'mesh'}
+              domainBroken={domainState === 'broken'}
               isMeshing={isMeshing}
               showMesh={activeStage === 'mesh'}
               initialEntities={cadEntities}
@@ -737,9 +1008,7 @@ export function App() {
             />
           </div>
         </main>
-
-          </>
-        )}
+        </>
 
         {/* Right Column: Contextual Inspector (250px) */}
         {activeStage !== 'caseSetup' && (

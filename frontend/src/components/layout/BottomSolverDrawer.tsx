@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronUp, ChevronDown, Terminal, LineChart, Shield, FileCode, Trash2 } from 'lucide-react';
 import { ResponsiveContainer, LineChart as RechartsLineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
 import { ResidualDataPoint } from '../../types/cfd';
@@ -21,6 +21,15 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'residuals' | 'forces' | 'console' | 'dicts'>('residuals');
   const [selectedDict, setSelectedDict] = useState<string>('system/controlDict');
+
+  // Tell floating things (toasts) how tall the bottom bar area is so they can sit
+  // above it instead of overlapping the console. 24px status bar + 32px header
+  // + 176px expanded body.
+  useEffect(() => {
+    const h = 24 + 32 + (isExpanded ? 176 : 0);
+    document.documentElement.style.setProperty('--app-bottom-bar', `${h}px`);
+    return () => { document.documentElement.style.removeProperty('--app-bottom-bar'); };
+  }, [isExpanded]);
 
   // Compute live ticker stats
   const lastIter = residuals.length > 0 ? residuals[residuals.length - 1].iteration : 0;

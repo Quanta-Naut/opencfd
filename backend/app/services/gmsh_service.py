@@ -64,8 +64,19 @@ def _entity_points(entity: Dict[str, Any]) -> List[Tuple[float, float]]:
     return _clean_loop(entity.get("pts", []))
 
 
-def _join_segmented_loops(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Rebuild closed profiles from older sessions that stored one line per edge."""
+def _join_segmented_loops(
+    entities: List[Dict[str, Any]],
+    edge_tags: Dict[str, Any] | None = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Stitch loose line segments into closed profiles.
+
+    Users draw a boundary any way they like (Line tool, Rectangle + Trim, etc.),
+    so the geometry often arrives as one entity per edge. We rebuild the closed
+    loop AND carry each segment's boundary tag onto the corresponding edge of the
+    rebuilt polyline, so tagging is not tied to how the outline was drawn.
+    Returns (entities, edge_tags) - both possibly rewritten.
+    """
+    edge_tags = dict(edge_tags or {})
     tolerance = 1e-6
     candidates = [
         entity for entity in entities
@@ -88,6 +99,8 @@ def _join_segmented_loops(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]
         chain = [start, point(seed["pts"][1])]
         consumed.add(seed_index)
         traversed = {seed_index}
+        # edge_seg_ids[k] = source entity id that became edge k of the rebuilt loop
+        edge_seg_ids: List[Any] = [seed.get("id")]
         while not same(chain[-1], chain[0]):
             next_index = None
             next_point = None
@@ -106,21 +119,29 @@ def _join_segmented_loops(entities: List[Dict[str, Any]]) -> List[Dict[str, Any]
             consumed.add(next_index)
             traversed.add(next_index)
             chain.append(next_point)
+            edge_seg_ids.append(candidates[next_index].get("id"))
 
         if len(chain) >= 4 and same(chain[-1], chain[0]):
             closed_segment_indices.update(traversed)
+            new_id = seed.get("id", "boundary")
             rebuilt.append({
                 **seed,
                 "type": "polyline",
                 "isClosed": True,
                 "pts": [{"x": x, "y": y} for x, y in chain[:-1]],
             })
+            # Move each source segment's tag ("<segId>_0") onto "<newId>_<edgeIdx>".
+            for edge_idx, seg_id in enumerate(edge_seg_ids):
+                for key in (f"{seg_id}_0", f"{seg_id}_-1"):
+                    if key in edge_tags:
+                        edge_tags[f"{new_id}_{edge_idx}"] = edge_tags[key]
+                        break
 
     # A closed reconstruction replaces its source segments; leave unrelated
     # open CAD lines intact so they can still be diagnosed/ignored explicitly.
     remaining = [entity for entity in entities if entity not in candidates]
     remaining.extend(entity for index, entity in enumerate(candidates) if index not in closed_segment_indices)
-    return remaining + rebuilt
+    return remaining + rebuilt, edge_tags
 
 
 def _polygon_metrics(points: List[List[float]]) -> Tuple[float, float, float]:
@@ -385,7 +406,9 @@ def _condition_wall_loop(points: List[Tuple[float, float]], feature_size: float,
 
 def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
     """Generate a real 2D triangular mesh from the CAD domain and closed loops."""
-    entities = _join_segmented_loops(params.get("cadEntities") or [])
+    entities, joined_edge_tags = _join_segmented_loops(
+        params.get("cadEntities") or [], params.get("edgeTagMap") or {}
+    )
     if not entities:
         raise ValueError("No CAD entities were supplied for meshing.")
 
@@ -420,6 +443,24 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         hh = max(p[1] for p in hole_points) - min(p[1] for p in hole_points)
         feature_span = min(feature_span, max(math.hypot(hw, hh), span * 1e-3))
 
+    # Edges the user tagged "wall" are treated as an obstacle for sizing even when
+    # they belong to the outer boundary (a hand-drawn wind-tunnel wedge / step /
+    # fairing). Their bounding box feeds the near-wall cell size, and later their
+    # curves feed the Distance/Threshold + boundary-layer fields - so the mesh is
+    # fine at the wedge and coarse out in the free stream, just like an airfoil.
+    wall_seg_pts: List[Tuple[float, float]] = []
+    for loop in loops:
+        loop_id = loop["entity"].get("id", "boundary")
+        lp = loop["points"]
+        for i in range(len(lp)):
+            if str(joined_edge_tags.get(f"{loop_id}_{i}", "")).strip().lower() == "wall":
+                wall_seg_pts.append(lp[i])
+                wall_seg_pts.append(lp[(i + 1) % len(lp)])
+    if len(wall_seg_pts) >= 2:
+        ww = max(p[0] for p in wall_seg_pts) - min(p[0] for p in wall_seg_pts)
+        wh = max(p[1] for p in wall_seg_pts) - min(p[1] for p in wall_seg_pts)
+        feature_span = min(feature_span, max(math.hypot(ww, wh), span * 1e-3))
+
     # Base (medium) characteristic lengths, then scaled by the resolution preset.
     # The far field takes the full preset swing; the near-wall size only gets to
     # grow by up to 1.4x on the coarse preset, so the body outline stays smooth
@@ -439,6 +480,29 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         feature_size = min(local_refinement_size, far_size)
     min_size = requested_min_size if requested_min_size > 0 else max(feature_size * 0.12, far_size * 1e-4)
     max_size = max(far_size, min_size * 2.0)
+    warnings: List[str] = []
+
+    # Guard against cell sizes that would explode the element count. Without this
+    # a tiny "Local wall size" on a large domain makes millions of cells and the
+    # whole fallback ladder hangs for minutes. Estimate elements assuming ~30% of
+    # the surface meshes near the walls at feature_size and the rest at far_size.
+    outer_area = abs(_signed_area(outer["points"]))
+    tri = 0.43  # area of a unit equilateral triangle
+    est_elements = (
+        0.30 * outer_area / max(feature_size * feature_size * tri, 1e-18)
+        + 0.70 * outer_area / max(far_size * far_size * tri, 1e-18)
+    )
+    ELEMENT_CAP = 450_000.0
+    if est_elements > ELEMENT_CAP:
+        bump = math.sqrt(est_elements / ELEMENT_CAP)
+        feature_size *= bump
+        min_size *= bump
+        max_size = max(max_size, min_size * 2.0)
+        warnings.append(
+            f"The chosen cell sizes would make roughly {int(est_elements / 1000)}k "
+            f"elements - sizes were coarsened {bump:.1f}x to keep meshing responsive. "
+            f"Raise Local wall size / Max size (or lower Growth rate) for a finer mesh."
+        )
 
     # The obstacle outline keeps its full CAD fidelity - every imported point is
     # a mesh node, so the body never goes faceted at any preset. We only
@@ -478,11 +542,10 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
     requested_algorithm = str(params.get("meshAlgorithm", "frontal_delaunay")).lower()
     primary_algorithm = _ALGORITHM_IDS.get(requested_algorithm, 6)
 
-    edge_tags = params.get("edgeTagMap") or {}
+    edge_tags = joined_edge_tags
     line_metadata: List[Tuple[int, str]] = []
     wall_lines: List[int] = []
     all_lines: List[int] = []
-    warnings: List[str] = []
 
     with _gmsh_session():
         gmsh.option.setNumber("General.Terminal", 0)
@@ -534,6 +597,14 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         for name, lines in boundary_groups.items():
             physical_tag = gmsh.model.addPhysicalGroup(1, lines)
             gmsh.model.setPhysicalName(1, physical_tag, name)
+
+        # Treat every "wall"-tagged edge like an obstacle wall for meshing:
+        # the Distance/Threshold refinement and the boundary-layer extruder below
+        # both work off `wall_lines`, so this is what gives a hand-drawn wedge /
+        # step a fine near-wall mesh even though it sits on the outer boundary.
+        for line in boundary_groups.get("wall", []):
+            if line not in wall_lines:
+                wall_lines.append(line)
 
         gmsh.option.setNumber("Mesh.Optimize", 1 if optimize_mesh else 0)
         gmsh.option.setNumber("Mesh.OptimizeNetgen", 1 if optimize_mesh else 0)
@@ -644,7 +715,16 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
             gmsh.model.mesh.field.setNumber(near_body, "SizeMin", near_wall_target)
             gmsh.model.mesh.field.setNumber(near_body, "SizeMax", max_size)
             gmsh.model.mesh.field.setNumber(near_body, "DistMin", max(thickness, feature_size * 1.5))
-            wake_reach = feature_span * (2.5 if use_proximity else 1.4) + feature_size * 8.0
+            # How far the fine near-wall band reaches before it has grown back to
+            # the far-field size. Geometric growth from `near_wall_target` to
+            # `far_size` at `growth_rate` covers a distance of roughly
+            #   (far_size - near_wall_target) / (growth_rate - 1).
+            # Low growth_rate (1.1) -> wide, gradual transition; high (1.5) ->
+            # tight, abrupt transition. Proximity refinement widens it.
+            growth_reach = (far_size - near_wall_target) / max(growth_rate - 1.0, 0.02)
+            if use_proximity:
+                growth_reach *= 1.6
+            wake_reach = max(feature_size * 3.0, min(growth_reach, span * 2.0))
             gmsh.model.mesh.field.setNumber(near_body, "DistMax", wake_reach)
             gmsh.model.mesh.field.setNumber(near_body, "StopAtDistMax", 1)
             background_fields.append(near_body)
@@ -794,6 +874,60 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 last_error = exc
                 continue
 
+        # Last resort: strip every size field and mesh with a plain uniform size.
+        # Guarantees *a* mesh even when aggressive refinement settings (steep
+        # growth rate, tiny local size, huge max size) make the graded size field
+        # impossible for Gmsh on this particular geometry.
+        if not generated or best_mesh is None:
+            try:
+                gmsh.model.mesh.clear()
+                for stale in list(mesh_fields):
+                    try:
+                        gmsh.model.mesh.field.remove(stale)
+                    except Exception:
+                        pass
+                for reset in ("setAsBackgroundMesh", "setAsBoundaryLayer"):
+                    try:
+                        getattr(gmsh.model.mesh.field, reset)(0)
+                    except Exception:
+                        pass
+                uniform = max(min_size * 4.0, min(feature_size * 4.0, far_size, span / 8.0))
+                gmsh.option.setNumber("Mesh.MeshSizeMin", uniform * 0.25)
+                gmsh.option.setNumber("Mesh.MeshSizeMax", max(uniform * 4.0, far_size))
+                gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 1)
+                gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+                gmsh.option.setNumber("Mesh.RecombineAll", 0)
+                gmsh.option.setNumber("Mesh.Algorithm", 1)
+                gmsh.model.mesh.generate(2)
+                u_tags, u_coords, _ = gmsh.model.mesh.getNodes()
+                u_index = {int(tag): idx for idx, tag in enumerate(u_tags)}
+                u_nodes = [
+                    [float(u_coords[i]), float(u_coords[i + 1]), 0.0]
+                    for i in range(0, len(u_coords), 3)
+                ]
+                u_elements: List[List[int]] = []
+                u_types, _, u_enodes = gmsh.model.mesh.getElements(2, surface)
+                for u_type, u_flat in zip(u_types, u_enodes):
+                    npe = {2: 3, 3: 4}.get(u_type)
+                    if not npe:
+                        continue
+                    u_elements.extend([
+                        [u_index[int(u_flat[i + o])] for o in range(npe)]
+                        for i in range(0, len(u_flat), npe)
+                        if all(int(u_flat[i + o]) in u_index for o in range(npe))
+                    ])
+                if u_elements:
+                    best_mesh = (1, u_nodes, u_elements,
+                                 _mesh_quality(u_nodes, u_elements), u_index, False)
+                    generated = True
+                    warnings.append(
+                        "Refinement settings were too aggressive for this geometry - "
+                        "generated a uniform mesh. Try a larger Local wall size, a lower "
+                        "Growth rate, or a smaller Max size."
+                    )
+            except Exception as exc:
+                last_error = exc
+
         if not generated or best_mesh is None:
             raise ValueError(f"Gmsh could not mesh this geometry: {last_error}")
 
@@ -859,6 +993,241 @@ def _algo_name(algorithm_id: int) -> str:
         8: "Gmsh Frontal-Delaunay (Quads)",
         9: "Gmsh Packing of Parallelograms",
     }.get(algorithm_id, "Gmsh")
+
+
+def _distribute_cells(total: int, lengths: List[float]) -> List[int]:
+    """Split `total` cells across segments proportional to length, min 1 each.
+
+    Used when a block side is a polyline (e.g. a wedge floor: ramp + step + flat).
+    The returned counts always sum to exactly `total` so opposite block sides stay
+    matched for the transfinite mesher.
+    """
+    n = len(lengths)
+    if n == 0:
+        return []
+    total = max(total, n)
+    span = sum(lengths) or 1.0
+    raw = [total * l / span for l in lengths]
+    alloc = [max(1, int(math.floor(r))) for r in raw]
+    diff = total - sum(alloc)
+    # hand out / take back the remainder by fractional part
+    frac_order = sorted(range(n), key=lambda i: raw[i] - alloc[i], reverse=True)
+    k = 0
+    guard = 0
+    while diff > 0:
+        alloc[frac_order[k % n]] += 1
+        diff -= 1
+        k += 1
+    while diff < 0 and guard < 100000:
+        i = frac_order[k % n]
+        if alloc[i] > 1:
+            alloc[i] -= 1
+            diff += 1
+        k += 1
+        guard += 1
+    return alloc
+
+
+def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Transfinite multiblock quad mesh from a block topology.
+
+    params["blocking"] = {
+      "edges":  [ {p0:[x,y], p1:[x,y], path:[[x,y],...], nodes:int,
+                   law:'uniform'|'geometric'|'bump', ratio:float, patch?:str}, ... ],
+      "blocks": [ [e0,e1,e2,e3], ... ]   # indices into edges, ordered round the block
+    }
+    Opposite edges of a block (0&2, 1&3) must already carry equal node counts.
+    """
+    bk = params.get("blocking") or {}
+    edge_defs: List[Dict[str, Any]] = bk.get("edges") or []
+    block_defs: List[List[int]] = bk.get("blocks") or []
+    if not edge_defs or not block_defs:
+        raise ValueError("No block topology was supplied for structured meshing.")
+
+    warnings: List[str] = []
+
+    with _gmsh_session():
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.model.add("opencfd_structured")
+
+        def pt_key(x: float, y: float) -> Tuple[int, int]:
+            return (round(x * 1e6), round(y * 1e6))
+
+        point_cache: Dict[Tuple[int, int], int] = {}
+
+        def add_point(x: float, y: float) -> int:
+            k = pt_key(x, y)
+            if k not in point_cache:
+                point_cache[k] = gmsh.model.geo.addPoint(float(x), float(y), 0.0)
+            return point_cache[k]
+
+        # Each block edge becomes one or more straight sub-curves. A wedge / step
+        # floor is a polyline (ramp, riser, flat), NOT a spline - a spline would
+        # round the sharp corners into an S bend. The sub-curves are stored in
+        # p0 -> p1 order so the block loop can walk them forward or reversed.
+        edge_curves: List[List[int]] = []          # ordered sub-curve tags per edge
+        edge_end_nodes: List[Tuple[int, int]] = []  # (start point tag, end point tag) per edge
+        curve_meta: List[Tuple[int, str]] = []      # (curve tag, patch name)
+        for e in edge_defs:
+            x0, y0 = e["p0"]
+            x1, y1 = e["p1"]
+            path = e.get("path") or []
+            nodes = max(2, int(e.get("nodes", 20)))
+            law = str(e.get("law", "uniform"))
+            ratio = float(e.get("ratio", 1.0)) or 1.0
+            patch = str(e.get("patch") or "wall")
+
+            raw_pts = [(float(x0), float(y0))] + [(float(p[0]), float(p[1])) for p in path] + [(float(x1), float(y1))]
+            pts: List[Tuple[float, float]] = [raw_pts[0]]
+            for p in raw_pts[1:]:
+                if abs(p[0] - pts[-1][0]) > 1e-9 or abs(p[1] - pts[-1][1]) > 1e-9:
+                    pts.append(p)
+            if len(pts) < 2:
+                raise ValueError("A block edge collapsed to a single point.")
+
+            seg_count = len(pts) - 1
+            lengths = [math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) for i in range(seg_count)]
+            total_cells = max(nodes - 1, seg_count)
+            if seg_count == 1:
+                cell_alloc = [total_cells]
+            else:
+                cell_alloc = _distribute_cells(total_cells, lengths)
+                if law != "uniform":
+                    warnings.append(
+                        f"The '{patch}' side has corners, so its {law} grading was spread evenly along it."
+                    )
+
+            subs: List[int] = []
+            for i in range(seg_count):
+                pa = add_point(*pts[i])
+                pb = add_point(*pts[i + 1])
+                c = gmsh.model.geo.addLine(pa, pb)
+                n_i = cell_alloc[i] + 1
+                if seg_count == 1 and law == "bump":
+                    gmsh.model.geo.mesh.setTransfiniteCurve(c, n_i, "Bump", max(ratio, 0.05))
+                elif seg_count == 1 and law == "geometric" and abs(ratio - 1.0) > 1e-6:
+                    per = ratio ** (1.0 / max(n_i - 1, 1))
+                    gmsh.model.geo.mesh.setTransfiniteCurve(c, n_i, "Progression", per)
+                else:
+                    gmsh.model.geo.mesh.setTransfiniteCurve(c, n_i)
+                subs.append(c)
+                curve_meta.append((c, patch))
+
+            edge_curves.append(subs)
+            edge_end_nodes.append((add_point(*pts[0]), add_point(*pts[-1])))
+
+        surfaces: List[int] = []
+        curve_use: Dict[int, int] = {}  # abs curve tag -> how many surfaces touch it
+        for quad in block_defs:
+            if len(quad) != 4:
+                warnings.append("Skipped a block that did not have four edges.")
+                continue
+
+            # Walk the four edges head-to-tail, flipping any that run backwards,
+            # and splice each edge's sub-curves (reversed + negated when flipped)
+            # into one ordered loop. The four block corners are the join points.
+            ep = [edge_end_nodes[i] for i in quad]
+            signed: List[int] = []
+            corners: List[int] = []
+            ok = True
+            cur = ep[0][0]
+            for k in range(4):
+                a, b = ep[k]
+                subs = edge_curves[quad[k]]
+                if a == cur:
+                    corners.append(a)
+                    signed.extend(subs)
+                    cur = b
+                elif b == cur:
+                    corners.append(b)
+                    signed.extend(-c for c in reversed(subs))
+                    cur = a
+                else:
+                    ok = False
+                    break
+            if not ok or cur != ep[0][0]:
+                warnings.append("A block's four edges do not form a closed loop - skipped.")
+                continue
+
+            loop = gmsh.model.geo.addCurveLoop(signed)
+            surf = gmsh.model.geo.addPlaneSurface([loop])
+            gmsh.model.geo.mesh.setTransfiniteSurface(surf, "Left", corners[:4])
+            gmsh.model.geo.mesh.setRecombine(2, surf)
+            surfaces.append(surf)
+            for c in signed:
+                curve_use[abs(c)] = curve_use.get(abs(c), 0) + 1
+
+        if not surfaces:
+            raise ValueError("No valid blocks to mesh.")
+
+        gmsh.model.geo.synchronize()
+        gmsh.model.addPhysicalGroup(2, surfaces, name="fluid")
+
+        # Group boundary curves by patch name. A curve touched by two surfaces is
+        # an interior block interface - it gets no patch and no physical group.
+        by_patch: Dict[str, List[int]] = {}
+        for curve, patch in curve_meta:
+            if curve_use.get(curve, 0) >= 2:
+                continue
+            by_patch.setdefault(patch or "wall", []).append(curve)
+        for patch, curves in by_patch.items():
+            tag = gmsh.model.addPhysicalGroup(1, curves)
+            gmsh.model.setPhysicalName(1, tag, patch)
+
+        gmsh.option.setNumber("Mesh.RecombineAll", 1)
+        gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 1)
+        gmsh.option.setNumber("Mesh.Smoothing", 6)
+        gmsh.model.mesh.generate(2)
+
+        node_tags, coords, _ = gmsh.model.mesh.getNodes()
+        node_index = {int(t): i for i, t in enumerate(node_tags)}
+        nodes = [[float(coords[i]), float(coords[i + 1]), 0.0] for i in range(0, len(coords), 3)]
+
+        elements: List[List[int]] = []
+        for surf in surfaces:
+            etypes, _, enodes = gmsh.model.mesh.getElements(2, surf)
+            for et, flat in zip(etypes, enodes):
+                npe = {2: 3, 3: 4}.get(et)
+                if not npe:
+                    continue
+                for i in range(0, len(flat), npe):
+                    idx = [node_index.get(int(flat[i + o])) for o in range(npe)]
+                    if all(v is not None for v in idx):
+                        elements.append(idx)
+        if not elements:
+            raise ValueError("Structured mesh produced no elements - check the block topology.")
+
+        boundaries: Dict[str, List[int]] = {}
+        for dim, ptag in gmsh.model.getPhysicalGroups(1):
+            name = gmsh.model.getPhysicalName(1, ptag)
+            seen: List[int] = []
+            for ent in gmsh.model.getEntitiesForPhysicalGroup(1, ptag):
+                try:
+                    ntags, _, _ = gmsh.model.mesh.getNodes(1, ent, includeBoundary=True)
+                except TypeError:
+                    ntags, _, _ = gmsh.model.mesh.getNodes(1, ent, True)
+                for t in ntags:
+                    j = node_index.get(int(t))
+                    if j is not None and j not in seen:
+                        seen.append(j)
+            if name:
+                boundaries[name] = seen
+
+        quality = _mesh_quality(nodes, elements)
+        return {
+            "generator": "Gmsh transfinite (structured)",
+            "algorithm": "Transfinite",
+            "element_type": "quad",
+            "structured": True,
+            "warnings": warnings,
+            "settings": {"blocks": len(surfaces), "edges": len(edge_defs)},
+            "num_nodes": len(nodes),
+            "num_elements": len(elements),
+            "nodes": nodes,
+            "elements": elements,
+            "boundaries": boundaries,
+            "quality": quality,
+        }
 def generate_naca0012_points(chord: float = 1.0, num_points: int = 60) -> List[Tuple[float, float]]:
     """
     Generate coordinate points for NACA 0012 airfoil.

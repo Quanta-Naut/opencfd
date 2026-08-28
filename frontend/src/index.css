@@ -60,6 +60,29 @@
   }
 }
 
+/* Toast slide-in / slide-out */
+.toast-item {
+  transform: translateX(120%);
+  opacity: 0;
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.28s ease;
+  will-change: transform, opacity;
+}
+.toast-item[data-enter='true'] {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+/* Floating tooltip animation */
+.tooltip-pop {
+  opacity: 0;
+  transition: opacity 0.16s ease, transform 0.16s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: opacity, transform;
+}
+.tooltip-pop[data-placement='bottom'] { transform: translateY(-5px); }
+.tooltip-pop[data-placement='top']    { transform: translateY(-100%) translateY(5px); }
+.tooltip-pop[data-state='in'][data-placement='bottom'] { opacity: 1; transform: translateY(0); }
+.tooltip-pop[data-state='in'][data-placement='top']    { opacity: 1; transform: translateY(-100%); }
+
 /* Custom minimal scrollbar */
 ::-webkit-scrollbar {
   width: 5px;

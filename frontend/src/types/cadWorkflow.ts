@@ -38,6 +38,10 @@ export interface BoundaryEdge {
   p0: Point2D;
   p1: Point2D;
   tag: BoundaryTag;
+  /** true only if the user explicitly tagged this edge. Untagged edges are NOT
+   *  "wall" - they carry `tag` only as a rendering fallback and must not be
+   *  drawn coloured or counted as a patch. */
+  explicit: boolean;
   role: 'domain' | 'geometry';
   normal: Point2D; // outward unit normal
   midpoint: Point2D;
@@ -55,6 +59,10 @@ export interface CadEntity {
   startAngle?: number;
   endAngle?: number;
   role?: 'geometry' | 'domain_boundary';
+  /** true only for a far-field loop built by "Generate domain" - it stays in
+   *  sync with the clearance sliders. A hand-drawn loop pinned as the domain
+   *  must NOT have this, or it gets regenerated and the user's geometry is lost. */
+  autoDomain?: boolean;
 }
 
 export interface GeometryBBox {
@@ -119,7 +127,9 @@ export function validateDomainContainment(
   if (!domain || domain.pts.length < 3) {
     return { valid: false, reason: 'No valid outer domain boundary defined yet.' };
   }
-  const obstacles = entities.filter(e => e.layer !== 'construction' && e.id !== domain.id);
+  const obstacles = entities.filter(
+    e => e.layer !== 'construction' && e.id !== domain.id && e.role !== 'domain_boundary'
+  );
   if (obstacles.length === 0) {
     return { valid: true };
   }
@@ -159,6 +169,7 @@ export function createDomainEntity(
       type: 'rectangle',
       layer: 'default',
       role: 'domain_boundary',
+      autoDomain: true,
       isClosed: true,
       pts: [
         { x: x0, y: y0 },
@@ -185,6 +196,7 @@ export function createDomainEntity(
       type: 'polyline',
       layer: 'default',
       role: 'domain_boundary',
+      autoDomain: true,
       isClosed: true,
       pts,
     };
@@ -220,9 +232,26 @@ export function createDomainEntity(
     type: 'polyline',
     layer: 'default',
     role: 'domain_boundary',
+    autoDomain: true,
     isClosed: true,
     pts,
   };
+}
+
+/**
+ * True if the drawn geometry forms at least one closed loop - a closed polyline
+ * or rectangle, OR loose segments whose every endpoint is shared by >= 2 edges.
+ * Used so the flow domain can be auto-detected instead of manually pinned.
+ */
+export function geometryFormsLoop(entities: CadEntity[]): boolean {
+  const geom = entities.filter(e => e.layer !== 'construction');
+  if (geom.some(e => (e.isClosed || e.type === 'rectangle') && e.pts.length >= 3)) return true;
+  const segs = geom.filter(e => e.pts.length === 2);
+  if (segs.length < 3) return false;
+  const key = (p: Point2D) => `${Math.round(p.x * 1e4)}_${Math.round(p.y * 1e4)}`;
+  const deg = new Map<string, number>();
+  for (const s of segs) for (const p of [s.pts[0], s.pts[1]]) deg.set(key(p), (deg.get(key(p)) ?? 0) + 1);
+  return [...deg.values()].every(d => d >= 2);
 }
 
 export function extractBoundaryEdges(
@@ -254,6 +283,7 @@ export function extractBoundaryEdges(
 
       const fallbackTag: BoundaryTag =
         ent.role === 'domain_boundary' ? 'farfield' : 'wall';
+      const explicit = Object.prototype.hasOwnProperty.call(edgeTagMap, key);
 
       edges.push({
         key,
@@ -262,6 +292,7 @@ export function extractBoundaryEdges(
         p0,
         p1,
         tag: edgeTagMap[key] || fallbackTag,
+        explicit,
         role: ent.role === 'domain_boundary' ? 'domain' : 'geometry',
         normal: { x: nx, y: ny },
         midpoint: { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 },
@@ -282,7 +313,9 @@ export interface ContiguousEdgeChain {
   outwardNormal: Point2D;
 }
 
-export function getContiguousEdgeChains(edges: BoundaryEdge[]): ContiguousEdgeChain[] {
+export function getContiguousEdgeChains(allEdges: BoundaryEdge[]): ContiguousEdgeChain[] {
+  // Only explicitly-tagged edges get a chain / badge.
+  const edges = allEdges.filter(e => e.explicit);
   if (edges.length === 0) return [];
 
   const visited = new Set<string>();
@@ -405,7 +438,9 @@ export function validateBoundaryTags(
     periodic: 0,
   };
 
+  // Only edges the user explicitly tagged count - an untagged edge is not a wall.
   for (const e of edges) {
+    if (!e.explicit) continue;
     counts[e.tag] = (counts[e.tag] || 0) + 1;
   }
 
@@ -414,11 +449,11 @@ export function validateBoundaryTags(
   }
 
   if (counts.inlet === 0) {
-    return { valid: false, reason: 'At least one Inlet boundary required.', counts };
+    return { valid: false, reason: 'Tag at least one Inlet edge.', counts };
   }
 
   if (counts.outlet === 0) {
-    return { valid: false, reason: 'At least one Outlet boundary required.', counts };
+    return { valid: false, reason: 'Tag at least one Outlet edge.', counts };
   }
 
   return { valid: true, counts };

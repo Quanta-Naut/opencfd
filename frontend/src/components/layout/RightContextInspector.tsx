@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CFDProjectState } from '../../types/cfd';
 import { ShieldCheck, Wind, Layers, Sliders, Info, ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -16,6 +16,12 @@ export const RightContextInspector: React.FC<RightContextInspectorProps> = ({
   meshData,
 }) => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
+
+  // Publish the inspector width so floating toasts land just left of it.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--app-right-inset', isOpen ? '250px' : '28px');
+    return () => { document.documentElement.style.removeProperty('--app-right-inset'); };
+  }, [isOpen]);
 
   if (!isOpen) {
     return (
@@ -215,11 +221,11 @@ export const RightContextInspector: React.FC<RightContextInspectorProps> = ({
           <div className="font-mono text-[11px] space-y-1 text-[#69717D]">
             <div className="flex justify-between">
               <span>Nodes</span>
-              <span className="text-[#171A1F]">{meshData?.num_nodes ?? '—'}</span>
+              <span className="text-[#171A1F]">{meshData?.num_nodes ?? '-'}</span>
             </div>
             <div className="flex justify-between">
               <span>Elements</span>
-              <span className="text-[#171A1F]">{meshData?.num_elements ?? '—'}</span>
+              <span className="text-[#171A1F]">{meshData?.num_elements ?? '-'}</span>
             </div>
             {meshData?.quality && (
               <>
@@ -256,15 +262,24 @@ export const RightContextInspector: React.FC<RightContextInspectorProps> = ({
               </div>
             )}
           </div>
-          {Array.isArray(meshData?.warnings) && meshData.warnings.length > 0 && (
-            <div className="mt-1.5 space-y-1">
-              {meshData.warnings.map((w: string, i: number) => (
-                <div key={i} className="text-[10px] text-amber-600 leading-snug flex gap-1">
-                  <span>⚠</span><span>{w}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          {(() => {
+            const raw: string[] = Array.isArray(meshData?.warnings) ? meshData.warnings : [];
+            const notes: string[] = [];
+            if (raw.some((w) => /boundary-layer|prism|slivers|meshadapt/i.test(w))) {
+              notes.push('No prism layers on this mesh - the geometry is too sharp for the boundary-layer extruder, so the wall is resolved with graded triangles instead.');
+            }
+            raw.filter((w) => /coarsen|too aggressive|cell sizes/i.test(w)).forEach((w) => notes.push(w));
+            if (notes.length === 0) return null;
+            return (
+              <div className="mt-1.5 space-y-1">
+                {notes.map((w, i) => (
+                  <div key={i} className="text-[10px] text-[#69717D] leading-snug flex gap-1">
+                    <span className="text-[#A5ACB5]">i</span><span>{w}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       </div>
     </aside>

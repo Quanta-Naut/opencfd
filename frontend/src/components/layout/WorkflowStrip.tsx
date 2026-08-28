@@ -1,15 +1,24 @@
 import React from 'react';
+import { Lock } from 'lucide-react';
 
 export type StageId = 'geometry' | 'caseSetup' | 'mesh' | 'physics' | 'yplus' | 'boundaries' | 'solver' | 'results';
+
+export interface StageStatus {
+  locked: boolean;
+  reason?: string;
+  missing?: string[];
+}
 
 interface WorkflowStripProps {
   activeStage: StageId;
   onSelectStage: (stage: StageId) => void;
+  stageStatus?: Partial<Record<StageId, StageStatus>>;
 }
 
 export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
   activeStage,
   onSelectStage,
+  stageStatus,
 }) => {
   const stages: { id: StageId; num: string; label: string }[] = [
     { id: 'geometry', num: '01', label: 'Geometry' },
@@ -24,13 +33,17 @@ export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
     <nav className="h-9 bg-white border-b border-[#E1E4E8] px-4 flex items-center gap-1 select-none shrink-0 overflow-x-auto">
       {stages.map((st, idx) => {
         const isActive = activeStage === st.id;
+        const locked = !!stageStatus?.[st.id]?.locked;
         return (
           <React.Fragment key={st.id}>
             <button
               onClick={() => onSelectStage(st.id)}
+              title={locked ? stageStatus?.[st.id]?.reason : undefined}
               className={`relative h-full px-3 flex items-center gap-1.5 text-xs font-medium transition-colors ${
                 isActive
                   ? 'text-[#171A1F] font-semibold'
+                  : locked
+                  ? 'text-[#A5ACB5] hover:text-[#69717D]'
                   : 'text-[#69717D] hover:text-[#171A1F]'
               }`}
             >
@@ -38,6 +51,7 @@ export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
                 {st.num}
               </span>
               <span>{st.label}</span>
+              {locked && <Lock className="w-3 h-3 text-[#C4C9D0]" />}
 
               {/* Active Bottom Indicator Line */}
               {isActive && (

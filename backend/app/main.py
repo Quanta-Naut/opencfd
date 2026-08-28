@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.services.yplus_service import calculate_yplus, calculate_inflow_turbulence
-from app.services.gmsh_service import generate_mesh_data
+from app.services.gmsh_service import generate_mesh_data, generate_structured_mesh
 from app.services.foam_service import generate_openfoam_case_files, simulate_cfd_run
 from app.services.postprocess_service import generate_field_solution
 from app.services.cad2d_service import (
@@ -17,6 +17,7 @@ from app.services.cad2d_service import (
     compute_2d_fillet,
     generate_mesh_from_cad_loop
 )
+from app.services import project_service
 
 app = FastAPI(title="OpenCFD Backend API", version="1.0.0")
 
@@ -57,6 +58,15 @@ class PostProcessRequest(BaseModel):
     geometry_type: str = "naca0012"
     velocity: float = 20.0
     regime: str = "turbulent"
+
+class ProjectCreate(BaseModel):
+    name: str = "Untitled project"
+
+class ProjectRename(BaseModel):
+    name: str
+
+class SessionSave(BaseModel):
+    session: Dict[str, Any] = {}
 
 class AirfoilUrlRequest(BaseModel):
     url: str
@@ -113,6 +123,13 @@ async def mesh_endpoint(req: MeshRequest):
     try:
         mesh = generate_mesh_data(req.geometry_type, req.params)
         return {"success": True, "data": mesh}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/geometry/mesh-structured")
+async def structured_mesh_endpoint(req: MeshRequest):
+    try:
+        return {"success": True, "data": generate_structured_mesh(req.params)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -223,6 +240,58 @@ async def postprocess_endpoint(req: PostProcessRequest):
             regime=req.regime
         )
         return {"success": True, "data": sol}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ── Project store (~/.OpenCFD/projects) ───────────────────────────────────────
+@app.get("/api/projects")
+async def list_projects_endpoint():
+    try:
+        return {"success": True, "data": project_service.list_projects()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/projects")
+async def create_project_endpoint(req: ProjectCreate):
+    try:
+        return {"success": True, "data": project_service.create_project(req.name)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/projects/{pid}")
+async def get_project_endpoint(pid: str):
+    try:
+        return {"success": True, "data": project_service.get_project(pid)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.put("/api/projects/{pid}/session")
+async def save_project_session_endpoint(pid: str, req: SessionSave):
+    try:
+        return {"success": True, "data": project_service.save_session(pid, req.session)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.patch("/api/projects/{pid}")
+async def rename_project_endpoint(pid: str, req: ProjectRename):
+    try:
+        return {"success": True, "data": project_service.rename_project(pid, req.name)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/api/projects/{pid}")
+async def delete_project_endpoint(pid: str):
+    try:
+        project_service.delete_project(pid)
+        return {"success": True}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

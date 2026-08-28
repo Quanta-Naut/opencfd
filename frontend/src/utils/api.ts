@@ -242,11 +242,14 @@ export async function fetchTurbulenceInflow(params: any) {
 }
 
 export async function generateMesh(geometryType: string, params: any) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
     const res = await fetch(`${API_BASE}/api/geometry/mesh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ geometry_type: geometryType, params }),
+      signal: controller.signal,
     });
     if (!res.ok) {
       const errorBody = await res.json().catch(() => null);
@@ -254,8 +257,36 @@ export async function generateMesh(geometryType: string, params: any) {
     }
     const data = await res.json();
     return data.data;
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Meshing timed out (>2 min). Use a coarser Resolution, a larger Local wall / Max size, or fewer prism layers.');
+    }
     throw error instanceof Error ? error : new Error('Mesh generation service is unavailable');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function generateStructuredMesh(blocking: any) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const res = await fetch(`${API_BASE}/api/geometry/mesh-structured`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ geometry_type: 'structured', params: { blocking } }),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.detail || `Structured meshing failed (${res.status})`);
+    }
+    return (await res.json()).data;
+  } catch (error: any) {
+    if (error?.name === 'AbortError') throw new Error('Structured meshing timed out (>2 min).');
+    throw error instanceof Error ? error : new Error('Mesh service is unavailable');
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

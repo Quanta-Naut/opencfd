@@ -47,6 +47,7 @@ import {
   HelpCircle,
 } from 'lucide-react';
 import { requestOffset, requestFillet, requestMeshFromSketch, uploadAndParseAirfoil, uploadAndParseDxf, fetchAndParseAirfoilFromUrl } from '../../utils/api';
+import { toast } from '../ui/Toast';
 import {
   CadWorkflowStep,
   FlowType,
@@ -67,6 +68,7 @@ import {
   validateBoundaryTags,
   generateDefaultAirfoilPoints,
 } from '../../types/cadWorkflow';
+import { Blocking, blockPolygon } from '../../types/blocking';
 
 // ─── CAD Workbench Tool & State Types ─────────────────────────────────────────
 
@@ -168,12 +170,47 @@ function uid(): string {
   return `e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 }
 
+/** Move vertex `idx` of an entity to `np`, keeping the shape's kind sane
+ *  (rectangles stay axis-aligned; a circle centre translates, its rim resizes). */
+function moveEntityVertex(ent: CadEntity, idx: number, np: Point2D): CadEntity {
+  const pts = ent.pts.map(p => ({ ...p }));
+  if (ent.type === 'rectangle' && pts.length === 4) {
+    const opp = pts[(idx + 2) % 4];
+    const x0 = Math.min(np.x, opp.x), x1 = Math.max(np.x, opp.x);
+    const y0 = Math.min(np.y, opp.y), y1 = Math.max(np.y, opp.y);
+    return { ...ent, pts: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] };
+  }
+  if (ent.type === 'circle' && pts.length >= 2) {
+    if (idx === 0) {
+      const dx = np.x - pts[0].x, dy = np.y - pts[0].y;
+      return { ...ent, pts: pts.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+    }
+    const r = Math.hypot(np.x - pts[0].x, np.y - pts[0].y);
+    return { ...ent, radius: r, pts: [pts[0], np] };
+  }
+  pts[idx] = np;
+  return { ...ent, pts };
+}
+
+function translateEntity(ent: CadEntity, dx: number, dy: number): CadEntity {
+  return { ...ent, pts: ent.pts.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+}
+
 function dist(a: Point2D, b: Point2D): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function midpt(a: Point2D, b: Point2D): Point2D {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function pointInPolygon(p: Point2D, poly: Point2D[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    if ((yi > p.y) !== (yj > p.y) && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi || 1e-12) + xi) inside = !inside;
+  }
+  return inside;
 }
 
 /** Closest distance from point p to segment a→b */
@@ -382,13 +419,8 @@ function getTrimTarget(rawPt: Point2D, entities: CadEntity[], zoom: number): Tri
   const sortedT = Array.from(new Set(tParams.map(t => +t.toFixed(6)))).sort((a, b) => a - b);
 
   if (sortedT.length <= 2) {
-    // No intersection: the whole segment is trimmed
-    return {
-      targetEnt,
-      targetSegIdx,
-      subSeg: { p0: segA, p1: segB },
-      preservedSegs: []
-    };
+    // Nothing crosses this segment - trim removes the whole segment.
+    return { targetEnt, targetSegIdx, subSeg: { p0: segA, p1: segB }, preservedSegs: [] };
   }
 
   const tClick = segParam(rawPt, segA, segB);
@@ -454,7 +486,7 @@ interface CadWorkbenchProps {
   angleOfAttackDeg?: number;
   setAngleOfAttackDeg?: (a: number) => void;
   freestreamVelocity?: number;
-  activeTagTool?: BoundaryTag;
+  activeTagTool?: BoundaryTag | null;
   edgeTagMap?: Record<string, BoundaryTag>;
   onSetEdgeTagMap?: React.Dispatch<React.SetStateAction<Record<string, BoundaryTag>>>;
   onEntitiesChange?: (entities: CadEntity[]) => void;
@@ -472,7 +504,12 @@ interface CadWorkbenchProps {
   displayOnly?: boolean;
   meshData?: any;
   showMesh?: boolean;
+  meshStale?: boolean;
+  domainBroken?: boolean;
   isMeshing?: boolean;
+  blocking?: Blocking | null;
+  onUpdateBlocking?: (bk: Blocking | null) => void;
+  showBlocking?: boolean;
 }
 
 export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
@@ -496,7 +533,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   angleOfAttackDeg = 0.0,
   setAngleOfAttackDeg,
   freestreamVelocity = 35.0,
-  activeTagTool = 'inlet',
+  activeTagTool = null,
   edgeTagMap: propEdgeTagMap,
   onSetEdgeTagMap,
   onEntitiesChange,
@@ -514,7 +551,12 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   displayOnly = false,
   meshData,
   showMesh = false,
+  meshStale = false,
+  domainBroken = false,
   isMeshing = false,
+  blocking = null,
+  onUpdateBlocking,
+  showBlocking = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -584,6 +626,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const panning = useRef(false);
   const panStart = useRef<Point2D>({ x: 0, y: 0 });
   const panOrigin = useRef<Point2D>({ x: 0, y: 0 });
+  const lastMiddleClickRef = useRef(0);
 
   // ── Camera Framing Helper ───────────────────────────────────────────────────
   const fitBoundingBox = useCallback((box: { minX: number; maxX: number; minY: number; maxY: number }, marginRatio = 0.70) => {
@@ -609,6 +652,35 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     setPan(newPan);
   }, []);
 
+  // Frame the loaded geometry / mesh once on mount so a reopened project opens
+  // centred instead of scrolled off toward a corner.
+  const didInitialFit = useRef(false);
+  useEffect(() => {
+    if (didInitialFit.current) return;
+    const meshNodes: number[][] | undefined = showMesh && !meshStale ? meshData?.nodes : undefined;
+    const ents = cadState.entities.filter(e => e.layer !== 'construction');
+    if (!meshNodes?.length && ents.length === 0) return;
+    const id = requestAnimationFrame(() => {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      if (meshNodes?.length) {
+        for (const n of meshNodes) {
+          minX = Math.min(minX, n[0]); maxX = Math.max(maxX, n[0]);
+          minY = Math.min(minY, n[1]); maxY = Math.max(maxY, n[1]);
+        }
+      } else {
+        for (const e of ents) for (const p of e.pts) {
+          minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+          minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+        }
+      }
+      if (minX !== Infinity) {
+        fitBoundingBox({ minX, maxX, minY, maxY }, 0.75);
+        didInitialFit.current = true;
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [cadState.entities, meshData, showMesh, meshStale, fitBoundingBox]);
+
   // When switching between steps (e.g. to Step 2, Step 3), reset to 'select' tool by default
   useEffect(() => {
     setTool('select');
@@ -627,12 +699,44 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const [canvasMode, setCanvasMode] = useState<'cad' | 'mesh'>('cad');
 
   useEffect(() => {
-    if (!showMesh) {
+    // Show the mesh only when it is current. If the geometry changed since the
+    // mesh was generated, drop back to CAD mode so the user sees their edits.
+    if (!showMesh || meshStale) {
       setCanvasMode('cad');
     } else if (meshData?.nodes?.length && meshData?.elements?.length) {
       setCanvasMode('mesh');
     }
-  }, [showMesh, meshData]);
+  }, [showMesh, meshData, meshStale]);
+
+  const handleAuxClick = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 1) return;
+    e.preventDefault();
+    const now = Date.now();
+    const isDoubleMiddleClick = now - lastMiddleClickRef.current < 350;
+    lastMiddleClickRef.current = now;
+    if (!isDoubleMiddleClick) return;
+
+    if (showMesh && canvasMode === 'mesh' && meshData?.nodes?.length) {
+      const xs = meshData.nodes.map((node: number[]) => node[0]);
+      const ys = meshData.nodes.map((node: number[]) => node[1]);
+      fitBoundingBox({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }, 0.72);
+      return;
+    }
+
+    const entities = cadState.entities.filter((entity) => entity.layer !== 'construction');
+    const points = entities.flatMap((entity) => entity.pts);
+    if (points.length) {
+      fitBoundingBox({
+        minX: Math.min(...points.map((point) => point.x)),
+        maxX: Math.max(...points.map((point) => point.x)),
+        minY: Math.min(...points.map((point) => point.y)),
+        maxY: Math.max(...points.map((point) => point.y)),
+      }, 0.72);
+    } else {
+      setZoom(INITIAL_ZOOM);
+      setPan({ x: 0, y: 0 });
+    }
+  }, [cadState.entities, canvasMode, fitBoundingBox, meshData, showMesh]);
   const [showConstruction, setShowConstruction] = useState(true);
   const [constructionMode, setConstructionMode] = useState(false); // draw to construction layer
 
@@ -679,6 +783,19 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const dragStart = useRef<Point2D>({ x: 0, y: 0 });   // screen pixels
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
+  // ── Direct manipulation with the Select tool: drag a vertex / move a selection
+  const editDrag = useRef<
+    | null
+    | { mode: 'vertex'; targets: { id: string; idx: number }[]; startWorld: Point2D; snapshot: CadEntity[] }
+    | { mode: 'move'; startWorld: Point2D; snapshot: CadEntity[] }
+  >(null);
+  const [editDragActive, setEditDragActive] = useState(false);
+
+  // ── Structured block-vertex dragging (mesh stage, showBlocking) ────────────
+  const blockDrag = useRef<{ vid: string } | null>(null);
+  const [hoveredBlockVtx, setHoveredBlockVtx] = useState<string | null>(null);
+  const [hoveredBlockIdx, setHoveredBlockIdx] = useState<number | null>(null);
+
   // ── Dynamic Dimension Input (Onshape / Fusion 360 style) ───────────────────
   const [dimPrompt, setDimPrompt] = useState<DynamicDimPrompt | null>(null);
   const [inputVal1, setInputVal1] = useState('');
@@ -708,7 +825,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     () =>
       flowType === 'external'
         ? validateDomainContainment(domainEntity, cadState.entities)
-        : { valid: true, reason: 'Internal flow — duct walls serve as the domain boundary.' },
+        : { valid: true, reason: 'Internal flow - duct walls serve as the domain boundary.' },
     [domainEntity, cadState.entities, flowType]
   );
 
@@ -730,7 +847,9 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   useEffect(() => {
     if (flowType !== 'external') return;
     const existingDomain = cadState.entities.find(e => e.role === 'domain_boundary');
-    if (!existingDomain) return;
+    // Only a "Generate domain" far-field loop tracks the sliders. A hand-drawn
+    // loop pinned as the domain must be left exactly as the user drew it.
+    if (!existingDomain || !existingDomain.autoDomain) return;
 
     const updatedDomain = createDomainEntity(
       domainShape,
@@ -754,6 +873,29 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     }
   }, [domainShape, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, flowType, geometryBBox, cadState.entities]);
 
+  // ── Internal flow has no outer domain ───────────────────────────────────────
+  // An auto-generated far-field box is regenerable, so drop it. A loop the user
+  // DREW and pinned as the domain must never be deleted - demote it to plain
+  // geometry (for internal flow the drawn walls ARE the boundary).
+  useEffect(() => {
+    if (flowType !== 'internal') return;
+    if (!cadState.entities.some(e => e.role === 'domain_boundary')) return;
+    const next: CadEntity[] = [];
+    for (const e of cadState.entities) {
+      if (e.role !== 'domain_boundary') { next.push(e); continue; }
+      if (e.autoDomain) continue; // regenerable - safe to drop
+      const { role, autoDomain, ...rest } = e; // keep the drawing, clear its role
+      void role; void autoDomain;
+      next.push(rest);
+    }
+    dispatch({ type: 'REPLACE_ENTITIES', entities: next });
+  }, [flowType, cadState.entities]);
+
+  // Clear a stale domain-handle hover once the domain is gone.
+  useEffect(() => {
+    if (!domainEntity && hoveredDomainHandle) setHoveredDomainHandle(null);
+  }, [domainEntity, hoveredDomainHandle]);
+
   // ── Global domain-handle drag (document listeners so cursor can leave canvas) ──
   useEffect(() => {
     const getBBoxAndChord = () => {
@@ -773,22 +915,19 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       const bbox = getBBoxAndChord();
       const c = bbox.chord;
       const effH = Math.max(0.5 * c, bbox.height);
+      // Snap the chord factor to 0.5c steps only while OSNAP is on; free-flow otherwise.
+      const q = (f: number) => Math.max(1, Math.min(100, snapEnabled ? Math.round(f * 2) / 2 : Math.round(f * 100) / 100));
 
       if (handle === 'upstream') {
-        const rawFactor = (bbox.minX - rawX) / c;
-        setUpstreamChordFactor?.(Math.max(1, Math.min(100, Math.round(rawFactor * 2) / 2)));
+        setUpstreamChordFactor?.(q((bbox.minX - rawX) / c));
       } else if (handle === 'downstream') {
-        const rawFactor = (rawX - bbox.maxX) / c;
-        setDownstreamChordFactor?.(Math.max(1, Math.min(100, Math.round(rawFactor * 2) / 2)));
+        setDownstreamChordFactor?.(q((rawX - bbox.maxX) / c));
       } else if (handle === 'top') {
-        const rawFactor = (rawY - bbox.centerY) / effH;
-        setLateralHeightFactor?.(Math.max(1, Math.min(100, Math.round(rawFactor * 2) / 2)));
+        setLateralHeightFactor?.(q((rawY - bbox.centerY) / effH));
       } else if (handle === 'bottom') {
-        const rawFactor = (bbox.centerY - rawY) / effH;
-        setLateralHeightFactor?.(Math.max(1, Math.min(100, Math.round(rawFactor * 2) / 2)));
+        setLateralHeightFactor?.(q((bbox.centerY - rawY) / effH));
       } else if (handle === 'radial') {
-        const rawDist = Math.hypot(rawX - bbox.centerX, rawY - bbox.centerY);
-        const factor = Math.max(1, Math.min(100, Math.round((rawDist / c) * 2) / 2));
+        const factor = q(Math.hypot(rawX - bbox.centerX, rawY - bbox.centerY) / c);
         setUpstreamChordFactor?.(factor);
         setDownstreamChordFactor?.(factor);
         setLateralHeightFactor?.(factor);
@@ -796,6 +935,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     };
 
     const onUp = () => {
+      if (blockDrag.current) blockDrag.current = null;
+      if (editDrag.current) {
+        editDrag.current = null;
+        setEditDragActive(false);
+      }
       if (!draggingDomainHandleRef.current) return;
       draggingDomainHandleRef.current = null;
       setDraggingDomainHandle(null);
@@ -808,7 +952,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       document.removeEventListener('mouseup', onUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom, pan, cadState.entities, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor]);
+  }, [zoom, pan, cadState.entities, snapEnabled, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor]);
 
 
 
@@ -1165,15 +1309,18 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
     // ─── Entities ─────────────────────────────────────────────────────────────
     for (const e of cadState.entities) {
-      const isDomain = e.role === 'domain_boundary';
       const isConst = e.layer === 'construction';
       const isSel = !!e.selected;
+      // A pinned domain loop draws dashed (far-field convention) from the Domain
+      // step onward. In the Geometry step everything you drew is plain solid
+      // geometry - no dashes.
+      const isDomain = e.role === 'domain_boundary' && currentStep >= 2;
 
       if (isDomain) {
-        ctx.strokeStyle = isSel ? '#E05A00' : '#2563EB';
+        ctx.strokeStyle = domainBroken ? '#DC2626' : isSel ? '#E05A00' : '#2563EB';
         ctx.lineWidth = isSel ? 2.5 : 1.8;
         ctx.setLineDash([8, 4]);
-        ctx.fillStyle = 'rgba(37, 99, 235, 0.03)';
+        ctx.fillStyle = domainBroken ? 'rgba(220, 38, 38, 0.04)' : 'rgba(37, 99, 235, 0.03)';
       } else {
         ctx.strokeStyle = isConst ? '#4A90D9' : isSel ? '#E05A00' : '#1A1D21';
         ctx.lineWidth = isSel ? 2.5 : isConst ? 1.2 : 1.8;
@@ -1190,7 +1337,20 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
 
       // Draw entity geometry
-      if ((e.type === 'line' || e.type === 'polyline' || e.type === 'rectangle' || e.type === 'spline' || e.type === 'construction') && e.pts.length >= 2) {
+      if (e.type === 'construction' && e.pts.length === 2) {
+        // Infinite reference line: extend far past the viewport in both directions.
+        const a = e.pts[0], b = e.pts[1];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const ext = 1e6;
+        const ux = (dx / len) * ext, uy = (dy / len) * ext;
+        const s0 = ws(a.x - ux, a.y - uy);
+        const s1 = ws(b.x + ux, b.y + uy);
+        ctx.beginPath();
+        ctx.moveTo(s0.x, s0.y);
+        ctx.lineTo(s1.x, s1.y);
+        ctx.stroke();
+      } else if ((e.type === 'line' || e.type === 'polyline' || e.type === 'rectangle' || e.type === 'spline' || e.type === 'construction') && e.pts.length >= 2) {
         ctx.beginPath();
         const p0 = ws(e.pts[0].x, e.pts[0].y);
         ctx.moveTo(p0.x, p0.y);
@@ -1204,14 +1364,37 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         }
         ctx.stroke();
 
-        // Endpoint handles
+        // Endpoint grips. Square + orange on a selected entity (drag to reshape);
+        // small hollow squares on every other entity while the Select tool is
+        // active so the user can see that any vertex is draggable.
         if (!isConst || showConstruction) {
+          const editable = tool === 'select' && !displayOnly && !isConst && e.role !== 'domain_boundary';
           for (const pt of e.pts) {
             const ps = ws(pt.x, pt.y);
-            ctx.fillStyle = isSel ? '#E05A00' : isConst ? '#4A90D9' : '#888';
-            ctx.beginPath();
-            ctx.arc(ps.x, ps.y, 2.5, 0, Math.PI * 2);
-            ctx.fill();
+            if (isSel && editable) {
+              const h = 11;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.strokeStyle = '#E05A00';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.rect(ps.x - h / 2, ps.y - h / 2, h, h);
+              ctx.fill();
+              ctx.stroke();
+            } else if (editable) {
+              const h = 8.5;
+              ctx.fillStyle = '#FFFFFF';
+              ctx.strokeStyle = '#7A8699';
+              ctx.lineWidth = 1.5;
+              ctx.beginPath();
+              ctx.rect(ps.x - h / 2, ps.y - h / 2, h, h);
+              ctx.fill();
+              ctx.stroke();
+            } else {
+              ctx.fillStyle = isConst ? '#4A90D9' : '#888';
+              ctx.beginPath();
+              ctx.arc(ps.x, ps.y, 2.5, 0, Math.PI * 2);
+              ctx.fill();
+            }
           }
         }
       } else if (e.type === 'circle' && e.pts.length >= 2) {
@@ -1255,6 +1438,10 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
           ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
           ctx.stroke();
         }
+      } else if (tool === 'rectangle' && tempPts.length === 1) {
+        const a = ws(tempPts[0].x, tempPts[0].y);
+        const b = ws(snap.pt.x, snap.pt.y);
+        ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
       } else {
         const p0 = ws(tempPts[0].x, tempPts[0].y);
         ctx.beginPath();
@@ -1435,8 +1622,9 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       const domainTopY = geometryBBox.centerY + lLat;
       const domainBottomY = geometryBBox.centerY - lLat;
 
-      // Interactive Handles in Step 2 (Domain Definition)
-      if (currentStep === 2) {
+      // Interactive Handles in Step 2 - only for an auto-generated far-field domain
+      // (a hand-drawn domain loop has no clearance sliders to resize).
+      if (currentStep === 2 && domainEntity?.autoDomain) {
         const drawHandle = (
           pt: Point2D,
           key: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial',
@@ -1490,10 +1678,31 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
     }
 
-    // ─── Step 3, 4: Edge-Level Boundary Tag Highlights & Badges ──────────────
-    if (currentStep >= 3) {
-      // 1st pass: draw colored highlight lines and normal arrows for all edges
+    // ─── Boundary Patches step only: edge tag highlights & badges ────────────
+    if (currentStep === 3) {
+      // Faint outline on taggable edges ONLY while a tag tool is armed, so the
+      // user can see what to click. Nothing implies any edge is a wall.
+      if (activeTagTool) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(37,99,235,0.28)';
+        ctx.setLineDash([5, 4]);
+        ctx.lineWidth = 1.4;
+        for (const edge of boundaryEdges) {
+          if (edge.explicit) continue;
+          const a = ws(edge.p0.x, edge.p0.y);
+          const b = ws(edge.p1.x, edge.p1.y);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // Colour only edges the user has explicitly tagged. Untagged edges stay
+      // the normal geometry colour - nothing is a "wall" until you say so.
       for (const edge of boundaryEdges) {
+        if (!edge.explicit) continue;
         const isHovered = hoveredEdgeKey === edge.key;
         const p0 = ws(edge.p0.x, edge.p0.y);
         const p1 = ws(edge.p1.x, edge.p1.y);
@@ -1578,25 +1787,154 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
     }
 
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData]);
+    // ─── Structured block topology overlay (mesh stage) ──────────────────────
+    if (showBlocking && blocking && blocking.edges.length > 0 && !(showMesh && canvasMode === 'mesh')) {
+      ctx.save();
+
+      // faint per-block fill so the multi-block layout reads at a glance
+      blocking.blocks.forEach((blk, bi) => {
+        const poly = blockPolygon(blocking, blk);
+        if (poly.length < 3) return;
+        const hot = hoveredBlockIdx === bi;
+        ctx.beginPath();
+        poly.forEach((p, i) => {
+          const s = ws(p.x, p.y);
+          if (i === 0) ctx.moveTo(s.x, s.y);
+          else ctx.lineTo(s.x, s.y);
+        });
+        ctx.closePath();
+        ctx.fillStyle = hot ? 'rgba(124, 58, 237, 0.14)' : 'rgba(124, 58, 237, 0.05)';
+        ctx.fill();
+        // block number at the centroid
+        const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length;
+        const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length;
+        const sc = ws(cx, cy);
+        ctx.fillStyle = 'rgba(124, 58, 237, 0.75)';
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(bi + 1), sc.x, sc.y);
+      });
+
+      for (const edge of blocking.edges) {
+        const v0 = blocking.vertices.find((v) => v.id === edge.v0);
+        const v1 = blocking.vertices.find((v) => v.id === edge.v1);
+        if (!v0 || !v1) continue;
+        const chain = [v0.pt, ...edge.path, v1.pt];
+        const col = edge.patch ? (BOUNDARY_COLORS[edge.patch]?.hex ?? '#7C3AED') : '#7C3AED';
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        chain.forEach((p, i) => {
+          const s = ws(p.x, p.y);
+          if (i === 0) ctx.moveTo(s.x, s.y);
+          else ctx.lineTo(s.x, s.y);
+        });
+        ctx.stroke();
+
+        // node ticks give a read on the cell count
+        const n = Math.max(2, Math.min(edge.nodes, 120));
+        ctx.fillStyle = col;
+        for (let k = 0; k < n; k++) {
+          const t = k / (n - 1);
+          const p = { x: v0.pt.x + (v1.pt.x - v0.pt.x) * t, y: v0.pt.y + (v1.pt.y - v0.pt.y) * t };
+          const s = ws(p.x, p.y);
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, 1.1, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      // corner handles
+      for (const v of blocking.vertices) {
+        const s = ws(v.pt.x, v.pt.y);
+        const hot = hoveredBlockVtx === v.id;
+        ctx.fillStyle = '#FFFFFF';
+        ctx.strokeStyle = hot ? '#E05A00' : '#7C3AED';
+        ctx.lineWidth = 2;
+        const r = hot ? 7 : 5.5;
+        ctx.beginPath();
+        ctx.rect(s.x - r, s.y - r, r * 2, r * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx]);
 
 
 
   // ── Mouse handlers ────────────────────────────────────────────────────────
 
+  const findEntityAt = useCallback((rawPt: Point2D): string | null => {
+    const hitR = 14 / zoom;
+    let bestId: string | null = null;
+    let bestD = Infinity;
+    for (const ent of cadState.entities) {
+      if (ent.pts.length === 0) continue;
+      for (let i = 0; i < ent.pts.length - 1; i++) {
+        const d = distToSegment(rawPt, ent.pts[i], ent.pts[i + 1]);
+        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
+      }
+      if (ent.isClosed && ent.pts.length >= 3) {
+        const d = distToSegment(rawPt, ent.pts[ent.pts.length - 1], ent.pts[0]);
+        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
+      }
+      if (ent.type === 'circle' && ent.pts.length >= 2) {
+        const r = ent.radius ?? dist(ent.pts[0], ent.pts[1]);
+        const radialD = Math.abs(dist(rawPt, ent.pts[0]) - r);
+        if (radialD < hitR && radialD < bestD) { bestD = radialD; bestId = ent.id; }
+      }
+      for (const p of ent.pts) {
+        const d = dist(rawPt, p);
+        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
+      }
+    }
+    return bestId;
+  }, [cadState.entities, zoom]);
+
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const raw = toWorld(e.clientX, e.clientY);
+
+    // Structured block-vertex drag / hover (mesh stage).
+    if (showBlocking && blocking) {
+      if (blockDrag.current && onUpdateBlocking) {
+        const vid = blockDrag.current.vid;
+        onUpdateBlocking({
+          ...blocking,
+          vertices: blocking.vertices.map((v) => (v.id === vid ? { ...v, pt: { x: raw.x, y: raw.y } } : v)),
+        });
+        return;
+      }
+      const vHit = 12 / zoom;
+      let hov: string | null = null;
+      let bd = vHit;
+      for (const v of blocking.vertices) {
+        const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
+        if (d < bd) { bd = d; hov = v.id; }
+      }
+      if (hov !== hoveredBlockVtx) setHoveredBlockVtx(hov);
+
+      let hb: number | null = null;
+      blocking.blocks.forEach((blk, bi) => {
+        const poly = blockPolygon(blocking, blk);
+        if (poly.length >= 3 && pointInPolygon(raw, poly)) hb = bi;
+      });
+      if (hb !== hoveredBlockIdx) setHoveredBlockIdx(hb);
+    }
+
     const s = computeSnap(raw);
     setSnap(s);
 
     const ang = tempPts.length > 0
       ? ((Math.atan2(s.pt.y - tempPts[tempPts.length - 1].y, s.pt.x - tempPts[tempPts.length - 1].x) * 180) / Math.PI).toFixed(1)
-      : '—';
-    const L = tempPts.length > 0 ? dist(tempPts[tempPts.length - 1], s.pt).toFixed(3) : '—';
+      : '-';
+    const L = tempPts.length > 0 ? dist(tempPts[tempPts.length - 1], s.pt).toFixed(3) : '-';
     setHud({ length: L, angle: ang, x: s.pt.x.toFixed(4), y: s.pt.y.toFixed(4) });
 
     // Step 2 Domain Handle Hover
-    if (!displayOnly && currentStep === 2 && flowType === 'external' && !isDrawing) {
+    if (!displayOnly && currentStep === 2 && flowType === 'external' && domainEntity?.autoDomain && !isDrawing) {
       const c = geometryBBox.chord;
       const h = geometryBBox.height;
       const effH = Math.max(0.5 * c, h);
@@ -1647,6 +1985,33 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       return;
     }
 
+    // Direct manipulation: vertex drag / move selection
+    if (editDrag.current) {
+      const d = editDrag.current;
+      const target = s.pt; // snapped world point
+      if (d.mode === 'vertex') {
+        dispatch({
+          type: 'REPLACE_ENTITIES',
+          entities: d.snapshot.map(en => {
+            const hits = d.targets.filter(t => t.id === en.id);
+            let out = en;
+            for (const t of hits) out = moveEntityVertex(out, t.idx, target);
+            return out;
+          }),
+        });
+        setCmdText(d.targets.length > 1 ? `Dragging ${d.targets.length} joined vertices` : 'Drag vertex - release to place.');
+      } else {
+        const dx = target.x - d.startWorld.x;
+        const dy = target.y - d.startWorld.y;
+        dispatch({
+          type: 'REPLACE_ENTITIES',
+          entities: d.snapshot.map(en => (en.selected ? translateEntity(en, dx, dy) : en)),
+        });
+        setCmdText(`Move Δ(${dx.toFixed(3)}, ${dy.toFixed(3)}) - release to drop.`);
+      }
+      return;
+    }
+
     // Marquee update (select tool + LMB held)
     if (dragSelecting.current && tool === 'select') {
       const canvas = canvasRef.current;
@@ -1658,7 +2023,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       const cy = e.clientY - rect.top;
       setMarquee({ x: sx, y: sy, w: cx - sx, h: cy - sy });
     }
-  }, [toWorld, computeSnap, tempPts, tool, cadState.entities, zoom, hoveredTrim, currentStep, flowType, isDrawing, geometryBBox, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, domainShape, draggingDomainHandle, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor, hoveredDomainHandle]);
+  }, [toWorld, computeSnap, tempPts, tool, cadState.entities, zoom, hoveredTrim, currentStep, flowType, isDrawing, geometryBBox, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, domainShape, draggingDomainHandle, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor, hoveredDomainHandle, showBlocking, blocking, onUpdateBlocking, hoveredBlockVtx, hoveredBlockIdx]);
 
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -1690,17 +2055,102 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       e.preventDefault();
       return;
     }
+    // Structured block vertices are editable even in display-only (mesh) mode.
+    if (e.button === 0 && showBlocking && blocking && onUpdateBlocking) {
+      const raw = toWorld(e.clientX, e.clientY);
+      const vHit = 12 / zoom;
+      let best: string | null = null;
+      let bd = vHit;
+      for (const v of blocking.vertices) {
+        const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
+        if (d < bd) { bd = d; best = v.id; }
+      }
+      if (best) {
+        blockDrag.current = { vid: best };
+        e.preventDefault();
+        return;
+      }
+    }
+
     if (displayOnly) return;
-    // LMB in select tool → begin marquee
+
     if (e.button === 0 && tool === 'select') {
-      dragSelecting.current = true;
       dragStart.current = { x: e.clientX, y: e.clientY };
+      const raw = toWorld(e.clientX, e.clientY);
+      const selected = cadState.entities.filter(en => en.selected && en.layer !== 'construction');
+      const vHit = 12 / zoom;
+
+      // 1. Grab a vertex of ANY entity (not just selected) → resize / reshape.
+      // Every other vertex on the same point moves with it, so joined segments
+      // stay joined. The nearest vertex to the click wins.
+      let grabbed: Point2D | null = null;
+      let grabbedDist = Infinity;
+      let grabbedId: string | null = null;
+      for (const en of cadState.entities) {
+        if (en.layer === 'construction' || en.type === 'circle') continue;
+        for (let i = 0; i < en.pts.length; i++) {
+          const d = Math.hypot(en.pts[i].x - raw.x, en.pts[i].y - raw.y);
+          if (d < vHit && d < grabbedDist) { grabbedDist = d; grabbed = en.pts[i]; grabbedId = en.id; }
+        }
+      }
+      if (grabbed) {
+        const glue = Math.max(1e-4, 3 / zoom); // vertices within ~3px count as joined
+        const targets: { id: string; idx: number }[] = [];
+        for (const en of cadState.entities) {
+          if (en.layer === 'construction' || en.autoDomain) continue;
+          en.pts.forEach((p, i) => {
+            if (Math.hypot(p.x - grabbed!.x, p.y - grabbed!.y) <= glue) targets.push({ id: en.id, idx: i });
+          });
+        }
+        if (grabbedId && !cadState.entities.find(en => en.id === grabbedId)?.selected) {
+          dispatch({ type: 'SELECT_ENTITY', id: grabbedId });
+        }
+        editDrag.current = {
+          mode: 'vertex', targets,
+          startWorld: raw, snapshot: cadState.entities.map(x => ({ ...x, pts: x.pts.map(p => ({ ...p })) })),
+        };
+        setEditDragActive(true);
+        e.preventDefault();
+        return;
+      }
+
+      // 2. Press on the body of a selected entity → move the whole selection
+      if (selected.length > 0) {
+        const onId = findEntityAt(raw);
+        if (onId && selected.some(en => en.id === onId)) {
+          editDrag.current = {
+            mode: 'move', startWorld: raw,
+            snapshot: cadState.entities.map(x => ({ ...x, pts: x.pts.map(p => ({ ...p })) })),
+          };
+          setEditDragActive(true);
+          e.preventDefault();
+          return;
+        }
+      }
+
+      // 3. Otherwise → marquee select
+      dragSelecting.current = true;
       setMarquee(null);
     }
-  }, [pan, tool, currentStep, hoveredDomainHandle, displayOnly]);
+  }, [pan, tool, currentStep, hoveredDomainHandle, displayOnly, toWorld, cadState.entities, zoom, findEntityAt, showBlocking, blocking, onUpdateBlocking]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     panning.current = false;
+
+    if (blockDrag.current) {
+      blockDrag.current = null;
+      setCmdText('Block corner moved.');
+      return;
+    }
+
+    // Finish a vertex drag / move (the entities are already updated live).
+    if (editDrag.current) {
+      const wasMove = editDrag.current.mode === 'move';
+      editDrag.current = null;
+      setEditDragActive(false);
+      setCmdText(wasMove ? 'Moved.' : 'Vertex placed.');
+      return;
+    }
 
     // Domain handle drag is managed by document-level listeners (draggingDomainHandleRef)
     // so we only need to handle AoA here
@@ -1790,33 +2240,6 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   }, [pan, zoom]);
 
   /** Find entity closest to raw world point */
-  const findEntityAt = useCallback((rawPt: Point2D): string | null => {
-    const hitR = 14 / zoom;
-    let bestId: string | null = null;
-    let bestD = Infinity;
-    for (const ent of cadState.entities) {
-      if (ent.pts.length === 0) continue;
-      for (let i = 0; i < ent.pts.length - 1; i++) {
-        const d = distToSegment(rawPt, ent.pts[i], ent.pts[i + 1]);
-        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
-      }
-      if (ent.isClosed && ent.pts.length >= 3) {
-        const d = distToSegment(rawPt, ent.pts[ent.pts.length - 1], ent.pts[0]);
-        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
-      }
-      if (ent.type === 'circle' && ent.pts.length >= 2) {
-        const r = ent.radius ?? dist(ent.pts[0], ent.pts[1]);
-        const radialD = Math.abs(dist(rawPt, ent.pts[0]) - r);
-        if (radialD < hitR && radialD < bestD) { bestD = radialD; bestId = ent.id; }
-      }
-      for (const p of ent.pts) {
-        const d = dist(rawPt, p);
-        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
-      }
-    }
-    return bestId;
-  }, [cadState.entities, zoom]);
-
   const openDimPromptForEntity = useCallback((ent: CadEntity) => {
     if (ent.type === 'line' && ent.pts.length === 2) {
       const p0 = ent.pts[0], p1 = ent.pts[1];
@@ -1896,6 +2319,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (displayOnly) return;
+    // Only the select tool reacts to double-click. While a draw/modify tool is
+    // active, the two quick clicks that place a rectangle/arc corner must not
+    // also be read as a double-click (which used to recenter the view / open a
+    // dimension prompt and make it look like the tool "did nothing").
+    if (tool !== 'select') return;
     const rawPt = toWorld(e.clientX, e.clientY);
     const clickedId = findEntityAt(rawPt);
     if (clickedId) {
@@ -1912,7 +2340,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     setPan({ x: 0, y: 0 });
     setZoom(INITIAL_ZOOM);
     setCmdText('View centered to origin (0, 0).');
-  }, [toWorld, findEntityAt, cadState.entities, openDimPromptForEntity]);
+  }, [tool, toWorld, findEntityAt, cadState.entities, openDimPromptForEntity]);
 
 
 
@@ -2189,12 +2617,15 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     const snapPt = snap.pt;
     const hitR = 14 / zoom; // 14px pick tolerance in world coordinates
 
-    if (currentStep === 3) {
+    // Tag a boundary edge ONLY when a tag tool is armed (a tag picked from the
+    // palette) and the Select tool is active. Otherwise Select just selects and
+    // drawing tools just draw - nothing is ever auto-tagged.
+    if (activeTagTool && tool === 'select') {
       for (const edge of boundaryEdges) {
         const d = distToSegment(rawPt, edge.p0, edge.p1);
         if (d < 18 / zoom) {
           setEdgeTagMap(prev => ({ ...prev, [edge.key]: activeTagTool }));
-          setCmdText(`TAGGED: Boundary segment assigned as ${activeTagTool.toUpperCase()}.`);
+          setCmdText(`Tagged edge as ${activeTagTool.toUpperCase()}.`);
           return;
         }
       }
@@ -2214,7 +2645,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     if (tool === 'trim') {
       const target = getTrimTarget(rawPt, cadState.entities, zoom);
       if (!target) {
-        setCmdText('TRIM: Click on a line or intersection to trim.');
+        setCmdText('TRIM: click on a line to trim it.');
         return;
       }
 
@@ -2252,6 +2683,19 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // Never let canvas shortcuts (Delete, tool letters, Space/Enter, F-keys) fire
+    // while the user is typing in a form field anywhere in the app. This is what
+    // caused "backspace in a mesh input deleted my whole geometry".
+    const t = e.target as HTMLElement | null;
+    if (
+      t &&
+      (t.tagName === 'INPUT' ||
+        t.tagName === 'TEXTAREA' ||
+        t.tagName === 'SELECT' ||
+        t.isContentEditable)
+    ) {
+      return;
+    }
     if (e.key === 'Escape') {
       if (isDrawing || tempPts.length > 0) {
         setIsDrawing(false);
@@ -2435,17 +2879,28 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   }, [domainShape, geometryBBox, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, cadState.entities, fitBoundingBox]);
 
   const handleSetSelectedAsDomain = useCallback(() => {
-    const sel = cadState.entities.find(e => e.selected);
-    if (!sel) {
-      setCmdText('DOMAIN: Please select a drawn entity first, then click "Set as Domain".');
+    const selIds = new Set(cadState.entities.filter(e => e.selected).map(e => e.id));
+    if (selIds.size === 0) {
+      setCmdText('DOMAIN: Select the loop (or all its segments) first, then click "Use selected loop as the domain".');
+      toast('Select the boundary loop on the canvas first.', 'info');
       return;
     }
-    const updated = cadState.entities.map(e => ({
-      ...e,
-      role: e.id === sel.id ? ('domain_boundary' as const) : (e.role === 'domain_boundary' ? ('geometry' as const) : e.role),
-    }));
+    const updated = cadState.entities.map(e => {
+      if (selIds.has(e.id)) {
+        // Manual domain: never gets autoDomain, so it is never regenerated.
+        const { autoDomain, ...rest } = e;
+        return { ...rest, role: 'domain_boundary' as const };
+      }
+      // Demote any previous auto far-field so it stops tracking the sliders.
+      if (e.role === 'domain_boundary') {
+        const { autoDomain, ...rest } = e;
+        return { ...rest, role: 'geometry' as const };
+      }
+      return e;
+    });
     dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
-    setCmdText(`DOMAIN: Selected entity tagged as Fluid Domain Boundary.`);
+    setCmdText(`DOMAIN: ${selIds.size} ${selIds.size === 1 ? 'edge' : 'edges'} set as the fluid domain boundary.`);
+    toast('Fluid domain defined.', 'success');
   }, [cadState.entities]);
 
   const handleSetSelectedAsGeometry = useCallback(() => {
@@ -2642,9 +3097,9 @@ boundary
       polyline: 'pick first vertex',
       rectangle: 'pick first corner',
       circle_center_radius: 'pick center',
-      arc_center: 'pick center',
-      construction_line: 'pick first point',
-      trim: 'click line to trim at intersection',
+      arc_center: 'pick center, then start point, then end point',
+      construction_line: 'pick two points for an infinite reference line',
+      trim: 'click a line to remove it (or the piece between two crossings)',
     };
     return m[t] ?? '';
   };
@@ -2763,7 +3218,7 @@ boundary
             { label: 'GRID', title: 'Toggle Grid (F7)', state: showGrid, toggle: () => setShowGrid(g => !g), icon: <Grid3x3 className="w-3 h-3" /> },
             { label: 'SNAP', title: 'Toggle OSNAP (F3)', state: snapEnabled, toggle: () => setSnapEnabled(s => !s), icon: <Magnet className="w-3 h-3" /> },
             { label: 'ORTHO', title: 'Ortho Lock (F8)', state: ortho, toggle: () => setOrtho(o => !o), icon: <Crosshair className="w-3 h-3" /> },
-            { label: 'XLINE', title: 'Construction Mode', state: constructionMode, toggle: () => setConstructionMode(c => !c), icon: <ScanLine className="w-3 h-3" /> },
+            { label: 'CONSTR', title: 'Construction layer: new geometry is drawn as non-solid reference lines', state: constructionMode, toggle: () => setConstructionMode(c => !c), icon: <ScanLine className="w-3 h-3" /> },
           ].map(({ label, title, state: on, toggle, icon }) => (
             <button key={label} title={title} onClick={toggle}
               className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors ${
@@ -2804,12 +3259,16 @@ boundary
               {canvasMode === 'cad' ? '◉' : '○'} CAD
             </button>
             <button
-              onClick={() => meshData && setCanvasMode('mesh')}
-              disabled={!meshData}
+              onClick={() => meshData && !meshStale && setCanvasMode('mesh')}
+              disabled={!meshData || meshStale}
+              title={meshStale ? 'Geometry changed - regenerate the mesh' : undefined}
               className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'mesh' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed'}`}
             >
               {canvasMode === 'mesh' ? '◉' : '○'} Mesh
             </button>
+            {meshStale && showMesh && (
+              <span className="ml-1 text-[10px] text-[#D97706] font-medium">stale - regenerate</span>
+            )}
           </div>
         )}
 
@@ -2820,6 +3279,7 @@ boundary
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
           onClick={handleCanvasClick}
+          onAuxClick={handleAuxClick}
           onDoubleClick={handleDoubleClick}
           onWheel={handleWheel}
           onContextMenu={e => e.preventDefault()}

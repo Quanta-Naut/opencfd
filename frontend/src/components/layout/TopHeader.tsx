@@ -1,14 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Save, MoreVertical, Database, Pencil } from 'lucide-react';
+import { Save, MoreVertical, Database, Pencil, LayoutGrid, CircleHelp } from 'lucide-react';
 
 interface TopHeaderProps {
   projectName: string;
   onProjectNameChange: (name: string) => void;
+  onExitHome?: () => void;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
   projectName,
   onProjectNameChange,
+  onExitHome,
 }) => {
   const [showMenu, setShowMenu] = useState<boolean>(false);
   const [editing, setEditing] = useState(false);
@@ -32,6 +34,16 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
     <header className="h-[52px] bg-white border-b border-[#E1E4E8] px-4 flex items-center justify-between select-none z-30 shrink-0">
       {/* Left: Logo + Editable Project Name */}
       <div className="flex items-center gap-3 min-w-0">
+        {onExitHome && (
+          <button
+            onClick={onExitHome}
+            title="Back to projects"
+            className="flex items-center gap-1 px-2 py-1 -ml-1 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded-md transition-colors shrink-0"
+          >
+            <LayoutGrid className="w-4 h-4" />
+            <span className="text-xs font-medium">Projects</span>
+          </button>
+        )}
         <div className="w-7 h-7 bg-[#171A1F] rounded-md flex items-center justify-center text-white shadow-xs shrink-0">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 14c4-7 14-8 16-8-2 8-10 10-16 8z" />
@@ -68,6 +80,14 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
       {/* Right: Project actions */}
       <div className="flex items-center gap-3">
+        <a
+          href="/tutorial"
+          className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded-md transition-colors"
+          title="How-to guide (your work autosaves)"
+        >
+          <CircleHelp className="w-4 h-4" />
+        </a>
+
         <div className="w-px h-4 bg-[#E1E4E8]" />
 
         <button
