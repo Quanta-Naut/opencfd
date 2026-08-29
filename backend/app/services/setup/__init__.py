@@ -199,12 +199,14 @@ async def provision() -> AsyncGenerator[Dict[str, Any], None]:
         yield {"type": "error", "message": wsl["detail"]}
         return
 
-    yield _ev("wsl", "Updating the WSL kernel", 0.03)
+    # Best-effort: `wsl --update` needs admin and is only needed if the WSL2
+    # kernel is stale. If WSL2 already works this is a no-op; skip it silently.
+    yield _ev("wsl", "Checking WSL", 0.03)
     try:
         await asyncio.get_event_loop().run_in_executor(None, lambda: _wsl("--update", timeout=180))
         await asyncio.get_event_loop().run_in_executor(None, lambda: _wsl("--set-default-version", "2", timeout=30))
     except Exception:  # noqa: BLE001
-        yield _ev("wsl", "Could not update WSL (continuing)", 0.05)
+        pass
 
     pack = WSL_DIR / "pack.tar.gz"  # gzip; `wsl --import` reads it directly
     sha_seen = ""
@@ -235,7 +237,11 @@ async def provision() -> AsyncGenerator[Dict[str, Any], None]:
         lambda: _wsl("--import", DISTRO_NAME, str(target), str(pack), "--version", "2", timeout=600),
     )
     if imp.returncode != 0:
-        yield {"type": "error", "message": f"wsl --import failed: {_clean(imp.stderr).strip()}"}
+        err = _clean(imp.stderr).strip() or _clean(imp.stdout).strip()
+        if "kernel" in err.lower() or "wsl 2 requires" in err.lower():
+            err = ("The WSL2 kernel needs updating. Open an administrator PowerShell, "
+                   "run `wsl --update`, then click Try again.")
+        yield {"type": "error", "message": f"Could not import the solver distro: {err}"}
         return
 
     yield _ev("verify", "Verifying the solver", 0.92)
