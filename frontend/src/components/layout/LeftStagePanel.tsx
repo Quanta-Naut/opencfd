@@ -57,6 +57,7 @@ interface LeftStagePanelProps {
   onRunSolver: () => void;
   onStopSolver?: () => void;
   onSetSolution?: (patch: (c: import('../../solver/solverConfig').SolverConfig) => import('../../solver/solverConfig').SolverConfig) => void;
+  onSetTimeFormulation?: (t: 'steady' | 'transient') => void;
   solverPatchNames?: string[];
   solverWallPatches?: string[];
   solverConvergence?: { iteration: number; maxResidual: number; cd?: number; cl?: number } | null;
@@ -511,6 +512,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   onRunSolver,
   onStopSolver,
   onSetSolution,
+  onSetTimeFormulation,
   solverPatchNames,
   solverWallPatches,
   solverConvergence,
@@ -1337,6 +1339,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
         <SolverPanel
           state={state}
           setSolution={onSetSolution}
+          setTimeFormulation={onSetTimeFormulation ?? (() => {})}
           patchNames={solverPatchNames ?? []}
           wallPatches={solverWallPatches ?? []}
           running={state.executionStatus === 'running'}

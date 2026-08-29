@@ -1061,6 +1061,8 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           onRunSolver={handleRunSolver}
           onStopSolver={handleStopSolver}
           onSetSolution={handleSetSolution}
+          onSetTimeFormulation={(t) =>
+            setState((prev) => ({ ...prev, physics: { ...prev.physics, timeFormulation: t } }))}
           solverPatchNames={patchRoles.map((p) => p.name)}
           solverWallPatches={patchRoles.filter((p) => p.role === 'wall').map((p) => p.name)}
           solverConvergence={solverConvergence}

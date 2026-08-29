@@ -18,7 +18,7 @@ export const AnalysisSection: React.FC<
       title="Analysis definition"
       hint="How the fluid domain and the flow equations are interpreted."
     >
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Field label="Flow topology" hint="Set in Geometry ▸ Domain">
           <div className="w-full px-2.5 py-2 bg-[#F5F6F8] border border-[#DDE2E8] rounded-md font-mono text-xs text-[#69717D] capitalize">
             {flowType} flow
@@ -31,16 +31,10 @@ export const AnalysisSection: React.FC<
             onChange={(v) => setPhysics({ regime: v })}
           />
         </Field>
-        <Field label="Time formulation">
-          <Select
-            value={physics.timeFormulation}
-            onChange={(v) => setPhysics({ timeFormulation: v as 'steady' | 'transient' })}
-          >
-            <option value="steady">Steady state</option>
-            <option value="transient">Transient</option>
-          </Select>
-        </Field>
       </div>
+      <p className="text-[10px] text-[#69717D]">
+        Steady state vs transient is chosen in the Solver tab.
+      </p>
 
       {compressible && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
