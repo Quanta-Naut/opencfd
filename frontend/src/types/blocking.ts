@@ -787,6 +787,134 @@ export function airfoilsForCGrid(
 }
 
 /**
+ * True wrap C-grid on a C-shaped far-field (semicircle front + straight wake):
+ * an upper and a lower wrap block hugging the airfoil surface out to the
+ * semicircle, meeting on a radial forward of the nose, plus a conformal pair of
+ * wake blocks. Grid lines curve around the leading edge. 4 blocks.
+ */
+function cGridWrap(
+  A: Point2D[],
+  iTE: number,
+  dom: Point2D[],
+  patch?: BoundaryTag,
+): Blocking | null {
+  const TE = { ...A[iTE] };
+  let iLE = 0;
+  A.forEach((p, i) => { if (p.x < A[iLE].x) iLE = i; });
+  const LE = { ...A[iLE] };
+  const chord = TE.x - LE.x;
+  if (chord < 1e-6) return null;
+
+  const walk = (from: number, to: number) => {
+    const s: Point2D[] = [{ ...A[from] }];
+    let i = from, guard = 0;
+    while (i !== to && guard++ < A.length + 2) { i = (i + 1) % A.length; s.push({ ...A[i] }); }
+    return s;
+  };
+  const w1 = walk(iLE, iTE), w2 = walk(iTE, iLE).reverse();
+  const meanY = (s: Point2D[]) => s.reduce((a, p) => a + p.y, 0) / s.length;
+  const upper = meanY(w1) >= meanY(w2) ? w1 : w2;   // LE -> TE, top
+  const lower = upper === w1 ? w2 : w1;             // LE -> TE, bottom
+  if (upper.length < 3 || lower.length < 3) return null;
+
+  const R = dom.map((p) => ({ ...p }));
+  const db = boundsOf(R);
+  const xR = db.maxX;
+  const tol = Math.max(1e-6, (xR - db.minX) * 3e-3);
+
+  // The C far-field is an open polyline: two ends at x = xR (the outlet), the
+  // rest running around the front. Rotate the ring so it starts at one outlet
+  // end and finishes at the other, walking the long way round.
+  const endIdx = R.map((p, i) => ({ p, i })).filter((o) => o.p.x >= xR - tol).map((o) => o.i);
+  if (endIdx.length < 2) return null;
+  const a = endIdx[0], b = endIdx[endIdx.length - 1];
+  const arcFwd = (b - a + R.length) % R.length;
+  const [s0, s1] = arcFwd >= R.length - arcFwd ? [a, b] : [b, a];  // start on the longer arc
+  const outer: Point2D[] = [];
+  for (let k = 0; ; k++) {
+    const idx = (s0 + k) % R.length;
+    outer.push({ ...R[idx] });
+    if (idx === s1) break;
+    if (k > R.length) return null;
+  }
+  if (outer.length < 4) return null;
+  if (outer[0].y > outer[outer.length - 1].y) outer.reverse();      // outer[0] is the lower end
+  const lo0 = { ...outer[0] }, hi0 = { ...outer[outer.length - 1] };
+
+  // front point (leftmost) of the outer C
+  let fi = 0;
+  outer.forEach((p, i) => { if (p.x < outer[fi].x) fi = i; });
+  const oFront = { ...outer[fi] };
+
+  // the tails run roughly horizontal at x >= TE.x; find where each crosses x = TE.x
+  const crossY = (a: Point2D, b: Point2D, x: number) => a.y + (b.y - a.y) * (x - a.x) / ((b.x - a.x) || 1e-9);
+  let iWB = 0;
+  for (let i = 0; i + 1 <= fi; i++) {
+    if ((outer[i].x - TE.x) * (outer[i + 1].x - TE.x) <= 0) { iWB = i; break; }
+  }
+  let iWT = outer.length - 1;
+  for (let i = outer.length - 1; i - 1 >= fi; i--) {
+    if ((outer[i].x - TE.x) * (outer[i - 1].x - TE.x) <= 0) { iWT = i; break; }
+  }
+  const WB = { x: TE.x, y: crossY(outer[iWB], outer[iWB + 1], TE.x) };
+  const WT = { x: TE.x, y: crossY(outer[iWT], outer[iWT - 1], TE.x) };
+  const wakeOut = { x: xR, y: TE.y };
+  // lo0 / hi0 are the domain's back corners at x = xR; they double as the
+  // outlet corners (the wake lines are horizontal, so hi0.y == WT.y).
+
+  // interior path points for each far-field edge, in that edge's v0 -> v1 order
+  const loWrapOuter = outer.slice(iWB + 1, fi).reverse();   // Front -> WB
+  const upWrapOuter = outer.slice(fi + 1, iWT);             // Front -> WT
+  const loTailMid = outer.slice(1, iWB + 1).reverse();      // WB -> lo0
+  const upTailMid = outer.slice(iWT, outer.length - 1);     // WT -> hi0
+
+  const verts: BlockVertex[] = [];
+  const vById = new Map<string, string>();
+  const vid = (p: Point2D): string => {
+    const k = vkey(p);
+    let id = vById.get(k);
+    if (!id) { id = uid(); vById.set(k, id); verts.push({ id, pt: { x: p.x, y: p.y } }); }
+    return id;
+  };
+  const edges: BlockEdge[] = [];
+  const mk = (v0: string, v1: string, path: Point2D[], p: BoundaryTag | undefined, nodes: number, law: EdgeLaw = 'uniform', ratio = 1): string => {
+    edges.push({ id: uid(), v0, v1, path: path.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes, law, ratio });
+    return edges[edges.length - 1].id;
+  };
+  const vLE = vid(LE), vTE = vid(TE), vFront = vid(oFront), vWB = vid(WB), vWT = vid(WT);
+  const vLo0 = vid(lo0), vHi0 = vid(hi0), vWakeOut = vid(wakeOut);
+
+  const AROUND = 60, NORMAL = 26, WAKE = 34;
+  const leRad = mk(vLE, vFront, [], undefined, NORMAL, 'geometric', 2.2);   // radial forward of the nose (shared)
+  const teRadU = mk(vTE, vWT, [], undefined, NORMAL, 'geometric', 2.2);
+  const teRadL = mk(vTE, vWB, [], undefined, NORMAL, 'geometric', 2.2);
+  // circumferential edges cluster nodes toward the leading and trailing edges
+  const afU = mk(vLE, vTE, upper.slice(1, -1), patch ?? 'wall', AROUND, 'bump', 0.22);
+  const afL = mk(vLE, vTE, lower.slice(1, -1), patch ?? 'wall', AROUND, 'bump', 0.22);
+  const ocU = mk(vFront, vWT, upWrapOuter, 'farfield', AROUND, 'bump', 0.35);
+  const ocL = mk(vFront, vWB, loWrapOuter, 'farfield', AROUND, 'bump', 0.35);
+  const wcut = mk(vTE, vWakeOut, [], undefined, WAKE, 'geometric', 3);     // shared wake cut
+  const wlU = mk(vWT, vHi0, upTailMid, 'farfield', WAKE, 'geometric', 3);
+  const wlL = mk(vWB, vLo0, loTailMid, 'farfield', WAKE, 'geometric', 3);
+  const outEU = mk(vWakeOut, vHi0, [], 'outlet', NORMAL, 'geometric', 4);
+  const outEL = mk(vWakeOut, vLo0, [], 'outlet', NORMAL, 'geometric', 4);
+
+  const scratch: Blocking = { vertices: verts, edges, blocks: [], links: [] };
+  const O = (ids: string[]) => orderBlockEdges(scratch, ids);
+  const bUW = O([afU, teRadU, ocU, leRad]);   // upper wrap
+  const bLW = O([afL, teRadL, ocL, leRad]);   // lower wrap
+  const bWU = O([wcut, outEU, wlU, teRadU]);  // upper wake
+  const bWL = O([wcut, outEL, wlL, teRadL]);  // lower wake
+
+  const ok = [bUW, bLW, bWU, bWL];
+  if (ok.some((o) => !o)) return null;
+
+  const blocks: Block[] = ok.map((o) => ({ id: uid(), edges: o as Block['edges'] }));
+  const links: string[][] = [[afU, afL], [leRad, teRadU, teRadL]];
+  return propagateNodeCounts(cleanBlocking({ vertices: verts, edges, blocks, links }));
+}
+
+/**
  * Airfoil topology that fills the whole (rectangular) domain: a C-H grid of six
  * blocks. Two wrap blocks hug the upper and lower airfoil surface; a full-height
  * pair fills the region upstream of the leading edge, split by the forward
@@ -822,6 +950,16 @@ export function cGridFromAirfoil(
   const xL = db.minX, xR = db.maxX, yB = db.minY, yT = db.maxY;
   const yF = LE.y;  // forward stagnation cut level
   const yW = TE.y;  // wake cut level
+
+  // A non-rectangular far-field (the C-grid domain shape: semicircle front +
+  // straight wake) gets a true wrap C-grid whose grid lines follow the nose.
+  const bboxArea = (xR - xL) * (yT - yB);
+  const ringArea = Math.abs(signedArea(dom));
+  if (bboxArea > 0 && ringArea < 0.95 * bboxArea) {
+    const wrap = cGridWrap(A, iTE, dom, patch);
+    if (wrap) return wrap;
+    // fall through to the rectangular H-C grid if the wrap could not be built
+  }
   // put the nose vertical cut ahead of the LE so the over-airfoil blocks start
   // clear of the near-vertical nose (avoids sliver cells at the leading edge)
   const xFront = Math.max(LE.x - Math.max(chord * 0.35, eps * 4), (xL + LE.x) / 2);

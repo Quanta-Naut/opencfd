@@ -235,9 +235,22 @@ Not done (later): drawing an arbitrary cut line at a chosen position (only mid-b
       does not offer a redundant wrap.
 - Tested: NACA-ish airfoil -> 6210 quads, 0 tris, ~55 deg min angle, 0.40 skew; thick section
       68 deg; 8 deg AoA 52 deg. All via the /api/geometry/mesh-structured endpoint.
-- Not done: outer curve split into inlet (front) / outlet (back) instead of all 'farfield';
-      flow-aligned wake cut at AoA; blunt-TE base as its own wall patch; offset self-
-      intersection guard for very thin / high-camber sections; reuse backend `compute_2d_offset`.
+- 2026-08-29 rework: `cGridFromAirfoil` now FILLS THE WHOLE DOMAIN (the old version only
+      meshed a small offset patch and left the rest empty).
+      * rectangular domain -> `cGridFromAirfoil` builds an 8-block C-H grid (2 wrap along the
+        surfaces, 2 upstream of the LE, 2 wake). ~16 deg min angle at the nose.
+      * C-shaped domain (semicircle + wake, area < 0.95 * bbox) -> `cGridWrap` builds a true
+        4-block wrap C-grid: upper/lower wrap out to the semicircle meeting on a radial ahead
+        of the nose, + 2 conformal wake blocks. Grid lines curve around the nose. ~20 deg min
+        angle. This is the recommended airfoil path.
+- KNOWN LIMIT: ~15-20 deg cells right at the rounded leading edge in both variants. Root
+      cause: circumferential node clustering toward the LE/TE cannot be applied to a curved
+      (polyline) block edge - the backend `_distribute_cells` only splits by arc length, not
+      by a `bump`/`geometric` law. `afU`/`afL`/`ocU`/`ocL` carry `law:'bump'` params that are
+      currently IGNORED for polyline edges. Fixing that (weight `_distribute_cells` by the
+      transfinite law) is the next backend step and should clear the nose.
+- Not done: outer curve split into inlet (front) / outlet (back); flow-aligned wake cut at
+      AoA; blunt-TE base patch.
 
 ### Quality pass (started 2026-08-29)  -- see the "Structured Meshing Roadmap" artifact
 

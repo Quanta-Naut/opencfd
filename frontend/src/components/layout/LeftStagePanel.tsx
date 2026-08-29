@@ -250,7 +250,7 @@ const StructuredMeshPanel: React.FC<{
   const kindBlurb: Record<'hgrid' | 'ogrid' | 'cgrid', string> = {
     hgrid: 'One block per vertical strip of the domain. Ramps become slanted-floor blocks; floor / ceiling steps split automatically.',
     ogrid: 'Blocks the domain, then wraps every body inside it in a 4-block ring (fine at the wall, coarser outward). The rest stays H-grid.',
-    cgrid: 'Fills the domain around an airfoil with a C-H block grid: wrap blocks along each surface, a pair upstream, and a pair trailing into the wake. Cells pinch a little at the rounded nose (an H-topology limit).',
+    cgrid: 'Airfoil grid that fills the whole domain. A C-shaped far-field (semicircle + wake) gets a true wrap C-grid whose lines curve around the nose; a rectangular domain gets a C-H grid instead. Set the domain shape to "C-grid" for the best airfoil mesh.',
   };
 
   // ── Step 1: Blocking ──
