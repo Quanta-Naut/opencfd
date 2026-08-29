@@ -87,6 +87,33 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
     [residuals],
   );
 
+  // Log-scale plots break on zero/negative values - clamp to a small floor.
+  const FLOOR = 1e-10;
+  const resSeries = React.useMemo(
+    () => residuals.map((r) => {
+      const o: any = { iteration: r.iteration };
+      for (const key of ['p', 'Ux', 'Uy', 'k', 'omega', 'epsilon'] as const) {
+        const v = (r as any)[key];
+        if (typeof v === 'number' && isFinite(v)) o[key] = Math.max(v, FLOOR);
+      }
+      return o;
+    }),
+    [residuals],
+  );
+  const resDomain = React.useMemo(() => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const p of resSeries) {
+      for (const k of ['p', 'Ux', 'Uy', 'k', 'omega', 'epsilon']) {
+        const v = p[k];
+        if (typeof v === 'number') { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+      }
+    }
+    if (!isFinite(lo) || !isFinite(hi)) return [FLOOR, 1] as [number, number];
+    return [Math.max(lo / 2, FLOOR), hi * 2] as [number, number];
+  }, [resSeries]);
+  const hasKey = (k: string) => resSeries.some((p) => typeof p[k] === 'number');
+
   return (
     <div className="w-full bg-white border-t border-[#E1E4E8] flex flex-col select-none shrink-0 z-20">
       {/* 1. DRAWER HEADER TICKER */}
@@ -187,21 +214,22 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
           {/* TAB 1: RESIDUALS CONVERGENCE */}
           {activeTab === 'residuals' && (
             <div className="w-full h-full p-2">
-              {residuals.length < 2 ? (
+              {resSeries.length < 2 ? (
                 <div className="w-full h-full flex flex-col items-center justify-center text-[#A5ACB5] text-xs font-mono">
                   <span>Residuals will plot in real-time when solver is running</span>
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <RechartsLineChart data={residuals} margin={{ top: 5, right: 15, left: 0, bottom: 0 }}>
+                  <RechartsLineChart data={resSeries} margin={{ top: 5, right: 15, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#F0F2F5" />
                     <XAxis dataKey="iteration" stroke="#A5ACB5" fontSize={10} tickLine={false} />
                     <YAxis
                       stroke="#A5ACB5"
                       fontSize={10}
                       tickLine={false}
+                      width={52}
                       scale="log"
-                      domain={['auto', 'auto']}
+                      domain={resDomain}
                       allowDataOverflow
                       tickFormatter={(v) => (typeof v === 'number' ? v.toExponential(0) : v)}
                     />
@@ -212,16 +240,20 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
                         borderRadius: '6px',
                         fontSize: '11px',
                       }}
+                      formatter={(v: any) => (typeof v === 'number' ? v.toExponential(2) : v)}
                     />
                     <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '2px' }} />
                     <Line type="monotone" dataKey="p" name="p" stroke="#2563EB" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                     <Line type="monotone" dataKey="Ux" name="Ux" stroke="#16A34A" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                     <Line type="monotone" dataKey="Uy" name="Uy" stroke="#D97706" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-                    {residuals[0]?.k !== undefined && (
+                    {hasKey('k') && (
                       <Line type="monotone" dataKey="k" name="k" stroke="#8B5CF6" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                     )}
-                    {residuals[0]?.omega !== undefined && (
+                    {hasKey('omega') && (
                       <Line type="monotone" dataKey="omega" name="ω" stroke="#EC4899" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                    )}
+                    {hasKey('epsilon') && (
+                      <Line type="monotone" dataKey="epsilon" name="ε" stroke="#EC4899" strokeWidth={1.5} dot={false} isAnimationActive={false} />
                     )}
                   </RechartsLineChart>
                 </ResponsiveContainer>
