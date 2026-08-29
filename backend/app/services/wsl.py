@@ -9,13 +9,33 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 _STATES = {"Running", "Stopped", "Installing", "Uninstalling", "Converting"}
 
 
+def wsl_exe() -> Optional[str]:
+    """Path to wsl.exe. `which` misses it for a 32-bit Python on 64-bit Windows
+    (System32 -> SysWOW64 redirection), so check explicit locations too."""
+    if os.name != "nt":
+        return None
+    found = shutil.which("wsl.exe")
+    if found:
+        return found
+    win = os.environ.get("SystemRoot", r"C:\Windows")
+    for cand in (os.path.join(win, "Sysnative", "wsl.exe"),
+                 os.path.join(win, "System32", "wsl.exe")):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 def wsl_present() -> bool:
-    return os.name == "nt" and shutil.which("wsl.exe") is not None
+    return wsl_exe() is not None
+
+
+def _wsl_argv(*args: str) -> List[str]:
+    return [wsl_exe() or "wsl.exe", *args]
 
 
 def _decode(raw: bytes) -> str:
@@ -36,7 +56,7 @@ def list_distros() -> Tuple[List[str], bool]:
         return [], False
     try:
         proc = subprocess.run(
-            ["wsl.exe", "--list", "--verbose"], capture_output=True, timeout=20
+            _wsl_argv("--list", "--verbose"), capture_output=True, timeout=20
         )
     except Exception:  # noqa: BLE001
         return [], False
@@ -65,7 +85,7 @@ def distro_alive(name: str) -> bool:
         return False
     try:
         p = subprocess.run(
-            ["wsl.exe", "-d", name, "--", "true"], capture_output=True, timeout=25
+            _wsl_argv("-d", name, "--", "true"), capture_output=True, timeout=25
         )
         return p.returncode == 0
     except Exception:  # noqa: BLE001
@@ -77,7 +97,7 @@ def raw_list() -> str:
     if not wsl_present():
         return ""
     try:
-        p = subprocess.run(["wsl.exe", "--list", "--verbose"], capture_output=True, timeout=20)
+        p = subprocess.run(_wsl_argv("--list", "--verbose"), capture_output=True, timeout=20)
         return _decode(p.stdout).strip()
     except Exception:  # noqa: BLE001
         return ""
@@ -87,7 +107,7 @@ def wsl_status_line() -> str:
     if not wsl_present():
         return ""
     try:
-        proc = subprocess.run(["wsl.exe", "--status"], capture_output=True, timeout=20)
+        proc = subprocess.run(_wsl_argv("--status"), capture_output=True, timeout=20)
         return _decode(proc.stdout).strip()
     except Exception:  # noqa: BLE001
         return ""

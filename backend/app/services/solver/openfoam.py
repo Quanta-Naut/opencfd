@@ -326,17 +326,14 @@ class WslOpenFoam(OpenFoamAdapter):
         self.distro = distro
 
     def _prefix(self) -> List[str]:
-        pre = ["wsl.exe"]
+        pre = [wsl_exe() or "wsl.exe"]
         if self.distro:
             pre += ["-d", self.distro]
         return pre + ["--"]
 
     def _to_solver_path(self, host_path: str) -> str:
-        pre = ["wsl.exe"]
-        if self.distro:
-            pre += ["-d", self.distro]
         out = subprocess.run(
-            pre + ["--", "wslpath", "-a", str(host_path)],
+            self._prefix() + ["wslpath", "-a", str(host_path)],
             capture_output=True, text=True, timeout=20,
         )
         p = (out.stdout or "").strip()
@@ -346,7 +343,7 @@ class WslOpenFoam(OpenFoamAdapter):
 
 
 # ---- WSL discovery (Windows) ---------------------------------------------
-from app.services.wsl import list_distros, wsl_present  # noqa: E402
+from app.services.wsl import list_distros, wsl_exe, wsl_present  # noqa: E402
 
 
 def wsl_distros() -> List[str]:

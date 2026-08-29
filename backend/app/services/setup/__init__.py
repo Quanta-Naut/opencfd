@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 
 from app.services.wsl import list_distros as wsl_list_distros
+from app.services.wsl import wsl_exe, wsl_present
 
 DISTRO_NAME = "OpenCFD-FOAM"
 STATE_DIR = Path.home() / ".OpenCFD"
@@ -64,7 +65,7 @@ _IS_WINDOWS = os.name == "nt"
 
 def _wsl(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["wsl.exe", *args], capture_output=True, text=True, timeout=timeout
+        [wsl_exe() or "wsl.exe", *args], capture_output=True, text=True, timeout=timeout
     )
 
 
@@ -75,7 +76,7 @@ def _clean(text: str) -> str:
 def wsl_status() -> Dict[str, Any]:
     if not _IS_WINDOWS:
         return {"installed": False, "version2": False, "distros": [], "detail": "not Windows"}
-    if shutil.which("wsl.exe") is None:
+    if not wsl_present():
         return {
             "installed": False,
             "version2": False,
