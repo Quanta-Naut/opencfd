@@ -1,3 +1,4 @@
+import copy
 import math
 import threading
 from contextlib import contextmanager
@@ -452,8 +453,15 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
     for loop in loops:
         loop_id = loop["entity"].get("id", "boundary")
         lp = loop["points"]
+        # A circle carries one entity-wide tag at "<id>_0" (its outline is
+        # regenerated / resampled, so per-segment indices are not stable).
+        circle_tag = None
+        if loop["entity"].get("type") == "circle":
+            circle_tag = str(joined_edge_tags.get(f"{loop_id}_0", "")).strip().lower()
         for i in range(len(lp)):
-            if str(joined_edge_tags.get(f"{loop_id}_{i}", "")).strip().lower() == "wall":
+            seg_tag = circle_tag if circle_tag is not None else \
+                str(joined_edge_tags.get(f"{loop_id}_{i}", "")).strip().lower()
+            if seg_tag == "wall":
                 wall_seg_pts.append(lp[i])
                 wall_seg_pts.append(lp[(i + 1) % len(lp)])
     if len(wall_seg_pts) >= 2:
@@ -554,6 +562,11 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         def add_loop(loop: Dict[str, Any], point_size: float, reverse: bool = False
                      ) -> Tuple[int, List[int], List[int]]:
             entity_id = loop["entity"].get("id", "boundary")
+            # A circle is one patch keyed at "<id>_0" (see the wall scan above).
+            circle_tag = (
+                edge_tags.get(f"{entity_id}_0")
+                if loop["entity"].get("type") == "circle" else None
+            )
             line_tags: List[int] = []
             raw_points = loop["points"]
             raw_sizes = loop.get("point_sizes")
@@ -569,7 +582,7 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 line = gmsh.model.geo.addLine(start, point_tags[(index + 1) % len(point_tags)])
                 line_tags.append(line)
                 all_lines.append(line)
-                tag = edge_tags.get(f"{entity_id}_{index}")
+                tag = circle_tag if circle_tag is not None else edge_tags.get(f"{entity_id}_{index}")
                 line_metadata.append((line, str(tag) if tag else entity_id))
             return gmsh.model.geo.addCurveLoop(line_tags), line_tags, point_tags
 
@@ -995,6 +1008,141 @@ def _algo_name(algorithm_id: int) -> str:
     }.get(algorithm_id, "Gmsh")
 
 
+def _one_ring8(node: int, quad_ids: List[int], quads: List[List[int]]):
+    """Order the 8 nodes around an interior quad-mesh node as
+    (n, s, e, w, ne, nw, sw, se). Returns None if the node is not cleanly
+    surrounded by four quads."""
+    if len(quad_ids) != 4:
+        return None
+    info = []
+    for qi in quad_ids:
+        q = quads[qi]
+        try:
+            p = q.index(node)
+        except ValueError:
+            return None
+        info.append([q[(p - 1) % 4], q[(p + 1) % 4], q[(p + 2) % 4]])  # left, right, diag
+    ordered = [info[0]]
+    remaining = info[1:]
+    for _ in range(3):
+        right = ordered[-1][1]
+        nxt = None
+        for k, it in enumerate(remaining):
+            if it[0] == right:
+                nxt = remaining.pop(k)
+                break
+            if it[1] == right:
+                it = [it[1], it[0], it[2]]
+                remaining.pop(k)
+                nxt = it
+                break
+        if nxt is None:
+            return None
+        ordered.append(nxt)
+    if ordered[-1][1] != ordered[0][0]:
+        return None
+    r = [o[1] for o in ordered]   # edge neighbours, cyclic: r0..r3
+    d = [o[2] for o in ordered]   # diagonal of quad k sits between r[k] and r[k-1]
+    # r0=e, r1=n, r2=w, r3=s ; d1=ne, d2=nw, d3=sw, d0=se
+    return (r[1], r[3], r[0], r[2], d[1], d[2], d[3], d[0])
+
+
+def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
+                    fixed_idx: set, iterations: int = 120, omega: float = 0.4,
+                    taper: int = 6, w_max: float = 0.8) -> int:
+    """Elliptic (Winslow) smoothing of the free interior nodes, in place.
+
+    Solves alpha*x_xx - 2*beta*x_xy + gamma*x_yy = 0 by Jacobi relaxation on the
+    8-node stencil so grid lines flow across block seams instead of kinking.
+    True geometry-boundary nodes and block corners (`fixed_idx`) never move.
+
+    The smoothed position is blended back toward the original transfinite
+    position with a weight that ramps from 0 next to a fixed node up to `w_max`
+    `taper` layers in - this keeps the topological corners (O-grid / C-grid
+    singular points) at their clean transfinite quality while the deep interior
+    gets the full elliptic treatment. Returns the number of nodes moved."""
+    if iterations <= 0 or not elements:
+        return 0
+    quads = [e for e in elements if len(e) == 4]
+    if not quads:
+        return 0
+    n = len(nodes)
+    node_quads: List[List[int]] = [[] for _ in range(n)]
+    adj: List[set] = [set() for _ in range(n)]
+    for q in quads:
+        for a in range(4):
+            adj[q[a]].add(q[(a + 1) % 4])
+            adj[q[a]].add(q[(a + 3) % 4])
+    for qi, q in enumerate(quads):
+        for v in q:
+            if 0 <= v < n:
+                node_quads[v].append(qi)
+
+    free: List[int] = []
+    sten: List[Tuple[int, ...]] = []
+    for i in range(n):
+        if i in fixed_idx or len(node_quads[i]) != 4:
+            continue
+        s = _one_ring8(i, node_quads[i], quads)
+        if s is not None:
+            free.append(i)
+            sten.append(s)
+    if not free:
+        return 0
+
+    # BFS layer distance of every free node from the nearest fixed node
+    from collections import deque
+    layer = [0] * n
+    dq = deque()
+    seen = set()
+    for f in fixed_idx:
+        if 0 <= f < n:
+            dq.append(f)
+            seen.add(f)
+    while dq:
+        u = dq.popleft()
+        for v in adj[u]:
+            if v not in seen:
+                seen.add(v)
+                layer[v] = layer[u] + 1
+                dq.append(v)
+
+    P = np.array([[nd[0], nd[1]] for nd in nodes], dtype=float)
+    P0 = P.copy()
+    fi = np.array(free, dtype=np.int64)
+    st = np.array(sten, dtype=np.int64)  # columns: n s e w ne nw sw se
+    N, S, E, W, NE, NW, SW, SE = (st[:, k] for k in range(8))
+
+    for _ in range(iterations):
+        xN, xS, xE, xW = P[N], P[S], P[E], P[W]
+        x_xi = 0.5 * (xE - xW)
+        x_et = 0.5 * (xN - xS)
+        alpha = np.einsum("ij,ij->i", x_et, x_et)
+        beta = np.einsum("ij,ij->i", x_xi, x_et)
+        gamma = np.einsum("ij,ij->i", x_xi, x_xi)
+        denom = 2.0 * (alpha + gamma)
+        good = denom > 1e-18
+        safe = np.where(good, denom, 1.0)
+        rhs = (alpha[:, None] * (xE + xW)
+               + gamma[:, None] * (xN + xS)
+               - 0.5 * beta[:, None] * (P[NE] - P[NW] - P[SE] + P[SW]))
+        newpos = rhs / safe[:, None]
+        upd = fi[good]
+        P[upd] += omega * (newpos[good] - P[upd])
+
+    # taper the correction back toward transfinite near fixed nodes
+    w = np.array([min(w_max, max(0.0, (layer[i] - 1) / float(taper))) for i in free])
+    P[fi] = P0[fi] + w[:, None] * (P[fi] - P0[fi])
+
+    moved = 0
+    for i in free:
+        if abs(P[i][0] - nodes[i][0]) > 1e-9 or abs(P[i][1] - nodes[i][1]) > 1e-9:
+            moved += 1
+        nodes[i][0] = float(P[i][0])
+        nodes[i][1] = float(P[i][1])
+    return moved
+
+
 def _distribute_cells(total: int, lengths: List[float]) -> List[int]:
     """Split `total` cells across segments proportional to length, min 1 each.
 
@@ -1118,6 +1266,7 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
 
         surfaces: List[int] = []
         curve_use: Dict[int, int] = {}  # abs curve tag -> how many surfaces touch it
+        block_corner_pts: set = set()   # gmsh point tags that are block corners
         for quad in block_defs:
             if len(quad) != 4:
                 warnings.append("Skipped a block that did not have four edges.")
@@ -1149,6 +1298,7 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
                 warnings.append("A block's four edges do not form a closed loop - skipped.")
                 continue
 
+            block_corner_pts.update(corners[:4])
             loop = gmsh.model.geo.addCurveLoop(signed)
             surf = gmsh.model.geo.addPlaneSurface([loop])
             gmsh.model.geo.mesh.setTransfiniteSurface(surf, "Left", corners[:4])
@@ -1214,13 +1364,62 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
                 boundaries[name] = seen
 
         quality = _mesh_quality(nodes, elements)
+
+        # Elliptic (Winslow) smoothing: relax the free interior nodes - including
+        # nodes on interior block interfaces - so grid lines flow smoothly across
+        # block seams. True geometry-boundary nodes stay pinned. Kept only if it
+        # does not make the worst cell worse.
+        smooth_iters = 0 if params.get("smooth") is False else int(params.get("smoothIterations", 120))
+        smoothed = 0
+        if smooth_iters > 0:
+            fixed_idx = set()
+            for idxs in boundaries.values():
+                fixed_idx.update(idxs)
+            # Pin every block corner - those are real topological corners where a
+            # slope discontinuity is legitimate and must not be smoothed away.
+            for ptag in block_corner_pts:
+                try:
+                    ntags, _, _ = gmsh.model.mesh.getNodes(0, ptag)
+                    for t in ntags:
+                        j = node_index.get(int(t))
+                        if j is not None:
+                            fixed_idx.add(j)
+                except Exception:
+                    pass
+            trial = copy.deepcopy(nodes)
+            smoothed = _winslow_smooth(trial, elements, fixed_idx, iterations=smooth_iters)
+            if smoothed:
+                tq = _mesh_quality(trial, elements)
+                a0, a1 = quality.get("min_angle_degrees", 0), tq.get("min_angle_degrees", 0)
+                # Keep the smoothed grid only when it is genuinely better: a
+                # higher worst-cell angle, or no meaningful loss there plus a
+                # smoother mesh overall. Transfinite grids that are already
+                # boundary-fitted (O-grid ring, C-grid wrap) are left alone.
+                better = tq.get("triangles", 0) == 0 and (
+                    a1 >= a0 + 0.5
+                    or (a1 >= a0 - 1.5
+                        and tq.get("mean", 0) >= quality.get("mean", 0)
+                        and tq.get("p05", 0) >= quality.get("p05", 0) - 1e-4)
+                )
+                if better:
+                    nodes = trial
+                    quality = tq
+                else:
+                    smoothed = 0
+
         return {
-            "generator": "Gmsh transfinite (structured)",
-            "algorithm": "Transfinite",
+            "generator": "Gmsh transfinite (structured)"
+                         + (" + elliptic smoothing" if smoothed else ""),
+            "algorithm": "Transfinite" + (" + Winslow" if smoothed else ""),
             "element_type": "quad",
             "structured": True,
             "warnings": warnings,
-            "settings": {"blocks": len(surfaces), "edges": len(edge_defs)},
+            "settings": {
+                "blocks": len(surfaces),
+                "edges": len(edge_defs),
+                "smoothing_iterations": smooth_iters if smoothed else 0,
+                "smoothed_nodes": smoothed,
+            },
             "num_nodes": len(nodes),
             "num_elements": len(elements),
             "nodes": nodes,

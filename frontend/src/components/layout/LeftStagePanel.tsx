@@ -37,7 +37,7 @@ import {
   BOUNDARY_COLORS,
   GeometryBBox,
 } from '../../types/cadWorkflow';
-import { Blocking, EdgeLaw, propagateNodeCounts, splitBlock, deleteBlock } from '../../types/blocking';
+import { Blocking, EdgeLaw, propagateNodeCounts, splitBlock, deleteBlock, applyTargetCellSize, currentCellSize } from '../../types/blocking';
 
 interface LeftStagePanelProps {
   activeStage: StageId;
@@ -105,9 +105,14 @@ interface LeftStagePanelProps {
 
   // ── Structured meshing (H-block transfinite) ──
   blocking?: Blocking | null;
-  onAutoBlock?: () => void;
+  onBuildBlocks?: (kind: 'hgrid' | 'ogrid' | 'cgrid') => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
   onGenerateStructuredMesh?: () => void;
+  ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
+  onWrapBody?: (bodyIndex: number) => void;
+  structuredHint?: 'hgrid' | 'ogrid' | 'cgrid';
+  structuredSmooth?: boolean;
+  setStructuredSmooth?: (v: boolean) => void;
 }
 
 /**
@@ -211,153 +216,274 @@ const StageGate: React.FC<{
 );
 
 /**
- * Structured (H-block) mesh controls. Auto-builds a mapped block topology from
- * the domain outline (one block per vertical strip, split at steps), then
- * exposes per-direction cell counts, wall grading, and manual block splits.
- * Opposite block edges always share a cell count (transfinite requirement) so
- * the size controls are grouped by direction, not per edge.
+ * Structured (block-structured) mesh controls, in two steps like the Geometry
+ * stage: (1) Blocking - pick a topology type and generate the mapped block
+ * layout; (2) Mesh sizing - per-direction cell counts and wall grading.
  */
 const StructuredMeshPanel: React.FC<{
   blocking: Blocking | null;
-  onAutoBlock?: () => void;
+  onBuildBlocks?: (kind: 'hgrid' | 'ogrid' | 'cgrid') => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
+  ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
+  onWrapBody?: (bodyIndex: number) => void;
+  structuredHint?: 'hgrid' | 'ogrid' | 'cgrid';
+  structuredSmooth?: boolean;
+  setStructuredSmooth?: (v: boolean) => void;
   field: string;
-}> = ({ blocking, onAutoBlock, onUpdateBlocking, field }) => {
-  if (!blocking || blocking.blocks.length === 0) {
-    return (
-      <div className="p-3 bg-[#F8F9FA] border border-[#E1E4E8] rounded-lg space-y-2.5">
-        <p className="text-[11px] text-[#69717D] leading-relaxed">
-          Structured meshing splits the domain into mapped blocks and fills each with a regular grid of quads.
-          It auto-blocks a tunnel-shaped domain (box, ramp, step); use the split tool for other shapes.
-          Define the domain outline first, then build the blocks.
+}> = ({ blocking, onBuildBlocks, onUpdateBlocking, ogridBodies, onWrapBody, structuredHint, structuredSmooth, setStructuredSmooth, field }) => {
+  const hasBlocks = !!blocking && blocking.blocks.length > 0;
+  const recommended: 'hgrid' | 'ogrid' | 'cgrid' = structuredHint ?? 'hgrid';
+  const [kind, setKind] = useState<'hgrid' | 'ogrid' | 'cgrid'>(recommended);
+  const [openStep, setOpenStep] = useState<1 | 2>(1);
+  const kindRef = useRef(recommended);
+  useEffect(() => {
+    // follow the recommendation until the user has picked, and until blocks exist
+    if (!hasBlocks && kindRef.current !== recommended) {
+      kindRef.current = recommended;
+      setKind(recommended);
+    }
+  }, [recommended, hasBlocks]);
+  useEffect(() => { if (hasBlocks) setOpenStep(2); }, [hasBlocks]);
+
+  const pick = (k: 'hgrid' | 'ogrid' | 'cgrid') => { kindRef.current = k; setKind(k); };
+
+  const kindBlurb: Record<'hgrid' | 'ogrid' | 'cgrid', string> = {
+    hgrid: 'One block per vertical strip of the domain. Ramps become slanted-floor blocks; floor / ceiling steps split automatically.',
+    ogrid: 'Blocks the domain, then wraps every body inside it in a 4-block ring (fine at the wall, coarser outward). The rest stays H-grid.',
+    cgrid: 'Wraps an airfoil in 2 wrap blocks out to an offset curve, plus 2 wake blocks trailing to the outlet. Best for lifting bodies with a sharp trailing edge.',
+  };
+
+  // ── Step 1: Blocking ──
+  const step1 = (
+    <div className="space-y-2.5">
+      <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">Topology</span>
+      <div className="grid grid-cols-3 gap-1.5">
+        {([
+          ['hgrid', 'H-grid', 'Box / channel / step'],
+          ['ogrid', 'O-grid', 'Body in the flow'],
+          ['cgrid', 'C-grid', 'Airfoil + wake'],
+        ] as const).map(([k, label, hint]) => (
+          <button
+            key={k}
+            onClick={() => pick(k)}
+            className={`p-2 rounded-lg border text-left transition-colors ${
+              kind === k
+                ? 'border-[#2563EB] bg-blue-50'
+                : 'bg-white border-[#E1E4E8] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'
+            }`}
+          >
+            <span className={`text-[11px] font-semibold block ${kind === k ? 'text-[#1D4ED8]' : 'text-[#171A1F]'}`}>
+              {label}
+              {recommended === k && <span className="ml-1 text-[9px] font-medium text-[#059669]">rec.</span>}
+            </span>
+            <span className="text-[9px] text-[#69717D] block leading-tight mt-0.5">{hint}</span>
+          </button>
+        ))}
+      </div>
+
+      <p className="text-[10px] text-[#69717D] leading-relaxed">{kindBlurb[kind]}</p>
+
+      <button
+        onClick={() => onBuildBlocks?.(kind)}
+        className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-md transition-colors"
+      >
+        {hasBlocks ? 'Rebuild blocks' : 'Generate blocks'}
+      </button>
+
+      {hasBlocks && blocking && (
+        <>
+          <div className="border-t border-[#E1E4E8] pt-2.5 space-y-1.5">
+            <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
+              Blocks ({blocking.blocks.length})
+            </span>
+            {blocking.blocks.map((blk, i) => (
+              <div key={blk.id} className="flex items-center gap-1.5 text-[10px]">
+                <span className="text-[#69717D] w-12 shrink-0">Block {i + 1}</span>
+                <button
+                  onClick={() => onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'x')))}
+                  className="flex-1 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
+                >
+                  Split &#8596;
+                </button>
+                <button
+                  onClick={() => onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'y')))}
+                  className="flex-1 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
+                >
+                  Split &#8597;
+                </button>
+                <button
+                  onClick={() => onUpdateBlocking?.(propagateNodeCounts(deleteBlock(blocking, blk.id)))}
+                  disabled={blocking.blocks.length <= 1}
+                  className="px-2 py-1 rounded border border-[#E1E4E8] bg-white text-[#DC2626] hover:border-[#DC2626] transition-colors disabled:opacity-30"
+                >
+                  Del
+                </button>
+              </div>
+            ))}
+            <p className="text-[9px] text-[#69717D]">Drag block corners on the canvas to reshape.</p>
+          </div>
+
+          {ogridBodies && ogridBodies.length > 0 && (
+            <div className="border-t border-[#E1E4E8] pt-2.5 space-y-1.5">
+              <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">Bodies</span>
+              {ogridBodies.map((b) => (
+                <div key={b.index} className="flex items-center gap-1.5 text-[10px]">
+                  <span className="flex-1 text-[#171A1F] truncate">{b.name}</span>
+                  {b.wrapped ? (
+                    <span className="px-2 py-1 text-[#059669] font-medium">Wrapped</span>
+                  ) : (
+                    <button
+                      onClick={() => onWrapBody?.(b.index)}
+                      disabled={!b.blockId}
+                      className="px-2 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors disabled:opacity-30"
+                    >
+                      Wrap O-grid
+                    </button>
+                  )}
+                </div>
+              ))}
+              {ogridBodies.some((b) => !b.blockId && !b.wrapped) && (
+                <p className="text-[9px] text-[#69717D] leading-relaxed">
+                  Body must sit clear of the domain edges to wrap.
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  // ── Step 2: Mesh sizing ──
+  let step2: React.ReactNode = (
+    <p className="text-[10px] text-[#69717D]">Generate the blocks first.</p>
+  );
+  if (hasBlocks && blocking) {
+    const parent: Record<string, string> = {};
+    blocking.edges.forEach((e) => { parent[e.id] = e.id; });
+    const find = (x: string): string => (parent[x] === x ? x : (parent[x] = find(parent[x])));
+    blocking.blocks.forEach((blk) => {
+      parent[find(blk.edges[0])] = find(blk.edges[2]);
+      parent[find(blk.edges[1])] = find(blk.edges[3]);
+    });
+    (blocking.links ?? []).forEach((grp) => grp.slice(1).forEach((id) => {
+      if (parent[grp[0]] && parent[id]) parent[find(id)] = find(grp[0]);
+    }));
+    const groups: Record<string, string[]> = {};
+    blocking.edges.forEach((e) => { (groups[find(e.id)] ||= []).push(e.id); });
+    const groupList = Object.entries(groups);
+    const edgeById = (id: string) => blocking.edges.find((e) => e.id === id)!;
+    const patchLabel = (ids: string[]) => {
+      const ps = Array.from(new Set(ids.map((id) => edgeById(id).patch).filter(Boolean)));
+      return ps.length ? ps.join(' / ') : 'interior';
+    };
+    const applyToGroup = (ids: string[], patch: Partial<{ nodes: number; law: EdgeLaw; ratio: number }>) => {
+      if (!onUpdateBlocking) return;
+      onUpdateBlocking(propagateNodeCounts({
+        ...blocking,
+        edges: blocking.edges.map((e) => (ids.includes(e.id) ? { ...e, ...patch } : e)),
+      }));
+    };
+
+    const bkNow = blocking;
+    step2 = (
+      <div className="space-y-2.5">
+        <div className="flex items-end gap-2">
+          <label className="flex-1">
+            <Tooltip content="Target cell edge length. Every direction's node count is set from this and its block-edge length, so a short edge gets few cells and the mesh reads uniform. Adjust a direction below to override.">
+              <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Target cell size</span>
+            </Tooltip>
+            <NumberField
+              value={Number(currentCellSize(bkNow).toPrecision(3))}
+              min={1e-4}
+              onChange={(v) => onUpdateBlocking?.(applyTargetCellSize(bkNow, v))}
+              className={field}
+            />
+          </label>
+          <button
+            onClick={() => onUpdateBlocking?.(applyTargetCellSize(bkNow, currentCellSize(bkNow) * 0.5))}
+            className="px-2 py-1.5 text-[10px] rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
+          >
+            Finer &times;2
+          </button>
+        </div>
+
+        {setStructuredSmooth && (
+          <label className="flex items-center justify-between text-[10px] text-[#69717D]">
+            <Tooltip content="After meshing, relax the interior grid with an elliptic (Winslow) pass so grid lines flow across block seams. Kept only if it does not make the worst cell worse.">
+              <span className="cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Elliptic smoothing</span>
+            </Tooltip>
+            <input type="checkbox" checked={structuredSmooth !== false} onChange={(ev) => setStructuredSmooth(ev.target.checked)} className="accent-[#2563EB]" />
+          </label>
+        )}
+
+        <p className="text-[10px] text-[#69717D] leading-relaxed pt-1 border-t border-[#E1E4E8]">
+          Each group below is one direction of the grid. Opposite and shared block edges stay equal automatically.
         </p>
-        <button
-          onClick={onAutoBlock}
-          className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-md transition-colors"
-        >
-          Build blocks from outline
-        </button>
+        {groupList.map(([gid, ids], i) => {
+          const e = edgeById(ids[0]);
+          return (
+            <div key={gid} className="p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-[#171A1F]">Direction {String.fromCharCode(65 + i)}</span>
+                <span className="text-[10px] text-[#69717D] lowercase">along {patchLabel(ids)}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label>
+                  <Tooltip content="Grid nodes along this direction (cells = nodes minus one).">
+                    <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Nodes</span>
+                  </Tooltip>
+                  <NumberField value={e.nodes} integer min={2} max={600} fallback={30} onChange={(n) => applyToGroup(ids, { nodes: n })} className={field} />
+                </label>
+                <label>
+                  <Tooltip content="Last cell / first cell along the edge. 1 = uniform. Above 1 clusters cells toward the start (wall).">
+                    <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Grading ratio</span>
+                  </Tooltip>
+                  <NumberField value={e.ratio} min={0.05} max={20} fallback={1} onChange={(n) => applyToGroup(ids, { ratio: n })} className={field} />
+                </label>
+              </div>
+              <label className="block">
+                <span className="text-[10px] text-[#69717D] block mb-1">Distribution</span>
+                <select
+                  value={e.law}
+                  onChange={(ev) => applyToGroup(ids, { law: ev.target.value as EdgeLaw })}
+                  className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded-md text-[11px] focus:outline-none focus:border-[#2563EB]"
+                >
+                  <option value="uniform">Uniform</option>
+                  <option value="geometric">Geometric (cluster one end)</option>
+                  <option value="bump">Bump (cluster both ends)</option>
+                </select>
+              </label>
+            </div>
+          );
+        })}
       </div>
     );
   }
 
-  // Union-find opposite edges across every block -> direction groups.
-  const parent: Record<string, string> = {};
-  blocking.edges.forEach((e) => { parent[e.id] = e.id; });
-  const find = (x: string): string => (parent[x] === x ? x : (parent[x] = find(parent[x])));
-  blocking.blocks.forEach((blk) => {
-    parent[find(blk.edges[0])] = find(blk.edges[2]);
-    parent[find(blk.edges[1])] = find(blk.edges[3]);
-  });
-  const groups: Record<string, string[]> = {};
-  blocking.edges.forEach((e) => { (groups[find(e.id)] ||= []).push(e.id); });
-  const groupList = Object.entries(groups);
-
-  const edgeById = (id: string) => blocking.edges.find((e) => e.id === id)!;
-  const patchLabel = (ids: string[]) => {
-    const ps = Array.from(new Set(ids.map((id) => edgeById(id).patch).filter(Boolean)));
-    return ps.length ? ps.join(' ↔ ') : 'interior';
-  };
-
-  const applyToGroup = (ids: string[], patch: Partial<{ nodes: number; law: EdgeLaw; ratio: number }>) => {
-    if (!onUpdateBlocking) return;
-    const next: Blocking = {
-      ...blocking,
-      edges: blocking.edges.map((e) => (ids.includes(e.id) ? { ...e, ...patch } : e)),
-    };
-    onUpdateBlocking(propagateNodeCounts(next));
+  const stepRow = (n: 1 | 2, label: string, body: React.ReactNode) => {
+    const open = openStep === n;
+    const locked = n === 2 && !hasBlocks;
+    return (
+      <div className="border-t border-[#E1E4E8] first:border-t-0">
+        <button
+          onClick={() => !locked && setOpenStep(n)}
+          disabled={locked}
+          className={`w-full flex items-center gap-2 py-2.5 text-left ${locked ? 'opacity-40 cursor-not-allowed' : ''}`}
+        >
+          <span className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold shrink-0 border ${open ? 'bg-blue-50 text-[#2563EB] border-[#2563EB]' : 'bg-[#F1F3F5] text-[#A5ACB5] border-transparent'}`}>{n}</span>
+          <span className={`flex-1 text-[11px] font-semibold uppercase tracking-wider ${open ? 'text-[#2563EB]' : 'text-[#69717D]'}`}>{label}</span>
+          <ChevronDown className={`w-3.5 h-3.5 text-[#A5ACB5] transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {open && <div className="pb-3">{body}</div>}
+      </div>
+    );
   };
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">Grid directions</span>
-        <button onClick={onAutoBlock} className="text-[10px] text-[#2563EB] hover:underline flex items-center gap-1">
-          <RotateCcw className="w-3 h-3" /> Rebuild
-        </button>
-      </div>
-      <p className="text-[10px] text-[#69717D] leading-relaxed">
-        The block is filled with a grid like graph paper. It has two directions (across and along the flow).
-        Set how many grid lines each gets and whether cells cluster near a wall. Opposite sides always match.
-      </p>
-
-      {groupList.map(([gid, ids], i) => {
-        const e = edgeById(ids[0]);
-        return (
-          <div key={gid} className="p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded-lg space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-[#171A1F]">Direction {String.fromCharCode(65 + i)}</span>
-              <span className="text-[10px] text-[#69717D] lowercase">along {patchLabel(ids)}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <label>
-                <Tooltip content="Number of grid nodes along this direction (cells = nodes minus one). Opposite edges of the block are kept equal automatically.">
-                  <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Nodes</span>
-                </Tooltip>
-                <NumberField value={e.nodes} integer min={2} max={600} fallback={40} onChange={(n) => applyToGroup(ids, { nodes: n })} className={field} />
-              </label>
-              <label>
-                <Tooltip content="Last cell length divided by first cell length along the edge. 1 = uniform spacing. Above 1 clusters nodes toward the start of the edge (use for wall clustering).">
-                  <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Grading ratio</span>
-                </Tooltip>
-                <NumberField value={e.ratio} min={0.05} max={20} fallback={1} onChange={(n) => applyToGroup(ids, { ratio: n })} className={field} />
-              </label>
-            </div>
-            <label className="block">
-              <span className="text-[10px] text-[#69717D] block mb-1">Distribution</span>
-              <select
-                value={e.law}
-                onChange={(ev) => applyToGroup(ids, { law: ev.target.value as EdgeLaw })}
-                className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded-md text-[11px] focus:outline-none focus:border-[#2563EB]"
-              >
-                <option value="uniform">Uniform</option>
-                <option value="geometric">Geometric (cluster one end)</option>
-                <option value="bump">Bump (cluster both ends)</option>
-              </select>
-            </label>
-          </div>
-        );
-      })}
-
-      <div className="border-t border-[#E1E4E8] pt-3 space-y-1.5">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
-            Blocks ({blocking.blocks.length})
-          </span>
-          <Tooltip content="Split a block to keep every block near-rectangular near a sharp step or corner. The new dividing line lands at the block centre - drag its handles on the canvas to move it.">
-            <span className="text-[10px] text-[#69717D] cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">what is this?</span>
-          </Tooltip>
-        </div>
-        {blocking.blocks.map((blk, i) => (
-          <div key={blk.id} className="flex items-center gap-1.5 text-[10px]">
-            <span className="text-[#69717D] w-14 shrink-0">Block {i + 1}</span>
-            <button
-              onClick={() => onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'x')))}
-              className="flex-1 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
-            >
-              Split &#8596;
-            </button>
-            <button
-              onClick={() => onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'y')))}
-              className="flex-1 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
-            >
-              Split &#8597;
-            </button>
-            <button
-              onClick={() => onUpdateBlocking?.(propagateNodeCounts(deleteBlock(blocking, blk.id)))}
-              disabled={blocking.blocks.length <= 1}
-              className="px-2 py-1 rounded border border-[#E1E4E8] bg-white text-[#DC2626] hover:border-[#DC2626] transition-colors disabled:opacity-30"
-            >
-              Delete
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <p className="text-[10px] text-[#69717D] leading-relaxed">
-        {blocking.blocks.length} block{blocking.blocks.length > 1 ? 's' : ''}, {blocking.edges.length} edges.
-        Drag block corners on the canvas to reshape.
-      </p>
+    <div>
+      {stepRow(1, 'Blocking', step1)}
+      {stepRow(2, 'Mesh sizing', step2)}
     </div>
   );
 };
@@ -422,9 +548,14 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   onSelectStage,
   stageStatus,
   blocking,
-  onAutoBlock,
+  onBuildBlocks,
   onUpdateBlocking,
   onGenerateStructuredMesh,
+  ogridBodies,
+  onWrapBody,
+  structuredHint,
+  structuredSmooth,
+  setStructuredSmooth,
 }) => {
   const fileInputAirfoilRef = useRef<HTMLInputElement | null>(null);
   const fileInputDxfRef = useRef<HTMLInputElement | null>(null);
@@ -844,15 +975,20 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               <button onClick={() => setMeshTopology('structured')} className={`py-2 rounded-lg border font-medium transition-colors ${meshTopology === 'structured' ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white border-[#E1E4E8] text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}>Structured</button>
             </div>
             {meshTopology === 'structured' && (
-              <span className="text-[10px] text-[#69717D] block mt-1">Mapped H-block mesh: all quads, transfinite grading. Best for a single 4-sided domain (box, wedge tunnel).</span>
+              <span className="text-[10px] text-[#69717D] block mt-1">Block-structured all-quad mesh. Pick a topology and generate the blocks, then set cell counts.</span>
             )}
           </div>
 
           {meshTopology === 'structured' ? (
             <StructuredMeshPanel
               blocking={blocking ?? null}
-              onAutoBlock={onAutoBlock}
+              onBuildBlocks={onBuildBlocks}
               onUpdateBlocking={onUpdateBlocking}
+              ogridBodies={ogridBodies}
+              onWrapBody={onWrapBody}
+              structuredHint={structuredHint}
+              structuredSmooth={structuredSmooth}
+              setStructuredSmooth={setStructuredSmooth}
               field={field}
             />
           ) : (

@@ -31,9 +31,11 @@ export interface Blocking {
   vertices: BlockVertex[];
   edges: BlockEdge[];
   blocks: Block[];
+  /** Edge-id groups forced to share a node count (O-grid rings, C-grid cuts). */
+  links?: string[][];
 }
 
-export const emptyBlocking = (): Blocking => ({ vertices: [], edges: [], blocks: [] });
+export const emptyBlocking = (): Blocking => ({ vertices: [], edges: [], blocks: [], links: [] });
 
 /** Flat per-edge payload the backend meshes. Blocks reference indices into it. */
 export interface StructuredMeshRequest {
@@ -57,6 +59,72 @@ const ekey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 const near = (a: Point2D, b: Point2D, tol = 1e-6) => Math.hypot(a.x - b.x, a.y - b.y) <= tol;
 const lerp = (a: Point2D, b: Point2D, t: number): Point2D => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
 
+const signedArea = (poly: Point2D[]): number => {
+  let s = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    s += a.x * b.y - b.x * a.y;
+  }
+  return s / 2;
+};
+const centroidOf = (poly: Point2D[]): Point2D => ({
+  x: poly.reduce((s, p) => s + p.x, 0) / poly.length,
+  y: poly.reduce((s, p) => s + p.y, 0) / poly.length,
+});
+const boundsOf = (poly: Point2D[]) => {
+  const xs = poly.map((p) => p.x), ys = poly.map((p) => p.y);
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+};
+const dedupeClose = (poly: Point2D[]): Point2D[] => {
+  const out: Point2D[] = [];
+  for (const p of poly) if (!out.length || !near(p, out[out.length - 1], 1e-7)) out.push({ x: p.x, y: p.y });
+  if (out.length >= 2 && near(out[0], out[out.length - 1], 1e-7)) out.pop();
+  return out;
+};
+
+/** Resample a closed polygon to `n` points spaced evenly by arc length. */
+function resampleClosed(poly: Point2D[], n: number): Point2D[] {
+  const P = dedupeClose(poly);
+  if (P.length < 3) return P;
+  const seg: number[] = [];
+  let total = 0;
+  for (let i = 0; i < P.length; i++) {
+    const d = Math.hypot(P[(i + 1) % P.length].x - P[i].x, P[(i + 1) % P.length].y - P[i].y);
+    seg.push(d);
+    total += d;
+  }
+  if (total < 1e-9) return P;
+  const out: Point2D[] = [];
+  for (let k = 0; k < n; k++) {
+    let target = (k / n) * total;
+    let si = 0;
+    while (si < seg.length && target > seg[si]) { target -= seg[si]; si += 1; }
+    si = Math.min(si, P.length - 1);
+    const a = P[si], b = P[(si + 1) % P.length];
+    const f = seg[si] ? target / seg[si] : 0;
+    out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+  }
+  return out;
+}
+
+/** First intersection of the ray o -> target with polygon poly. */
+function rayPolygonHit(o: Point2D, target: Point2D, poly: Point2D[]): Point2D | null {
+  const dx = target.x - o.x, dy = target.y - o.y;
+  let best: { s: number; pt: Point2D } | null = null;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const ex = b.x - a.x, ey = b.y - a.y;
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-12) continue;
+    const s = ((a.x - o.x) * ey - (a.y - o.y) * ex) / denom;
+    const u = ((a.x - o.x) * dy - (a.y - o.y) * dx) / denom;
+    if (s > 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) {
+      if (!best || s < best.s) best = { s, pt: { x: o.x + s * dx, y: o.y + s * dy } };
+    }
+  }
+  return best ? best.pt : null;
+}
+
 function pointInRing(x: number, y: number, ring: Point2D[]): boolean {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -77,8 +145,11 @@ function poly(entity: CadEntity): Point2D[] {
   return entity.pts.map((p) => ({ ...p }));
 }
 
+/** Point ring for any closed entity (circle sampled, polyline/rect as-is). */
+export const entityRing = (entity: CadEntity): Point2D[] => poly(entity);
+
 /** Merge every domain-boundary / geometry outline entity into one ordered ring. */
-function outlineRing(entities: CadEntity[]): Point2D[] {
+export function outlineRing(entities: CadEntity[]): Point2D[] {
   const src = entities.filter((e) => e.layer !== 'construction' && (e.role === 'domain_boundary' || !e.role));
   const domain = src.filter((e) => e.role === 'domain_boundary');
   const use = domain.length ? domain : src;
@@ -121,7 +192,7 @@ function makeTagLookup(entities: CadEntity[], edgeTagMap: Record<string, Boundar
     let best: BoundaryTag | undefined;
     let bd = span * 0.06 + 1e-6;
     for (const e of entities) {
-      if (e.layer === 'construction') continue;
+      if (e.layer === 'construction' || e.type === 'circle') continue;
       const n = e.pts.length;
       const count = e.isClosed || e.type === 'rectangle' ? n : n - 1;
       for (let i = 0; i < count; i++) {
@@ -423,6 +494,7 @@ function splitAllAt(bk: Blocking, axis: 'x' | 'y', value: number): Blocking {
     vertices: bk.vertices.map((v) => ({ id: v.id, pt: { ...v.pt } })),
     edges: bk.edges.map((e) => ({ ...e, path: e.path.map((p) => ({ ...p })) })),
     blocks: bk.blocks.map((b) => ({ id: b.id, edges: [...b.edges] as Block['edges'] })),
+    links: (bk.links ?? []).map((g) => [...g]),
   };
   const vm = new Map(out.vertices.map((v) => [v.id, v.pt] as const));
 
@@ -549,7 +621,298 @@ export function deleteBlock(bk: Blocking, blockId: string): Blocking {
   return cleanBlocking({ ...bk, blocks: bk.blocks.filter((b) => b.id !== blockId) });
 }
 
-/** Drop orphan edges and vertices. */
+// ── O-grid (Phase 2) ───────────────────────────────────────────────────────
+
+/** Closed non-domain geometry entities and the block that currently contains each. */
+export function bodiesForOgrid(
+  entities: CadEntity[],
+  bk: Blocking,
+): { index: number; name: string; blockId: string | null; wrapped: boolean }[] {
+  const out: { index: number; name: string; blockId: string | null; wrapped: boolean }[] = [];
+  entities.forEach((e, index) => {
+    if (e.layer === 'construction' || e.role === 'domain_boundary') return;
+    const closed = e.isClosed || e.type === 'rectangle' || e.type === 'circle';
+    if (!closed) return;
+    const ring = resampleClosed(entityRing(e), 72);
+    if (ring.length < 8) return;
+    const g = centroidOf(ring);
+    const span = Math.max(boundsOf(ring).maxX - boundsOf(ring).minX, boundsOf(ring).maxY - boundsOf(ring).minY);
+    const host = bk.blocks.find((b) => {
+      const poly = blockPolygon(bk, b);
+      return poly.length >= 3 && pointInRing(g.x, g.y, poly);
+    });
+    // wrapped = an edge path already traces this body outline
+    const wrapped = bk.edges.some(
+      (ed) => ed.path.length > 0 && ed.path.some((pp) => ring.some((rp) => near(pp, rp, span * 0.02 + 1e-6))),
+    );
+    out.push({ index, name: (e as any).name || `Body ${index + 1}`, blockId: host?.id ?? null, wrapped });
+  });
+  return out;
+}
+
+/**
+ * Replace the block containing a body with a 4-block O-grid ring: the body
+ * outline is the inner boundary, the block edges are the outer boundary, and
+ * four radial cuts join them. If the body is not already inside a single block,
+ * the host block is first split at the body's padded bounding box.
+ */
+export function wrapBodyOgrid(
+  bk: Blocking,
+  bodyRaw: Point2D[],
+  patch?: BoundaryTag,
+): Blocking | null {
+  let body = resampleClosed(bodyRaw.map((p) => ({ x: p.x, y: p.y })), 72);
+  if (body.length < 8) return null;
+  if (signedArea(body) < 0) body.reverse();
+  const g = centroidOf(body);
+  const bb = boundsOf(body);
+
+  let work: Blocking = bk;
+  const fullyInside = (b: Block, w: Blocking) => {
+    const poly = blockPolygon(w, b);
+    return poly.length >= 3 && body.every((p) => pointInRing(p.x, p.y, poly));
+  };
+  const containing = (w: Blocking) => w.blocks.find((b) => pointInRing(g.x, g.y, blockPolygon(w, b)));
+  let host = containing(work);
+  if (!host) return null;
+
+  // Carve a snug box around the body so the O-ring is a sane thickness and the
+  // rest of the domain stays H-grid. Skip when the host is already tight.
+  const bw = bb.maxX - bb.minX, bh = bb.maxY - bb.minY;
+  const hb0 = boundsOf(blockPolygon(work, host));
+  const gapL = bb.minX - hb0.minX, gapR = hb0.maxX - bb.maxX;
+  const gapB = bb.minY - hb0.minY, gapT = hb0.maxY - bb.maxY;
+  const minGap = Math.min(gapL, gapR, gapB, gapT);
+  const hostTooBig = hb0.maxX - hb0.minX > bw * 2.6 || hb0.maxY - hb0.minY > bh * 2.6;
+  if (minGap > 1e-6 && hostTooBig) {
+    const padX = Math.max(Math.min(bw * 0.6, gapL * 0.85, gapR * 0.85), bw * 0.03);
+    const padY = Math.max(Math.min(bh * 0.6, gapB * 0.85, gapT * 0.85), bh * 0.03);
+    for (const [ax, v] of [
+      ['x', bb.minX - padX], ['x', bb.maxX + padX],
+      ['y', bb.minY - padY], ['y', bb.maxY + padY],
+    ] as [('x' | 'y'), number][]) {
+      work = splitAllAt(work, ax, v);
+    }
+    host = containing(work);
+  }
+  if (!host || !fullyInside(host, work)) return null;
+
+  const hostBlk = host;
+  const cornerIds = blockCornerIds(work, hostBlk);
+  if (cornerIds.length !== 4) return null;
+  const vmap = new Map(work.vertices.map((v) => [v.id, v.pt] as const));
+  const corners = cornerIds.map((id) => vmap.get(id)!);
+
+  // ray from the body centre through each block corner -> point on the body
+  const inner = corners.map((c) => rayPolygonHit(g, c, body));
+  if (inner.some((p) => !p)) return null;
+  const I = inner as Point2D[];
+
+  const ang = (p: Point2D) => Math.atan2(p.y - g.y, p.x - g.x);
+  const norm = (a: number) => { while (a <= -Math.PI) a += 2 * Math.PI; while (a > Math.PI) a -= 2 * Math.PI; return a; };
+  const theta = I.map(ang);
+
+  // four inner arcs, each the body points in the angular sector between two hits
+  const arcs: Point2D[][] = [];
+  for (let k = 0; k < 4; k++) {
+    const gap = norm(theta[(k + 1) % 4] - theta[k]);
+    const dir = Math.sign(gap) || 1;
+    const off = (t: number) => dir * norm(t - theta[k]);
+    const mids = body
+      .filter((p) => { const o = off(ang(p)); return o > 1e-6 && o < Math.abs(gap) - 1e-6; })
+      .sort((p, q) => off(ang(p)) - off(ang(q)));
+    arcs.push([I[k], ...mids, I[(k + 1) % 4]]);
+  }
+
+  // assemble
+  const verts = work.vertices.map((v) => ({ id: v.id, pt: { ...v.pt } }));
+  const innerIds = I.map((p) => { const id = uid(); verts.push({ id, pt: { ...p } }); return id; });
+  const edges = work.edges.map((e) => ({ ...e, path: e.path.map((p) => ({ ...p })) }));
+
+  const radialIds: string[] = [];
+  const arcIds: string[] = [];
+  for (let k = 0; k < 4; k++) {
+    const rad: BlockEdge = {
+      id: uid(), v0: innerIds[k], v1: cornerIds[k], path: [],
+      nodes: 18, law: 'geometric', ratio: 6,
+    };
+    edges.push(rad);
+    radialIds.push(rad.id);
+    const arc: BlockEdge = {
+      id: uid(), v0: innerIds[k], v1: innerIds[(k + 1) % 4],
+      path: arcs[k].slice(1, -1).map((p) => ({ ...p })),
+      patch, nodes: 24, law: 'uniform', ratio: 1,
+    };
+    edges.push(arc);
+    arcIds.push(arc.id);
+  }
+
+  const scratch: Blocking = { vertices: verts, edges, blocks: [], links: work.links };
+  const ringBlocks: Block[] = [];
+  for (let k = 0; k < 4; k++) {
+    const outer = hostBlk.edges[k];               // corner k -> corner k+1
+    const ord = orderBlockEdges(scratch, [outer, radialIds[(k + 1) % 4], arcIds[k], radialIds[k]]);
+    if (!ord) return null;
+    ringBlocks.push({ id: uid(), edges: ord });
+  }
+
+  const next: Blocking = {
+    vertices: verts,
+    edges,
+    blocks: [...work.blocks.filter((b) => b.id !== hostBlk.id), ...ringBlocks],
+    links: [...(work.links ?? []), [...arcIds], [...radialIds]],
+  };
+  return cleanBlocking(next);
+}
+
+// ── C-grid (Phase 3) ───────────────────────────────────────────────────────
+
+/** Closed non-domain bodies that look airfoil-like (elongated), for a C-grid. */
+export function airfoilsForCGrid(
+  entities: CadEntity[],
+): { index: number; name: string; aspect: number }[] {
+  const out: { index: number; name: string; aspect: number }[] = [];
+  entities.forEach((e, index) => {
+    if (e.layer === 'construction' || e.role === 'domain_boundary') return;
+    if (e.type === 'circle') return;
+    if (!(e.isClosed || e.type === 'rectangle')) return;
+    const ring = resampleClosed(entityRing(e), 64);
+    if (ring.length < 8) return;
+    const b = boundsOf(ring);
+    const w = b.maxX - b.minX, h = b.maxY - b.minY;
+    if (w < 1e-6 || h < 1e-6) return;
+    out.push({ index, name: (e as any).name || `Body ${index + 1}`, aspect: w / h });
+  });
+  return out;
+}
+
+/**
+ * Build a 4-block C-grid around an airfoil: two wrap blocks (upper / lower
+ * surface out to an offset curve) and two wake blocks (trailing edge to the
+ * outlet, split by a shared wake-cut edge so the mesh stays conformal across
+ * the wake). Replaces any existing blocking. Assumes a roughly horizontal
+ * airfoil and a near-sharp trailing edge.
+ */
+export function cGridFromAirfoil(
+  airfoilRaw: Point2D[],
+  domainRing: Point2D[],
+  patch?: BoundaryTag,
+): Blocking | null {
+  let A = resampleClosed(airfoilRaw.map((p) => ({ x: p.x, y: p.y })), 200);
+  if (A.length < 20) return null;
+  if (signedArea(A) < 0) A.reverse();
+  const gc = centroidOf(A);
+
+  let iLE = 0, iTE = 0;
+  A.forEach((p, i) => { if (p.x < A[iLE].x) iLE = i; if (p.x > A[iTE].x) iTE = i; });
+  const TE = { ...A[iTE] }, LE = { ...A[iLE] };
+  const chord = TE.x - LE.x;
+  if (chord < 1e-6) return null;
+
+  const db = boundsOf(dedupeClose(domainRing));
+  const outletX = db.maxX;
+  if (outletX < TE.x + chord * 0.25) return null;
+
+  const R = Math.max(
+    chord * 1.4,
+    Math.min(db.maxY - gc.y, gc.y - db.minY, TE.x - db.minX) * 0.45,
+  );
+
+  const walk = (from: number, to: number) => {
+    const s: Point2D[] = [{ ...A[from] }];
+    let i = from;
+    let guard = 0;
+    while (i !== to && guard++ < A.length + 2) { i = (i + 1) % A.length; s.push({ ...A[i] }); }
+    return s;
+  };
+  const w1 = walk(iTE, iLE);            // TE -> LE one way
+  const w2 = walk(iLE, iTE).reverse();  // TE -> LE the other way
+  const meanY = (s: Point2D[]) => s.reduce((a, p) => a + p.y, 0) / s.length;
+  const upper = meanY(w1) >= meanY(w2) ? w1 : w2;   // TE -> LE, top
+  const lower = upper === w1 ? w2 : w1;             // TE -> LE, bottom
+  if (upper.length < 4 || lower.length < 4) return null;
+
+  const offsetSide = (side: Point2D[]): Point2D[] =>
+    side.map((p, i) => {
+      const a = side[Math.max(0, i - 1)], b = side[Math.min(side.length - 1, i + 1)];
+      let nx = -(b.y - a.y), ny = b.x - a.x;
+      const L = Math.hypot(nx, ny) || 1;
+      nx /= L; ny /= L;
+      const away = (p.x + nx - gc.x) ** 2 + (p.y + ny - gc.y) ** 2;
+      const toward = (p.x - nx - gc.x) ** 2 + (p.y - ny - gc.y) ** 2;
+      if (away < toward) { nx = -nx; ny = -ny; }
+      return { x: p.x + nx * R, y: p.y + ny * R };
+    });
+  const offUpper = offsetSide(upper);
+  const offLower = offsetSide(lower);
+  // Front: both wrap blocks meet on one smooth point straight ahead of the nose.
+  const oLE = { x: LE.x - R, y: LE.y };
+  offUpper[offUpper.length - 1] = { ...oLE };
+  offLower[offLower.length - 1] = { ...oLE };
+  // Back: use the natural offset ends so the wrap edge and the trailing-edge
+  // radial stay tangent (forcing them to TE.x kinks the grid at the TE).
+  const oHi = { ...offUpper[0] };
+  const oLo = { ...offLower[0] };
+
+  const outHi = { x: outletX, y: oHi.y };
+  const outLo = { x: outletX, y: oLo.y };
+  const wakeOut = { x: outletX, y: TE.y };
+
+  const verts: BlockVertex[] = [];
+  const vById = new Map<string, string>();
+  const vid = (p: Point2D): string => {
+    const k = vkey(p);
+    let id = vById.get(k);
+    if (!id) { id = uid(); vById.set(k, id); verts.push({ id, pt: { x: p.x, y: p.y } }); }
+    return id;
+  };
+  const vTE = vid(TE), vLE = vid(LE);
+  const vOHi = vid(oHi), vOLo = vid(oLo), vOLE = vid(oLE);
+  const vOutHi = vid(outHi), vOutLo = vid(outLo), vWakeOut = vid(wakeOut);
+
+  const edges: BlockEdge[] = [];
+  const mk = (
+    v0: string, v1: string, path: Point2D[], p: BoundaryTag | undefined,
+    nodes: number, law: EdgeLaw = 'uniform', ratio = 1,
+  ): string => {
+    const e: BlockEdge = { id: uid(), v0, v1, path: path.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes, law, ratio };
+    edges.push(e);
+    return e.id;
+  };
+
+  const AROUND = 50, NORMAL = 24, WAKE = 36;
+  // Wall-normal edges all cluster toward the airfoil / wake centreline (v0).
+  const eLE = mk(vLE, vOLE, [], undefined, NORMAL, 'geometric', 3);
+  const eR = mk(vTE, vOHi, [], undefined, NORMAL, 'geometric', 3);
+  const eL = mk(vTE, vOLo, [], undefined, NORMAL, 'geometric', 3);
+  const eOutU = mk(vWakeOut, vOutHi, [], 'outlet', NORMAL, 'geometric', 3);
+  const eOutL = mk(vWakeOut, vOutLo, [], 'outlet', NORMAL, 'geometric', 3);
+  // Streamwise wake edges cluster toward the trailing edge (v0).
+  const wcut = mk(vTE, vWakeOut, [], undefined, WAKE, 'geometric', 3);
+  const wlineU = mk(vOHi, vOutHi, [], 'farfield', WAKE, 'geometric', 3);
+  const wlineL = mk(vOLo, vOutLo, [], 'farfield', WAKE, 'geometric', 3);
+  const upInner = mk(vTE, vLE, upper.slice(1, -1), patch ?? 'wall', AROUND);
+  const upOuter = mk(vOHi, vOLE, offUpper.slice(1, -1), 'farfield', AROUND);
+  const loInner = mk(vTE, vLE, lower.slice(1, -1), patch ?? 'wall', AROUND);
+  const loOuter = mk(vOLo, vOLE, offLower.slice(1, -1), 'farfield', AROUND);
+
+  const scratch: Blocking = { vertices: verts, edges, blocks: [], links: [] };
+  const bUp = orderBlockEdges(scratch, [upInner, eLE, upOuter, eR]);
+  const bLo = orderBlockEdges(scratch, [loInner, eLE, loOuter, eL]);
+  const bWU = orderBlockEdges(scratch, [wcut, eOutU, wlineU, eR]);
+  const bWL = orderBlockEdges(scratch, [wcut, eOutL, wlineL, eL]);
+  if (!bUp || !bLo || !bWU || !bWL) return null;
+
+  const blocks: Block[] = [
+    { id: uid(), edges: bUp }, { id: uid(), edges: bLo },
+    { id: uid(), edges: bWU }, { id: uid(), edges: bWL },
+  ];
+  const links: string[][] = [[upInner, loInner]];
+
+  return propagateNodeCounts(cleanBlocking({ vertices: verts, edges, blocks, links }));
+}
+
+/** Drop orphan edges and vertices; prune stale link groups. */
 export function cleanBlocking(bk: Blocking): Blocking {
   const usedEdges = new Set<string>();
   bk.blocks.forEach((b) => b.edges.forEach((e) => usedEdges.add(e)));
@@ -557,7 +920,10 @@ export function cleanBlocking(bk: Blocking): Blocking {
   const usedVerts = new Set<string>();
   edges.forEach((e) => { usedVerts.add(e.v0); usedVerts.add(e.v1); });
   const vertices = bk.vertices.filter((v) => usedVerts.has(v.id));
-  return { vertices, edges, blocks: bk.blocks };
+  const links = (bk.links ?? [])
+    .map((grp) => grp.filter((id) => usedEdges.has(id)))
+    .filter((grp) => grp.length >= 2);
+  return { vertices, edges, blocks: bk.blocks, links };
 }
 
 /** Enforce opposite-edge equal node counts within each block (propagation). */
@@ -565,11 +931,15 @@ export function propagateNodeCounts(bk: Blocking): Blocking {
   const parent = new Map<string, string>();
   bk.edges.forEach((e) => parent.set(e.id, e.id));
   const find = (x: string): string => (parent.get(x) === x ? x : (parent.set(x, find(parent.get(x)!)), parent.get(x)!));
-  const union = (a: string, b: string) => { parent.set(find(a), find(b)); };
+  const union = (a: string, b: string) => {
+    if (!parent.has(a) || !parent.has(b)) return;
+    parent.set(find(a), find(b));
+  };
   for (const blk of bk.blocks) {
     union(blk.edges[0], blk.edges[2]);
     union(blk.edges[1], blk.edges[3]);
   }
+  for (const grp of bk.links ?? []) for (let i = 1; i < grp.length; i++) union(grp[0], grp[i]);
   // Per group, take the max node count that was set - but never fewer than the
   // node count a polyline side needs (one cell per segment, so path.length + 2).
   const groupNodes = new Map<string, number>();
@@ -582,6 +952,70 @@ export function propagateNodeCounts(bk: Blocking): Blocking {
     ...bk,
     edges: bk.edges.map((e) => ({ ...e, nodes: groupNodes.get(find(e.id)) ?? e.nodes })),
   };
+}
+
+/** Arc length of a block edge (through its path points). */
+function edgeLength(bk: Blocking, e: BlockEdge): number {
+  const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
+  const a = vm.get(e.v0), b = vm.get(e.v1);
+  if (!a || !b) return 0;
+  const chain = [a, ...e.path, b];
+  let L = 0;
+  for (let i = 0; i + 1 < chain.length; i++) L += Math.hypot(chain[i + 1].x - chain[i].x, chain[i + 1].y - chain[i].y);
+  return L;
+}
+
+/** A sensible default target cell size: roughly the domain diagonal over ~90. */
+export function autoCellSize(bk: Blocking): number {
+  if (!bk.vertices.length) return 1;
+  const b = boundsOf(bk.vertices.map((v) => v.pt));
+  const diag = Math.hypot(b.maxX - b.minX, b.maxY - b.minY);
+  return diag > 0 ? diag / 90 : 1;
+}
+
+/** The cell size the current node counts imply (median edge length / cells). */
+export function currentCellSize(bk: Blocking): number {
+  const sizes = bk.edges
+    .map((e) => edgeLength(bk, e) / Math.max(1, e.nodes - 1))
+    .filter((s) => s > 0)
+    .sort((a, b) => a - b);
+  return sizes.length ? sizes[Math.floor(sizes.length / 2)] : autoCellSize(bk);
+}
+
+/**
+ * Size every grid direction from a target cell edge length instead of a fixed
+ * node count. A short block edge then gets few nodes and a long one gets many,
+ * so the mesh reads as uniform - no dense band where a small block's count was
+ * forced onto a narrow neighbour. Per-direction overrides set later still win
+ * (this only seeds them).
+ */
+export function applyTargetCellSize(bk: Blocking, cellSize: number): Blocking {
+  if (!(cellSize > 0)) return bk;
+  const parent = new Map<string, string>();
+  bk.edges.forEach((e) => parent.set(e.id, e.id));
+  const find = (x: string): string => (parent.get(x) === x ? x : (parent.set(x, find(parent.get(x)!)), parent.get(x)!));
+  const union = (a: string, c: string) => { if (parent.has(a) && parent.has(c)) parent.set(find(a), find(c)); };
+  for (const blk of bk.blocks) { union(blk.edges[0], blk.edges[2]); union(blk.edges[1], blk.edges[3]); }
+  for (const grp of bk.links ?? []) for (let i = 1; i < grp.length; i++) union(grp[0], grp[i]);
+
+  const groupLens = new Map<string, number[]>();
+  for (const e of bk.edges) {
+    const g = find(e.id);
+    const arr = groupLens.get(g) ?? [];
+    arr.push(edgeLength(bk, e));
+    groupLens.set(g, arr);
+  }
+  const groupNodes = new Map<string, number>();
+  groupLens.forEach((lens, g) => {
+    lens.sort((a, b) => a - b);
+    const rep = lens[Math.floor(lens.length / 2)] || 0; // median edge length in the group
+    groupNodes.set(g, Math.max(4, Math.min(500, Math.round(rep / cellSize) + 1)));
+  });
+
+  return propagateNodeCounts({
+    ...bk,
+    edges: bk.edges.map((e) => ({ ...e, nodes: groupNodes.get(find(e.id)) ?? e.nodes })),
+  });
 }
 
 export function toStructuredRequest(bk: Blocking): StructuredMeshRequest {

@@ -267,14 +267,17 @@ export async function generateMesh(geometryType: string, params: any) {
   }
 }
 
-export async function generateStructuredMesh(blocking: any) {
+export async function generateStructuredMesh(blocking: any, opts?: { smooth?: boolean }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
     const res = await fetch(`${API_BASE}/api/geometry/mesh-structured`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ geometry_type: 'structured', params: { blocking } }),
+      body: JSON.stringify({
+        geometry_type: 'structured',
+        params: { blocking, smooth: opts?.smooth !== false },
+      }),
       signal: controller.signal,
     });
     if (!res.ok) {

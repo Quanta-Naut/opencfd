@@ -199,20 +199,67 @@ Not done (later): drawing an arbitrary cut line at a chosen position (only mid-b
   drag the handles after), merge-block, non-x-monotone auto-blocking (L-shapes need manual splits),
   per-edge first-cell height.
 
-### Phase 2 - O-grid   [~1 week]
-- [ ] O-grid tool: select body loop + block -> generate ring
-- [ ] Offset parameter, auto-delete interior block
-- [ ] Merge-vertices tool
-- Covers: cylinder, bluff closed bodies
+### Phase 2 - O-grid   [DONE 2026-08-29]
+- [x] O-grid tool: `wrapBodyOgrid(bk, bodyRing, patch)` in `blocking.ts`. Detects the block
+      containing the body (`bodiesForOgrid`); if the block is much bigger than the body it first
+      carves a snug box via `splitAllAt` at the padded body bbox, then replaces that block with a
+      4-block ring. Body outline is resampled to 72 points (`resampleClosed`), 4 rays from the body
+      centroid through the block corners set the ring split points, inner edges carry the body path
+      + patch, radial edges default to geometric grading ratio 8 (clustered at the wall).
+- [x] `Blocking.links` (edge-id groups) + `propagateNodeCounts` honours them: the 4 arcs are one
+      link group, the 4 radials another, so the ring stays symmetric. `cleanBlocking` prunes stale
+      link ids; `splitAllAt` carries links through.
+- [x] UI: "O-grid" section in `StructuredMeshPanel` lists bodies with a "Wrap with O-grid" button
+      (disabled when the body is not inside one block), shows "Wrapped" once done.
+- [x] Canvas: node ticks now walk the edge path by arc length so curved arcs read correctly.
+- Covers: cylinder / bluff-body in a channel or far-field. Tested: cylinder -> 20716 quads,
+      0 tris, 45 deg min angle, 0.5 skew; rect body 43 deg; near-wall cylinder 37 deg.
+- Not done: explicit ring-offset slider (auto from body size + available gap), merge-vertices,
+      snapping ring splits to a polygon body's real corners (resample rounds them slightly).
 
-### Phase 3 - C-grid + wake cut   [~1-2 weeks]
-- [ ] Auto-offset outer C boundary from the profile (reuse `requestOffset`)
-- [ ] Wake-cut line definition
-- [ ] Merge vertices at trailing edge; branch-cut handling in Gmsh export
-- [ ] Blunt vs sharp TE handling
-- Covers: airfoils
+### Phase 3 - C-grid + wake cut   [DONE 2026-08-29]
+- [x] `cGridFromAirfoil(airfoilRing, domainRing, patch)` in `blocking.ts` - builds a fresh
+      4-block topology (replaces any existing blocking):
+      * offset curve from the airfoil surface (normal offset, radius R auto from chord +
+        available room), meeting on one point straight ahead of the nose (`oLE`)
+      * upper wrap block + lower wrap block, sharing the LE radial edge
+      * upper + lower wake blocks, sharing the wake-cut edge -> conformal across the wake
+      * wall-normal edges cluster at the wall (geometric ratio 3); streamwise wake edges
+        cluster at the trailing edge
+      * KEY: the trailing-edge radials use the *natural* offset endpoint, not TE.x - forcing
+        them square kinks the grid and drops min angle to ~3 deg. Natural ends -> ~55 deg.
+- [x] `airfoilsForCGrid(entities)` - closed non-domain bodies, returns width/height aspect.
+      `structuredHint` in App recommends 'cgrid' when aspect >= 2.2, else 'ogrid'/'hgrid'.
+- [x] Wired: topology selector in `StructuredMeshPanel` now has 3 options (H / O / C-grid);
+      `handleBuildBlocks('cgrid')`. A C-gridded airfoil reads as `wrapped` so the O-grid list
+      does not offer a redundant wrap.
+- Tested: NACA-ish airfoil -> 6210 quads, 0 tris, ~55 deg min angle, 0.40 skew; thick section
+      68 deg; 8 deg AoA 52 deg. All via the /api/geometry/mesh-structured endpoint.
+- Not done: outer curve split into inlet (front) / outlet (back) instead of all 'farfield';
+      flow-aligned wake cut at AoA; blunt-TE base as its own wall patch; offset self-
+      intersection guard for very thin / high-camber sections; reuse backend `compute_2d_offset`.
 
-### Later
-- [ ] blockMeshDict export target (OpenFOAM native)
-- [ ] Elliptic smoothing
-- [ ] Structured boundary-layer O-grid + unstructured fill (hybrid) - only if wanted
+### Quality pass (started 2026-08-29)  -- see the "Structured Meshing Roadmap" artifact
+
+- [x] Spacing-driven sizing: `applyTargetCellSize(bk, cellSize)` / `autoCellSize` /
+      `currentCellSize` in `blocking.ts`. Node counts are derived per direction from the
+      median block-edge length in that propagation group, so a narrow column of blocks gets
+      few cells instead of a neighbour's large count forced onto it. Applied automatically on
+      "Generate blocks"; "Target cell size" field + "Finer x2" in the Mesh sizing step.
+      Fixes the dense band on the top/bottom that the O-grid caused.
+- [~] Elliptic (Winslow) smoothing: `_winslow_smooth` in `gmsh_service.py` - Jacobi on the
+      8-node stencil, block corners + geometry-boundary nodes pinned, correction tapered back
+      to transfinite near fixed nodes. Gated: kept ONLY if it does not lower the worst-cell
+      angle and improves mean + p05. Toggle in the UI (`structuredSmooth`, sends `smooth` in
+      the request). CURRENT LIMITATION: pure Winslow without control functions rarely clears
+      the gate - it harmonises the interior but hurts boundary-fitted O/C grids, and cannot
+      help a pinned off-centre dragged vertex. The reliable version needs the per-block
+      logical (i,j) grid + Thomas-Middlecoff / Sorenson control functions (the ~1 week
+      roadmap item). Infrastructure is in place; that is the next step.
+- [ ] Per-block logical grid extraction (reconstruct the i,j array from the quad soup per
+      Gmsh surface) -> unlocks proper multiblock elliptic with control functions
+- [ ] tanh / Vinokur spacing law; first-cell-height input
+- [ ] Live quality panel (metrics + worst-cell highlight on the canvas)
+- [ ] Native blockMeshDict export (OpenFOAM structured, no Gmsh)
+- [ ] Wall-orthogonality control (Sorenson) once the logical grid exists
+- [ ] Periodic / rotationally-periodic blocks

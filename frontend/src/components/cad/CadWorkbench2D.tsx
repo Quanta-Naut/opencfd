@@ -1707,6 +1707,10 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         const p0 = ws(edge.p0.x, edge.p0.y);
         const p1 = ws(edge.p1.x, edge.p1.y);
         const colorConfig = BOUNDARY_COLORS[edge.tag] || BOUNDARY_COLORS.wall;
+        // A circle is drawn as many short arc segments; only show a normal arrow
+        // every so often so the outline does not turn into a sunburst.
+        const isCircleSeg = cadState.entities.find(en => en.id === edge.entityId)?.type === 'circle';
+        const showArrow = !isCircleSeg || edge.edgeIndex % 8 === 0;
 
         ctx.save();
         // Thick highlight along the edge
@@ -1719,19 +1723,21 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
         // Normal indicator arrow at midpoint
         const mid = ws(edge.midpoint.x, edge.midpoint.y);
-        const normLen = 12;
-        const normEnd = {
-          x: mid.x + edge.normal.x * normLen,
-          y: mid.y - edge.normal.y * normLen,
-        };
-        ctx.strokeStyle = colorConfig.hex;
-        ctx.lineWidth = 1.2;
-        ctx.globalAlpha = 0.6;
-        ctx.beginPath();
-        ctx.moveTo(mid.x, mid.y);
-        ctx.lineTo(normEnd.x, normEnd.y);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+        if (showArrow) {
+          const normLen = 12;
+          const normEnd = {
+            x: mid.x + edge.normal.x * normLen,
+            y: mid.y - edge.normal.y * normLen,
+          };
+          ctx.strokeStyle = colorConfig.hex;
+          ctx.lineWidth = 1.2;
+          ctx.globalAlpha = 0.6;
+          ctx.beginPath();
+          ctx.moveTo(mid.x, mid.y);
+          ctx.lineTo(normEnd.x, normEnd.y);
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
         ctx.restore();
       }
 
@@ -1833,13 +1839,24 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         });
         ctx.stroke();
 
-        // node ticks give a read on the cell count
+        // node ticks give a read on the cell count - walk the chain by arc length
         const n = Math.max(2, Math.min(edge.nodes, 120));
+        const segLen: number[] = [];
+        let total = 0;
+        for (let i = 0; i + 1 < chain.length; i++) {
+          const d = Math.hypot(chain[i + 1].x - chain[i].x, chain[i + 1].y - chain[i].y);
+          segLen.push(d);
+          total += d;
+        }
         ctx.fillStyle = col;
         for (let k = 0; k < n; k++) {
-          const t = k / (n - 1);
-          const p = { x: v0.pt.x + (v1.pt.x - v0.pt.x) * t, y: v0.pt.y + (v1.pt.y - v0.pt.y) * t };
-          const s = ws(p.x, p.y);
+          let target = (k / (n - 1)) * total;
+          let si = 0;
+          while (si < segLen.length && target > segLen[si]) { target -= segLen[si]; si += 1; }
+          const a = chain[Math.min(si, chain.length - 1)];
+          const b = chain[Math.min(si + 1, chain.length - 1)];
+          const f = segLen[si] ? target / segLen[si] : 0;
+          const s = ws(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
           ctx.beginPath();
           ctx.arc(s.x, s.y, 1.1, 0, Math.PI * 2);
           ctx.fill();
@@ -2624,8 +2641,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       for (const edge of boundaryEdges) {
         const d = distToSegment(rawPt, edge.p0, edge.p1);
         if (d < 18 / zoom) {
-          setEdgeTagMap(prev => ({ ...prev, [edge.key]: activeTagTool }));
-          setCmdText(`Tagged edge as ${activeTagTool.toUpperCase()}.`);
+          const ent = cadState.entities.find(en => en.id === edge.entityId);
+          const wholeEntity = ent?.type === 'circle';
+          const targetKey = wholeEntity ? `${edge.entityId}_0` : edge.key;
+          setEdgeTagMap(prev => ({ ...prev, [targetKey]: activeTagTool }));
+          setCmdText(`Tagged ${wholeEntity ? 'circle' : 'edge'} as ${activeTagTool.toUpperCase()}.`);
           return;
         }
       }

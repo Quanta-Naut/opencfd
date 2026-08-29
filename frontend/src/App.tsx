@@ -43,7 +43,7 @@ import {
   validateBoundaryTags,
   geometryFormsLoop,
 } from './types/cadWorkflow';
-import { Blocking, autoBlockingFromOutline, propagateNodeCounts, toStructuredRequest } from './types/blocking';
+import { Blocking, autoBlockingFromOutline, propagateNodeCounts, toStructuredRequest, wrapBodyOgrid, bodiesForOgrid, entityRing, cGridFromAirfoil, airfoilsForCGrid, outlineRing, applyTargetCellSize, autoCellSize } from './types/blocking';
 
 export const SESSION_STORAGE_KEY = 'opencfd_studio_session_v1';
 
@@ -99,6 +99,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   const [edgeTagMap, setEdgeTagMap] = useState<Record<string, BoundaryTag>>(() => savedSession?.edgeTagMap || {});
   const [cadEntities, setCadEntities] = useState<CadEntity[]>(() => savedSession?.cadEntities || []);
   const [blocking, setBlocking] = useState<Blocking | null>(() => savedSession?.blocking ?? null);
+  const [structuredSmooth, setStructuredSmooth] = useState<boolean>(true);
 
   // Action refs triggered from LeftStagePanel to CadWorkbench2D
   const requestGenerateDomainRef = useRef<(() => void) | null>(null);
@@ -644,15 +645,81 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   };
 
   // ── Structured meshing (H-block transfinite) ──────────────────────────────
-  const handleAutoBlock = () => {
-    const bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
-    if (!bk) {
-      toast('Could not auto-block this outline. Define a closed domain, or split a single block manually.', 'error', 7000);
+  const bodyPatchFor = (entId: string): any => {
+    const keys = Object.keys(edgeTagMap).filter((k) => k.startsWith(`${entId}_`));
+    return (keys.map((k) => edgeTagMap[k]).find(Boolean) as any) || 'wall';
+  };
+
+  const structuredHint = useMemo<'hgrid' | 'ogrid' | 'cgrid'>(() => {
+    const af = airfoilsForCGrid(cadEntities);
+    if (af.some((a) => a.aspect >= 2.2)) return 'cgrid';
+    const body = cadEntities.some(
+      (e) => e.layer !== 'construction' && e.role !== 'domain_boundary'
+        && (e.isClosed || e.type === 'circle' || e.type === 'rectangle'),
+    );
+    return body ? 'ogrid' : 'hgrid';
+  }, [cadEntities]);
+
+  const handleBuildBlocks = (kind: 'hgrid' | 'ogrid' | 'cgrid') => {
+    if (kind === 'cgrid') {
+      const af = airfoilsForCGrid(cadEntities)[0];
+      const domain = outlineRing(cadEntities.filter((e) => e.role === 'domain_boundary'));
+      if (!af || domain.length < 3) {
+        toast('C-grid needs an elongated body (airfoil) inside a closed domain.', 'error', 7000);
+        return;
+      }
+      const ent = cadEntities[af.index];
+      const raw = cGridFromAirfoil(entityRing(ent), domain, bodyPatchFor(ent.id));
+      if (!raw) {
+        toast('Could not build a C-grid. Give the airfoil more room downstream of the trailing edge.', 'error', 7000);
+        return;
+      }
+      const bk = applyTargetCellSize(raw, autoCellSize(raw));
+      setBlocking(bk);
+      toast(`Built a ${bk.blocks.length}-block C-grid around the airfoil.`, 'success');
       return;
     }
-    setBlocking(propagateNodeCounts(bk));
-    const n = bk.blocks.length;
-    toast(`Built ${n} block${n > 1 ? 's' : ''}. Set cell counts, then generate the structured mesh.`, 'success');
+
+    let bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
+    if (!bk) {
+      toast('Could not auto-block this outline. Define a closed domain first.', 'error', 7000);
+      return;
+    }
+    let wrapped = 0;
+    if (kind === 'ogrid') {
+      for (const b of bodiesForOgrid(cadEntities, bk)) {
+        const ent = cadEntities[b.index];
+        const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id));
+        if (next) { bk = next; wrapped += 1; }
+      }
+    }
+    bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
+    setBlocking(bk);
+    if (kind === 'ogrid' && wrapped === 0) {
+      toast('Built blocks, but no body could be wrapped - it must sit clear of the domain edges.', 'info', 7000);
+    } else if (wrapped > 0) {
+      toast(`Built ${bk.blocks.length} blocks with an O-grid around ${wrapped} bod${wrapped > 1 ? 'ies' : 'y'}.`, 'success');
+    } else {
+      toast(`Built ${bk.blocks.length} block${bk.blocks.length > 1 ? 's' : ''}.`, 'success');
+    }
+  };
+
+  const ogridBodies = useMemo(
+    () => (blocking ? bodiesForOgrid(cadEntities, blocking) : []),
+    [cadEntities, blocking],
+  );
+
+  const handleWrapBody = (bodyIndex: number) => {
+    if (!blocking) return;
+    const ent = cadEntities[bodyIndex];
+    if (!ent) return;
+    const next = wrapBodyOgrid(blocking, entityRing(ent), bodyPatchFor(ent.id));
+    if (!next) {
+      toast('Could not wrap that body. Make sure it sits well inside the domain, clear of the edges.', 'error', 7000);
+      return;
+    }
+    setBlocking(propagateNodeCounts(next));
+    toast('O-grid ring built around the body. Set the ring and wall-normal counts below.', 'success');
   };
 
   const handleGenerateStructuredMesh = async () => {
@@ -671,7 +738,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     }));
     try {
       const req = toStructuredRequest(propagateNodeCounts(blocking));
-      const mesh = await generateStructuredMesh(req);
+      const mesh = await generateStructuredMesh(req, { smooth: structuredSmooth });
       setMeshData(mesh);
       meshSigRef.current = geomSignature;
       toast(`Structured mesh: ${mesh.num_nodes} nodes, ${mesh.num_elements} quads.`, 'success');
@@ -884,9 +951,14 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           updatePostProcess={(p) => setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...p } }))}
           onGenerateMesh={handleGenerateMesh}
           blocking={blocking}
-          onAutoBlock={handleAutoBlock}
+          onBuildBlocks={handleBuildBlocks}
           onUpdateBlocking={handleUpdateBlocking}
           onGenerateStructuredMesh={handleGenerateStructuredMesh}
+          ogridBodies={ogridBodies}
+          onWrapBody={handleWrapBody}
+          structuredHint={structuredHint}
+          structuredSmooth={structuredSmooth}
+          setStructuredSmooth={setStructuredSmooth}
           onApplyYPlusToMesh={handleApplyYPlusToMesh}
           meshData={meshData}
           meshError={meshError}

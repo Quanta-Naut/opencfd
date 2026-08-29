@@ -260,9 +260,42 @@ export function extractBoundaryEdges(
   edgeTagMap: Record<string, BoundaryTag>
 ): BoundaryEdge[] {
   const edges: BoundaryEdge[] = [];
-  const targetEntities = entities.filter(e => e.layer !== 'construction' && e.pts.length >= 2);
+  const targetEntities = entities.filter(e => e.layer !== 'construction' && e.pts.length >= 1);
 
   for (const ent of targetEntities) {
+    // A circle is one continuous patch. Its whole outline gets a single tag,
+    // stored under "<id>_0"; render it as arc segments that all read that tag.
+    if (ent.type === 'circle' && ent.radius != null && ent.pts[0]) {
+      const c = ent.pts[0];
+      const r = ent.radius;
+      const SEG = 64;
+      const tagKey = `${ent.id}_0`;
+      const circleTag = edgeTagMap[tagKey];
+      const circleExplicit = Object.prototype.hasOwnProperty.call(edgeTagMap, tagKey);
+      for (let i = 0; i < SEG; i++) {
+        const a0 = (2 * Math.PI * i) / SEG;
+        const a1 = (2 * Math.PI * (i + 1)) / SEG;
+        const p0 = { x: c.x + r * Math.cos(a0), y: c.y + r * Math.sin(a0) };
+        const p1 = { x: c.x + r * Math.cos(a1), y: c.y + r * Math.sin(a1) };
+        const dx = p1.x - p0.x, dy = p1.y - p0.y;
+        const len = Math.hypot(dx, dy) || 1e-9;
+        edges.push({
+          key: `${ent.id}_${i}`,
+          entityId: ent.id,
+          edgeIndex: i,
+          p0,
+          p1,
+          tag: circleTag || 'wall',
+          explicit: circleExplicit,
+          role: ent.role === 'domain_boundary' ? 'domain' : 'geometry',
+          normal: { x: dy / len, y: -dx / len },
+          midpoint: { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 },
+          length: len,
+        });
+      }
+      continue;
+    }
+
     const pts = ent.pts;
     const n = pts.length;
     if (n < 2) continue;
