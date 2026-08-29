@@ -1,6 +1,6 @@
 {
   "name": "opencfd-studio",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Modern CFD Studio pairing OpenFOAM, Gmsh, and PyVista in a VS Code style desktop UI",
   "scripts": {
     "dev": "python3 run.py",

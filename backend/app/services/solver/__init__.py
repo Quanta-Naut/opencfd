@@ -35,14 +35,19 @@ def _foam_bashrc() -> str | None:
     return os.environ.get("OPENCFD_FOAM_BASHRC") or None
 
 
+_ON_WINDOWS = os.name == "nt"
+
+
 def detect_environment() -> Dict[str, Any]:
     system = platform.system()
     env: Dict[str, Any] = {"platform": system, "adapters": {}}
 
     env["adapters"]["mock"] = {"ok": True, "detail": "Built-in mock solver."}
 
-    local = LocalOpenFoam(foam_bashrc=_foam_bashrc())
-    env["adapters"]["openfoam-local"] = local.available()
+    # On Windows the only real path is WSL (LocalOpenFoam has no path translation).
+    if not _ON_WINDOWS:
+        local = LocalOpenFoam(foam_bashrc=_foam_bashrc())
+        env["adapters"]["openfoam-local"] = local.available()
 
     if wsl_present():
         distros = wsl_distros()
@@ -77,9 +82,10 @@ def select_adapter(mode: str, config: Dict[str, Any] | None = None) -> SolverAda
 
     bashrc = config.get("foamBashrc") or _foam_bashrc()
 
-    local = LocalOpenFoam(foam_bashrc=bashrc)
-    if mode in ("auto", "real", "openfoam-local") and local.available().get("ok"):
-        return local
+    if not _ON_WINDOWS:
+        local = LocalOpenFoam(foam_bashrc=bashrc)
+        if mode in ("auto", "real", "openfoam-local") and local.available().get("ok"):
+            return local
 
     if wsl_present():
         distros = wsl_distros()
@@ -94,6 +100,6 @@ def select_adapter(mode: str, config: Dict[str, Any] | None = None) -> SolverAda
         if mode in ("real", "openfoam-wsl"):
             return wsl  # let run() surface the real error
 
-    if mode == "real":
-        return local  # surfaces "not found" via run()/available()
+    if mode == "real" and not _ON_WINDOWS:
+        return LocalOpenFoam(foam_bashrc=bashrc)  # surfaces "not found" via run()
     return MockAdapter()
