@@ -504,6 +504,7 @@ interface CadWorkbenchProps {
   displayOnly?: boolean;
   meshData?: any;
   showMesh?: boolean;
+  meshOnly?: boolean;
   meshStale?: boolean;
   domainBroken?: boolean;
   isMeshing?: boolean;
@@ -551,6 +552,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   displayOnly = false,
   meshData,
   showMesh = false,
+  meshOnly = false,
   meshStale = false,
   domainBroken = false,
   isMeshing = false,
@@ -699,6 +701,8 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const [canvasMode, setCanvasMode] = useState<'cad' | 'mesh'>('cad');
 
   useEffect(() => {
+    // Solver / Results: only ever the mesh.
+    if (meshOnly) { setCanvasMode('mesh'); return; }
     // Show the mesh only when it is current. If the geometry changed since the
     // mesh was generated, drop back to CAD mode so the user sees their edits.
     if (!showMesh || meshStale) {
@@ -706,7 +710,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     } else if (meshData?.nodes?.length && meshData?.elements?.length) {
       setCanvasMode('mesh');
     }
-  }, [showMesh, meshData, meshStale]);
+  }, [showMesh, meshData, meshStale, meshOnly]);
 
   const handleAuxClick = useCallback((e: React.MouseEvent) => {
     if (e.button !== 1) return;
@@ -1307,6 +1311,18 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       return;
     }
 
+    // Solver / Results: mesh only. If the mesh is not shown above, draw nothing
+    // else (no CAD geometry, no domain handles, no blocking).
+    if (meshOnly) {
+      if (!meshData?.nodes?.length) {
+        ctx.fillStyle = '#8B95A1';
+        ctx.font = '12px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('No mesh yet - generate one in the Mesh tab', cw / 2, ch / 2);
+      }
+      return;
+    }
+
     // ─── Entities ─────────────────────────────────────────────────────────────
     for (const e of cadState.entities) {
       const isConst = e.layer === 'construction';
@@ -1878,7 +1894,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       ctx.restore();
     }
 
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx]);
+  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly]);
 
 
 
@@ -3270,13 +3286,13 @@ boundary
             : 'crosshair',
         }}
       >
-        {displayOnly && (
+        {displayOnly && !meshOnly && (
           <div className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-white/95 border border-[#E1E4E8] rounded-md px-1.5 py-1 shadow-sm text-xs">
             <button
               onClick={() => setCanvasMode('cad')}
               className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'cad' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F]'}`}
             >
-              {canvasMode === 'cad' ? '◉' : '○'} CAD
+              {canvasMode === 'cad' ? '◉' : '○'} Blocks
             </button>
             <button
               onClick={() => meshData && !meshStale && setCanvasMode('mesh')}

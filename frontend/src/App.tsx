@@ -65,6 +65,8 @@ export interface StudioSession {
   freestreamVelocity: number;
   activeTagTool: BoundaryTag | null;
   blocking?: Blocking | null;
+  meshData?: any;
+  meshSig?: string | null;
   hasMesh?: boolean;
 }
 
@@ -234,7 +236,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       '|' + JSON.stringify(blocking?.edges?.map(e => [e.nodes, e.law, e.ratio]) ?? null),
     [cadEntities, edgeTagMap, flowType, blocking]
   );
-  const meshSigRef = useRef<string | null>(null);
+  const meshSigRef = useRef<string | null>(savedSession?.meshSig ?? null);
 
   // Master CFD Project State
 
@@ -391,7 +393,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     ],
   }));
 
-  const [meshData, setMeshData] = useState<any>(null);
+  const [meshData, setMeshData] = useState<any>(() => savedSession?.meshData ?? null);
   const [meshError, setMeshError] = useState<string | null>(null);
   const [fieldData, setFieldData] = useState<any>(null);
   const [caseFiles, setCaseFiles] = useState<Record<string, string>>({});
@@ -442,6 +444,8 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     freestreamVelocity,
     activeTagTool,
     blocking,
+    meshData,
+    meshSig: meshSigRef.current,
     hasMesh: !!meshData?.num_elements,
   });
   const sessionRef = useRef<StudioSession>(buildSession());
@@ -1142,7 +1146,8 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
               showBlocking={activeStage === 'mesh'}
               domainBroken={domainState === 'broken'}
               isMeshing={isMeshing}
-              showMesh={activeStage === 'mesh'}
+              showMesh={activeStage === 'mesh' || activeStage === 'solver' || activeStage === 'results'}
+              meshOnly={activeStage === 'solver' || activeStage === 'results'}
               initialEntities={cadEntities}
               onApplySketchMesh={handleApplySketchMesh}
               domainLength={state.geometry.domainLength}
