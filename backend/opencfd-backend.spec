@@ -1,6 +1,7 @@
 # PyInstaller spec for the OpenCFD backend sidecar.
 #   pyinstaller --noconfirm --clean backend/opencfd-backend.spec
-# Produces dist/opencfd-backend[.exe] (onedir would be dist/opencfd-backend/).
+# Onefile build -> dist/opencfd-backend[.exe], one self-contained file so Tauri's
+# externalBin can bundle it directly.
 #
 # gmsh and shapely ship bundled native libraries; collect_all pulls the binaries
 # and data files PyInstaller's static analysis misses. uvicorn resolves its loop
@@ -55,16 +56,11 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="opencfd-backend",
     console=True,
     disable_windowed_traceback=False,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    name="opencfd-backend",
+    upx=False,
 )

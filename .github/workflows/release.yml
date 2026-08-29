@@ -1,12 +1,9 @@
 name: Release installers
 
-# Push a tag like v0.3.0 to build the desktop installers for all three OSes.
-# Each installer bundles the frozen FastAPI backend as a Tauri sidecar; the
-# Windows build additionally carries the OpenFOAM pack URL for first-run setup.
-#
-# NOTE: the PyInstaller + Tauri sidecar wiring below has not been run yet. Expect
-# to iterate on hidden imports (gmsh) and the sidecar capability config once we
-# can trigger this.
+# Push a tag like v0.3.0 to build the desktop installers and attach them to a
+# release. workflow_dispatch builds the installers as run artifacts only (no
+# release). Each installer bundles the frozen FastAPI backend as a Tauri
+# sidecar; Windows also carries the OpenFOAM pack coordinates for first-run setup.
 
 on:
   push:
@@ -36,7 +33,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -50,8 +47,9 @@ jobs:
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
             build-essential curl wget file libssl-dev libgtk-3-dev
 
-      - name: Build the frontend
+      - name: Install JS deps
         run: |
+          npm ci
           npm --prefix frontend ci
           npm --prefix frontend run build
 
@@ -81,35 +79,30 @@ jobs:
           set -euxo pipefail
           triple=$(rustc -Vv | sed -n 's/host: //p')
           mkdir -p src-tauri/binaries
-          src="backend/dist/opencfd-backend"
           if [ "${{ matrix.target }}" = "windows" ]; then
-            # onedir build: zip the folder next to a launcher named for the triple
-            cp -r "$src" "src-tauri/binaries/opencfd-backend"
-            cp "src-tauri/binaries/opencfd-backend/opencfd-backend.exe" \
-               "src-tauri/binaries/opencfd-backend-${triple}.exe"
+            cp "backend/dist/opencfd-backend.exe" "src-tauri/binaries/opencfd-backend-${triple}.exe"
           else
-            cp -r "$src" "src-tauri/binaries/opencfd-backend"
-            cp "src-tauri/binaries/opencfd-backend/opencfd-backend" \
-               "src-tauri/binaries/opencfd-backend-${triple}"
+            cp "backend/dist/opencfd-backend" "src-tauri/binaries/opencfd-backend-${triple}"
             chmod +x "src-tauri/binaries/opencfd-backend-${triple}"
           fi
-
-      - name: Windows - carry the OpenFOAM pack URL
-        if: matrix.target == 'windows'
-        shell: bash
-        run: |
-          {
-            echo "OPENCFD_FOAM_PACK_URL=${{ vars.OPENCFD_FOAM_PACK_URL }}"
-            echo "OPENCFD_FOAM_PACK_SHA256=${{ vars.OPENCFD_FOAM_PACK_SHA256 }}"
-            echo "OPENCFD_FOAM_PACK_VERSION=${{ vars.OPENCFD_FOAM_PACK_VERSION }}"
-          } >> "$GITHUB_ENV"
+          ls -la src-tauri/binaries
 
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: OpenCFD ${{ github.ref_name }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('OpenCFD {0}', github.ref_name) || '' }}
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.target == 'macos-arm64' && '--target aarch64-apple-darwin' || '' }}
+
+      - name: Upload installers as run artifacts
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencfd-${{ matrix.target }}
+          path: |
+            src-tauri/target/release/bundle/**/*
+            src-tauri/target/*/release/bundle/**/*
+          if-no-files-found: warn
+          retention-days: 14
