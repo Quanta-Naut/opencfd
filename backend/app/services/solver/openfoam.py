@@ -283,19 +283,8 @@ class WslOpenFoam(OpenFoamAdapter):
 
 
 # ---- WSL discovery (Windows) ---------------------------------------------
-def wsl_present() -> bool:
-    return os.name == "nt" and shutil.which("wsl.exe") is not None
+from app.services.wsl import list_distros, wsl_present  # noqa: E402
 
 
 def wsl_distros() -> List[str]:
-    if not wsl_present():
-        return []
-    try:
-        out = subprocess.run(
-            ["wsl.exe", "-l", "-q"], capture_output=True, text=True, timeout=20
-        )
-    except Exception:  # noqa: BLE001
-        return []
-    # `wsl -l -q` prints UTF-16 with stray NULs on some builds
-    raw = out.stdout.replace("\x00", "")
-    return [d.strip() for d in raw.splitlines() if d.strip()]
+    return list_distros()[0]

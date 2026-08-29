@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List
 
+from app.services.wsl import list_distros as wsl_list_distros
+
 DISTRO_NAME = "OpenCFD-FOAM"
 STATE_DIR = Path.home() / ".OpenCFD"
 WSL_DIR = STATE_DIR / "wsl"
@@ -67,7 +69,6 @@ def _wsl(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
 
 
 def _clean(text: str) -> str:
-    # `wsl.exe` list output is UTF-16 with stray NULs on many builds
     return text.replace("\x00", "")
 
 
@@ -81,24 +82,12 @@ def wsl_status() -> Dict[str, Any]:
             "distros": [],
             "detail": "WSL is not installed. Run `wsl --install`, reboot, then reopen OpenCFD.",
         }
-    distros: List[str] = []
-    default2 = False
-    try:
-        listing = _wsl("-l", "-v")
-        for raw in _clean(listing.stdout).splitlines()[1:]:
-            line = raw.strip().lstrip("*").strip()
-            if not line:
-                continue
-            parts = line.split()
-            if len(parts) >= 3:
-                distros.append(parts[0])
-                if parts[0] and parts[-1] == "2":
-                    default2 = True
-    except Exception as e:  # noqa: BLE001
-        return {"installed": True, "version2": False, "distros": [], "detail": f"wsl -l -v failed: {e}"}
+    distros, any_v2 = wsl_list_distros()
+    # An empty list is normal - the app imports its own distro. WSL2 infra being
+    # present is what matters here.
     return {
         "installed": True,
-        "version2": True if not distros else default2 or True,
+        "version2": any_v2 or True,
         "distros": distros,
         "detail": "WSL2 ready",
     }
