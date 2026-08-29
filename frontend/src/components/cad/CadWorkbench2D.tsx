@@ -164,6 +164,25 @@ function cadReducer(state: CadState, action: CadAction): CadState {
 const SNAP_RADIUS_PX = 12;
 const INITIAL_ZOOM = 130;
 
+// ── Scientific colormaps (control-point ramps, linearly interpolated) ────────
+const _RAMPS: Record<string, [number, number, number][]> = {
+  coolwarm: [[59, 76, 192], [144, 178, 254], [220, 220, 220], [245, 156, 125], [180, 4, 38]],
+  viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
+  turbo: [[48, 18, 59], [58, 138, 253], [27, 229, 138], [223, 224, 40], [122, 4, 3]],
+  jet: [[0, 0, 131], [0, 128, 255], [122, 255, 128], [255, 191, 0], [128, 0, 0]],
+  rainbow: [[110, 64, 170], [76, 176, 202], [126, 219, 92], [251, 179, 61], [235, 74, 74]],
+};
+
+function colormapRGB(t: number, name: string): string {
+  const ramp = _RAMPS[name] || _RAMPS.coolwarm;
+  const x = Math.max(0, Math.min(1, t)) * (ramp.length - 1);
+  const i = Math.min(ramp.length - 2, Math.floor(x));
+  const f = x - i;
+  const a = ramp[i];
+  const b = ramp[i + 1];
+  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)}, ${Math.round(a[1] + (b[1] - a[1]) * f)}, ${Math.round(a[2] + (b[2] - a[2]) * f)})`;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function uid(): string {
@@ -505,6 +524,10 @@ interface CadWorkbenchProps {
   meshData?: any;
   showMesh?: boolean;
   meshOnly?: boolean;
+  showField?: boolean;
+  fieldData?: any;
+  activeField?: string;
+  colormap?: string;
   meshStale?: boolean;
   domainBroken?: boolean;
   isMeshing?: boolean;
@@ -553,6 +576,10 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   meshData,
   showMesh = false,
   meshOnly = false,
+  showField = false,
+  fieldData,
+  activeField = 'U_mag',
+  colormap = 'coolwarm',
   meshStale = false,
   domainBroken = false,
   isMeshing = false,
@@ -1277,12 +1304,35 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         else edgeCounts.set(key, [a, b, 1]);
       };
 
-      ctx.fillStyle = '#FFFFFF';
-      ctx.strokeStyle = '#CBD5E1';
-      ctx.lineWidth = 0.65;
+      // Field overlay (Results): colour each element by the mean of its nodes'
+      // scalar values, normalised to the field range.
+      const vals: number[] | undefined = showField ? fieldData?.fields?.[activeField] : undefined;
+      const haveField = Array.isArray(vals) && vals.length === nodes.length;
+      let lo = 0;
+      let hi = 1;
+      if (haveField) {
+        const r = fieldData?.ranges?.[activeField];
+        if (Array.isArray(r) && r.length === 2 && r[0] !== r[1]) {
+          [lo, hi] = r;
+        } else {
+          lo = Math.min(...(vals as number[]));
+          hi = Math.max(...(vals as number[]));
+        }
+      }
+
+      ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.12)' : '#CBD5E1';
+      ctx.lineWidth = haveField ? 0.4 : 0.65;
       for (const element of elements) {
         if (element.length < 3) continue;
         const points = element.map((nodeIndex: number) => ws(nodes[nodeIndex][0], nodes[nodeIndex][1]));
+        if (haveField) {
+          let s = 0;
+          for (const ni of element) s += (vals as number[])[ni] ?? 0;
+          const t = (s / element.length - lo) / (hi - lo);
+          ctx.fillStyle = colormapRGB(t, colormap);
+        } else {
+          ctx.fillStyle = '#FFFFFF';
+        }
         ctx.beginPath();
         ctx.moveTo(points[0].x, points[0].y);
         for (let index = 1; index < points.length; index += 1) {
@@ -1894,7 +1944,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       ctx.restore();
     }
 
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly]);
+  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly, showField, fieldData, activeField, colormap]);
 
 
 
@@ -3321,6 +3371,31 @@ boundary
           onContextMenu={e => e.preventDefault()}
           tabIndex={-1}
         />
+
+        {/* ─── Field colour bar (Results) ─── */}
+        {showField && Array.isArray(fieldData?.fields?.[activeField]) && (() => {
+          const r = fieldData?.ranges?.[activeField] || [0, 1];
+          const stops = Array.from({ length: 12 }, (_, i) => colormapRGB(1 - i / 11, colormap));
+          const label: Record<string, string> = {
+            U_mag: '|U|  m/s', p: 'p  m²/s²', k: 'k  m²/s²', omega: 'ω  1/s', vorticity: '∇×U',
+          };
+          return (
+            <div className="absolute right-3 top-3 flex items-stretch gap-1.5 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1.5 text-[10px] font-mono text-[#69717D] pointer-events-none">
+              <div className="flex flex-col justify-between items-end py-0.5">
+                <span>{Number(r[1]).toPrecision(3)}</span>
+                <span className="text-[#171A1F]">{label[activeField] || activeField}</span>
+                <span>{Number(r[0]).toPrecision(3)}</span>
+              </div>
+              <div className="w-2.5 rounded-sm" style={{ background: `linear-gradient(to bottom, ${stops.join(',')})` }} />
+            </div>
+          );
+        })()}
+
+        {showField && fieldData?.source !== 'openfoam' && meshData?.nodes?.length && (
+          <div className="absolute left-3 top-3 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1 text-[10px] text-[#B45309] pointer-events-none">
+            Preview field - run the solver for real results
+          </div>
+        )}
 
         {/* ─── Dynamic Dimension Input Box (Onshape / Fusion 360 style) ─── */}
         {!displayOnly && dimPrompt && (() => {

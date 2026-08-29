@@ -1191,6 +1191,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
               isMeshing={isMeshing}
               showMesh={activeStage === 'mesh' || activeStage === 'solver' || activeStage === 'results'}
               meshOnly={activeStage === 'solver' || activeStage === 'results'}
+              showField={activeStage === 'results'}
+              fieldData={fieldData}
+              activeField={state.postprocess.activeField}
+              colormap={state.postprocess.colormap}
               initialEntities={cadEntities}
               onApplySketchMesh={handleApplySketchMesh}
               domainLength={state.geometry.domainLength}
