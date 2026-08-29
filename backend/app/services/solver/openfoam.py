@@ -161,14 +161,17 @@ class OpenFoamAdapter(SolverAdapter):
         if rc != 0:
             raise RuntimeError(f"{tag} failed (exit {rc})")
 
-    def _fix_boundary_types(self, case_dir: Path, wall_patches: List[str]) -> None:
+    # gmshToFoam makes every named patch `type patch`. OpenFOAM then rejects a
+    # field that assigns a constraint BC (symmetry/empty/wedge/cyclic) to a
+    # plain patch, so the polyMesh patch type must match.
+    _CONSTRAINT = {"empty", "symmetry", "symmetryPlane", "wedge", "cyclic", "cyclicAMI"}
+
+    def _fix_boundary_types(self, case_dir: Path, patch_types: Dict[str, str]) -> None:
         bnd = case_dir / "constant" / "polyMesh" / "boundary"
         if not bnd.is_file():
             return
         text = bnd.read_text()
-        targets = {"frontAndBack": "empty"}
-        for w in wall_patches:
-            targets[w] = "wall"
+        targets = {"frontAndBack": "empty", **patch_types}
 
         def patch_block(m: re.Match) -> str:
             name, inner = m.group(1), m.group(2)
@@ -176,6 +179,13 @@ class OpenFoamAdapter(SolverAdapter):
             if not want:
                 return m.group(0)
             inner = re.sub(r"type\s+\w+;", f"type            {want};", inner, count=1)
+            if want in self._CONSTRAINT:
+                # constraint patches carry no physicalType and want inGroups set
+                inner = re.sub(r"\s*physicalType\s+\w+;", "", inner)
+                if "inGroups" not in inner:
+                    inner = inner.rstrip() + f"\n        inGroups        1({want});\n    "
+            elif want == "wall" and "inGroups" not in inner:
+                inner = inner.rstrip() + "\n        inGroups        1(wall);\n    "
             return f"{name}\n    {{{inner}}}"
 
         text = re.sub(r"(\w[\w-]*)\n\s*\{([^{}]*)\}", patch_block, text)
@@ -187,6 +197,9 @@ class OpenFoamAdapter(SolverAdapter):
         case = Path(case_dir)
         physics = config.get("physics") or {}
         wall_patches = config.get("wallPatches") or []
+        # name -> polyMesh patch type; explicit patchTypes win, walls fill in
+        patch_types: Dict[str, str] = {w: "wall" for w in wall_patches}
+        patch_types.update(config.get("patchTypes") or {})
         solver_bin = pick_solver(physics)
         span = float(config.get("span", 1.0)) or 1.0
 
@@ -241,8 +254,9 @@ class OpenFoamAdapter(SolverAdapter):
             return
 
         # 4. patch boundary types, then checkMesh (warnings are non-fatal)
-        self._fix_boundary_types(case, wall_patches)
-        yield {"type": "log", "line": f"[mesh] boundary types set (empty: frontAndBack; wall: {', '.join(wall_patches) or 'none'})"}
+        self._fix_boundary_types(case, patch_types)
+        _summary = ", ".join(f"{k}={v}" for k, v in {"frontAndBack": "empty", **patch_types}.items())
+        yield {"type": "log", "line": f"[mesh] patch types: {_summary}"}
         try:
             async for ev in self._stream("checkMesh -constant || true", "checkMesh"):
                 yield ev

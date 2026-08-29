@@ -959,6 +959,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
             ? { nodes: meshData.nodes, elements: meshData.elements, boundaries: meshData.boundaries }
             : null,
           wallPatches: patchRoles.filter((p) => p.role === 'wall').map((p) => p.name),
+          patchTypes: Object.fromEntries(
+            patchRoles.map((p) => [
+              p.name,
+              p.role === 'wall' ? 'wall' : p.role === 'symmetry' ? 'symmetry' : 'patch',
+            ]),
+          ),
           iterations: state.solution.run.iterations,
           regime: state.physics.regime,
           velocity: state.physics.inletVelocity,
