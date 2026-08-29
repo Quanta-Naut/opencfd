@@ -71,12 +71,8 @@ def build_functions(
             "    }"
         )
 
-    blocks.append(
-        "    residuals\n    {\n"
-        "        type            solverInfo;\n        libs            (\"libutilityFunctionObjects.so\");\n"
-        "        fields          (\".*\");\n        writeResidualFields no;\n"
-        "    }"
-    )
+    # No solverInfo functionObject: it is ESI-only (Foundation 13 rejects it),
+    # and residuals are parsed straight from the solver's stdout anyway.
 
     if not blocks:
         return ""

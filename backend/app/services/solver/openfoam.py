@@ -81,6 +81,13 @@ def discover_foam_env_command() -> str:
         return f". {shlex.quote(explicit)}"
     if shutil.which("simpleFoam"):
         return ":"  # inherited PATH already has it
+    # a system install (/opt/openfoam*, the WSL pack) wins over a stray conda env
+    import glob  # noqa: PLC0415
+    for pat in ("/opt/openfoam*/etc/bashrc", "/usr/lib/openfoam/openfoam*/etc/bashrc",
+                str(Path.home() / "OpenFOAM/*/etc/bashrc")):
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return f". {shlex.quote(hits[-1])}"
     env = _conda_env_with_foam()
     if env:
         act = env / "etc" / "conda" / "activate.d"

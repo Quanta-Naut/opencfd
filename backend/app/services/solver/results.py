@@ -81,8 +81,9 @@ def read_field_results(case_dir: str | Path, mesh: Dict) -> Optional[Dict]:
     if tdir is None:
         return None
 
-    cx = _read_field(tdir / "Cx")
-    cy = _read_field(tdir / "Cy")
+    # cell-centre component field: Cx/Cy on the ESI fork, Ccx/Ccy on Foundation 13
+    cx = _read_field(tdir / "Cx") if (tdir / "Cx").is_file() else _read_field(tdir / "Ccx")
+    cy = _read_field(tdir / "Cy") if (tdir / "Cy").is_file() else _read_field(tdir / "Ccy")
     U = _read_field(tdir / "U")
     p = _read_field(tdir / "p")
     if cx is None or cy is None or U is None or p is None:
