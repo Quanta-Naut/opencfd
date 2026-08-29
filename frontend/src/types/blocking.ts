@@ -787,76 +787,57 @@ export function airfoilsForCGrid(
 }
 
 /**
- * Build a 4-block C-grid around an airfoil: two wrap blocks (upper / lower
- * surface out to an offset curve) and two wake blocks (trailing edge to the
- * outlet, split by a shared wake-cut edge so the mesh stays conformal across
- * the wake). Replaces any existing blocking. Assumes a roughly horizontal
- * airfoil and a near-sharp trailing edge.
+ * Airfoil topology that fills the whole (rectangular) domain: a C-H grid of six
+ * blocks. Two wrap blocks hug the upper and lower airfoil surface; a full-height
+ * pair fills the region upstream of the leading edge, split by the forward
+ * stagnation cut; and a pair fills the wake, split by the wake cut. Every
+ * interface is conformal. Replaces any existing blocking.
+ *
+ * Domain perimeter: left edge -> inlet, right edge -> outlet, top / bottom ->
+ * farfield. The airfoil surface takes `patch` (default wall).
  */
 export function cGridFromAirfoil(
   airfoilRaw: Point2D[],
   domainRing: Point2D[],
   patch?: BoundaryTag,
 ): Blocking | null {
-  let A = resampleClosed(airfoilRaw.map((p) => ({ x: p.x, y: p.y })), 200);
+  let A = resampleClosed(airfoilRaw.map((p) => ({ x: p.x, y: p.y })), 220);
   if (A.length < 20) return null;
   if (signedArea(A) < 0) A.reverse();
-  const gc = centroidOf(A);
 
   let iLE = 0, iTE = 0;
   A.forEach((p, i) => { if (p.x < A[iLE].x) iLE = i; if (p.x > A[iTE].x) iTE = i; });
-  const TE = { ...A[iTE] }, LE = { ...A[iLE] };
+  const LE = { ...A[iLE] }, TE = { ...A[iTE] };
   const chord = TE.x - LE.x;
   if (chord < 1e-6) return null;
 
-  const db = boundsOf(dedupeClose(domainRing));
-  const outletX = db.maxX;
-  if (outletX < TE.x + chord * 0.25) return null;
+  const dom = dedupeClose(domainRing);
+  const db = boundsOf(dom);
+  const ab = boundsOf(A);
+  const eps = chord * 0.02;
+  // the airfoil must sit clear of every domain edge with room for a block
+  if (!(db.minX < LE.x - eps && db.maxX > TE.x + chord * 0.3
+        && db.minY < ab.minY - eps && db.maxY > ab.maxY + eps)) return null;
 
-  const R = Math.max(
-    chord * 1.4,
-    Math.min(db.maxY - gc.y, gc.y - db.minY, TE.x - db.minX) * 0.45,
-  );
+  const xL = db.minX, xR = db.maxX, yB = db.minY, yT = db.maxY;
+  const yF = LE.y;  // forward stagnation cut level
+  const yW = TE.y;  // wake cut level
+  // put the nose vertical cut ahead of the LE so the over-airfoil blocks start
+  // clear of the near-vertical nose (avoids sliver cells at the leading edge)
+  const xFront = Math.max(LE.x - Math.max(chord * 0.35, eps * 4), (xL + LE.x) / 2);
 
   const walk = (from: number, to: number) => {
     const s: Point2D[] = [{ ...A[from] }];
-    let i = from;
-    let guard = 0;
+    let i = from, guard = 0;
     while (i !== to && guard++ < A.length + 2) { i = (i + 1) % A.length; s.push({ ...A[i] }); }
     return s;
   };
-  const w1 = walk(iTE, iLE);            // TE -> LE one way
-  const w2 = walk(iLE, iTE).reverse();  // TE -> LE the other way
+  const w1 = walk(iLE, iTE);            // LE -> TE one way
+  const w2 = walk(iTE, iLE).reverse();  // LE -> TE the other way
   const meanY = (s: Point2D[]) => s.reduce((a, p) => a + p.y, 0) / s.length;
-  const upper = meanY(w1) >= meanY(w2) ? w1 : w2;   // TE -> LE, top
-  const lower = upper === w1 ? w2 : w1;             // TE -> LE, bottom
-  if (upper.length < 4 || lower.length < 4) return null;
-
-  const offsetSide = (side: Point2D[]): Point2D[] =>
-    side.map((p, i) => {
-      const a = side[Math.max(0, i - 1)], b = side[Math.min(side.length - 1, i + 1)];
-      let nx = -(b.y - a.y), ny = b.x - a.x;
-      const L = Math.hypot(nx, ny) || 1;
-      nx /= L; ny /= L;
-      const away = (p.x + nx - gc.x) ** 2 + (p.y + ny - gc.y) ** 2;
-      const toward = (p.x - nx - gc.x) ** 2 + (p.y - ny - gc.y) ** 2;
-      if (away < toward) { nx = -nx; ny = -ny; }
-      return { x: p.x + nx * R, y: p.y + ny * R };
-    });
-  const offUpper = offsetSide(upper);
-  const offLower = offsetSide(lower);
-  // Front: both wrap blocks meet on one smooth point straight ahead of the nose.
-  const oLE = { x: LE.x - R, y: LE.y };
-  offUpper[offUpper.length - 1] = { ...oLE };
-  offLower[offLower.length - 1] = { ...oLE };
-  // Back: use the natural offset ends so the wrap edge and the trailing-edge
-  // radial stay tangent (forcing them to TE.x kinks the grid at the TE).
-  const oHi = { ...offUpper[0] };
-  const oLo = { ...offLower[0] };
-
-  const outHi = { x: outletX, y: oHi.y };
-  const outLo = { x: outletX, y: oLo.y };
-  const wakeOut = { x: outletX, y: TE.y };
+  const upper = meanY(w1) >= meanY(w2) ? w1 : w2;   // LE -> TE, top surface
+  const lower = upper === w1 ? w2 : w1;             // LE -> TE, bottom surface
+  if (upper.length < 3 || lower.length < 3) return null;
 
   const verts: BlockVertex[] = [];
   const vById = new Map<string, string>();
@@ -866,48 +847,64 @@ export function cGridFromAirfoil(
     if (!id) { id = uid(); vById.set(k, id); verts.push({ id, pt: { x: p.x, y: p.y } }); }
     return id;
   };
-  const vTE = vid(TE), vLE = vid(LE);
-  const vOHi = vid(oHi), vOLo = vid(oLo), vOLE = vid(oLE);
-  const vOutHi = vid(outHi), vOutLo = vid(outLo), vWakeOut = vid(wakeOut);
-
   const edges: BlockEdge[] = [];
-  const mk = (
-    v0: string, v1: string, path: Point2D[], p: BoundaryTag | undefined,
-    nodes: number, law: EdgeLaw = 'uniform', ratio = 1,
-  ): string => {
-    const e: BlockEdge = { id: uid(), v0, v1, path: path.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes, law, ratio };
-    edges.push(e);
-    return e.id;
+  const eKey = new Map<string, string>();
+  const straight = (a: Point2D, b: Point2D, p: BoundaryTag | undefined, law: EdgeLaw = 'uniform', ratio = 1): string => {
+    const ia = vid(a), ib = vid(b);
+    const k = ekey(ia, ib);
+    const hit = eKey.get(k);
+    if (hit) return hit;
+    const e: BlockEdge = { id: uid(), v0: ia, v1: ib, path: [], patch: p, nodes: 40, law, ratio };
+    edges.push(e); eKey.set(k, e.id); return e.id;
+  };
+  const curved = (a: Point2D, b: Point2D, mid: Point2D[], p: BoundaryTag | undefined): string => {
+    const e: BlockEdge = { id: uid(), v0: vid(a), v1: vid(b), path: mid.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes: 40, law: 'uniform', ratio: 1 };
+    edges.push(e); return e.id;
   };
 
-  const AROUND = 50, NORMAL = 24, WAKE = 36;
-  // Wall-normal edges all cluster toward the airfoil / wake centreline (v0).
-  const eLE = mk(vLE, vOLE, [], undefined, NORMAL, 'geometric', 3);
-  const eR = mk(vTE, vOHi, [], undefined, NORMAL, 'geometric', 3);
-  const eL = mk(vTE, vOLo, [], undefined, NORMAL, 'geometric', 3);
-  const eOutU = mk(vWakeOut, vOutHi, [], 'outlet', NORMAL, 'geometric', 3);
-  const eOutL = mk(vWakeOut, vOutLo, [], 'outlet', NORMAL, 'geometric', 3);
-  // Streamwise wake edges cluster toward the trailing edge (v0).
-  const wcut = mk(vTE, vWakeOut, [], undefined, WAKE, 'geometric', 3);
-  const wlineU = mk(vOHi, vOutHi, [], 'farfield', WAKE, 'geometric', 3);
-  const wlineL = mk(vOLo, vOutLo, [], 'farfield', WAKE, 'geometric', 3);
-  const upInner = mk(vTE, vLE, upper.slice(1, -1), patch ?? 'wall', AROUND);
-  const upOuter = mk(vOHi, vOLE, offUpper.slice(1, -1), 'farfield', AROUND);
-  const loInner = mk(vTE, vLE, lower.slice(1, -1), patch ?? 'wall', AROUND);
-  const loOuter = mk(vOLo, vOLE, offLower.slice(1, -1), 'farfield', AROUND);
+  // key points
+  const FL = { x: xL, y: yF };                 // forward cut meets the left edge
+  const Fm = { x: xFront, y: yF };             // forward cut meets the nose cut
+  const WR = { x: xR, y: yW };                 // wake cut meets the right edge
+  const nF_T = { x: xFront, y: yT }, nF_B = { x: xFront, y: yB };
+  const nLE_T = { x: LE.x, y: yT }, nLE_B = { x: LE.x, y: yB };
+  const nTE_T = { x: TE.x, y: yT }, nTE_B = { x: TE.x, y: yB };
+  const TLc = { x: xL, y: yT }, BLc = { x: xL, y: yB };
+  const TRc = { x: xR, y: yT }, BRc = { x: xR, y: yB };
+
+  // shared interior cuts - the mesh is continuous across the stagnation and
+  // wake lines (they are grid lines, not boundaries)
+  const sc1 = straight(FL, Fm, undefined);                     // stagnation cut, upstream part
+  const sc2 = straight(Fm, LE, undefined);                     // stagnation cut, nose part
+  const wcut = straight(TE, WR, undefined, 'geometric', 3);    // wake cut (cluster at TE)
+  const fvU = straight(Fm, nF_T, undefined);                   // nose vertical, upper
+  const fvL = straight(nF_B, Fm, undefined);                   // nose vertical, lower
+  const lvU = straight(LE, nLE_T, undefined);                  // LE vertical, upper
+  const lvL = straight(nLE_B, LE, undefined);                  // LE vertical, lower
+  const tvU = straight(TE, nTE_T, undefined);                  // TE vertical, upper
+  const tvL = straight(nTE_B, TE, undefined);                  // TE vertical, lower
+  // airfoil surface (wall) - the two halves share LE and TE but different paths
+  const afU = curved(LE, TE, upper.slice(1, -1), patch ?? 'wall');
+  const afL = curved(LE, TE, lower.slice(1, -1), patch ?? 'wall');
 
   const scratch: Blocking = { vertices: verts, edges, blocks: [], links: [] };
-  const bUp = orderBlockEdges(scratch, [upInner, eLE, upOuter, eR]);
-  const bLo = orderBlockEdges(scratch, [loInner, eLE, loOuter, eL]);
-  const bWU = orderBlockEdges(scratch, [wcut, eOutU, wlineU, eR]);
-  const bWL = orderBlockEdges(scratch, [wcut, eOutL, wlineL, eL]);
-  if (!bUp || !bLo || !bWU || !bWL) return null;
+  const B = (ids: string[]) => orderBlockEdges(scratch, ids);
 
-  const blocks: Block[] = [
-    { id: uid(), edges: bUp }, { id: uid(), edges: bLo },
-    { id: uid(), edges: bWU }, { id: uid(), edges: bWL },
-  ];
-  const links: string[][] = [[upInner, loInner]];
+  const bUF = B([sc1, fvU, straight(TLc, nF_T, 'farfield'), straight(FL, TLc, 'inlet', 'geometric', 3)]);
+  const bLF = B([straight(BLc, nF_B, 'farfield'), fvL, sc1, straight(BLc, FL, 'inlet', 'geometric', 3)]);
+  const bNU = B([sc2, lvU, straight(nF_T, nLE_T, 'farfield'), fvU]);
+  const bNL = B([straight(nF_B, nLE_B, 'farfield'), lvL, sc2, fvL]);
+  const bUA = B([afU, tvU, straight(nLE_T, nTE_T, 'farfield'), lvU]);
+  const bLA = B([straight(nLE_B, nTE_B, 'farfield'), tvL, afL, lvL]);
+  const bUW = B([wcut, straight(WR, TRc, 'outlet', 'geometric', 3), straight(nTE_T, TRc, 'farfield'), tvU]);
+  const bLW = B([straight(nTE_B, BRc, 'farfield'), straight(BRc, WR, 'outlet', 'geometric', 3), wcut, tvL]);
+
+  const ord = [bUF, bLF, bNU, bNL, bUA, bLA, bUW, bLW];
+  if (ord.some((o) => !o)) return null;
+
+  const blocks: Block[] = ord.map((o) => ({ id: uid(), edges: o as Block['edges'] }));
+  // keep the wall-normal counts consistent along and across the airfoil
+  const links: string[][] = [[afU, afL], [fvU, lvU, tvU], [fvL, lvL, tvL]];
 
   return propagateNodeCounts(cleanBlocking({ vertices: verts, edges, blocks, links }));
 }
