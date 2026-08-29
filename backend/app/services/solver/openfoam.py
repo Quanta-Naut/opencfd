@@ -200,11 +200,13 @@ class OpenFoamAdapter(SolverAdapter):
         # name -> polyMesh patch type; explicit patchTypes win, walls fill in
         patch_types: Dict[str, str] = {w: "wall" for w in wall_patches}
         patch_types.update(config.get("patchTypes") or {})
-        solver_bin = pick_solver(physics)
+        module = pick_solver(physics)
+        solver_bin = 'foamRun'
+        solver_cmd = f'foamRun -solver {module}'
         span = float(config.get("span", 1.0)) or 1.0
 
         yield {"type": "log", "line": f"[OpenCFD] Case: {case}"}
-        yield {"type": "log", "line": f"[OpenCFD] Solver: {solver_bin}"}
+        yield {"type": "log", "line": f"[OpenCFD] Solver: foamRun -solver {module}"}
 
         # 1. mesh -> MSH 2.2
         msh = case / "mesh.msh"
@@ -266,7 +268,7 @@ class OpenFoamAdapter(SolverAdapter):
         # 5. optional potential-flow initialisation
         if config.get("init") == "potentialFlow":
             try:
-                async for ev in self._stream("potentialFoam -initialiseUBCs -writep || true", "potentialFoam"):
+                async for ev in self._stream("potentialFoam -initialiseUBCs || true", "potentialFoam"):
                     yield ev
             except RuntimeError:
                 pass
@@ -274,7 +276,7 @@ class OpenFoamAdapter(SolverAdapter):
         # 6. the solve
         yield {"type": "log", "line": f"[{solver_bin}] starting"}
         proc = await asyncio.create_subprocess_exec(
-            *self._script(solver_bin),
+            *self._script(solver_cmd),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )

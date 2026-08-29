@@ -20,8 +20,8 @@ _DIMS = {
 def _internal(field: str, phys: Dict[str, Any], turb: Dict[str, float], compressible: bool) -> str:
     U = float(phys.get("inletVelocity", 20.0))
     if field == "U":
-        return f"uniform ({U} 0 0)"
-    if field == "p":
+        return "uniform (0 0 0)"  # start from rest - more robust than the inlet value
+    if field in ("p", "p_rgh"):
         return "uniform 0" if not compressible else f"uniform {phys.get('inletPressure', 101325)}"
     if field == "T":
         return f"uniform {phys.get('inletTemperature', 288.15)}"
@@ -38,21 +38,27 @@ def write_fields(
     compressible: bool,
     empty_patch: str = "frontAndBack",
 ) -> Dict[str, str]:
-    fields = ["U", "p", *turb_fields]
+    p_field = "p_rgh" if compressible else "p"
+    fields = ["U", p_field, *turb_fields]
     if compressible:
-        fields.append("T")
+        fields += ["p", "T"]
+
+    # `setConstraintTypes` sets empty/symmetry/wedge BCs from the polyMesh patch
+    # types, so we do not write frontAndBack (or any constraint patch) by hand.
+    trailer = '#includeEtc "caseDicts/setConstraintTypes"'
 
     out: Dict[str, str] = {}
     for f in fields:
         cls = "volVectorField" if f == "U" else "volScalarField"
         pf: Dict[str, Dict[str, Any]] = {}
         for p in patches:
+            if p["role"] in ("symmetry", "periodic"):
+                continue  # handled by setConstraintTypes
             pf[p["name"]] = field_bc(f, p, phys, turb)
-        pf[empty_patch] = {"type": "empty"}
         body = (
             f"dimensions      {_DIMS.get(f, '[0 0 0 0 0 0 0]')};\n\n"
             f"internalField   {_internal(f, phys, turb, compressible)};\n\n"
-            f"{boundary_field(pf)}"
+            f"{boundary_field(pf, trailer)}"
         )
         out[f"0/{f}"] = foam_file(cls, f, body)
     return out

@@ -1,21 +1,25 @@
-"""system/ dictionaries: controlDict, fvSchemes, fvSolution - built from the
-Solution-tab config (methods, controls, run)."""
+"""system/ dictionaries for OpenFOAM Foundation 13 (openfoam.org).
+
+Foundation 13 runs everything through `foamRun -solver <module>`; the case
+carries `solver` in controlDict. Steady vs transient is decided by
+`ddtSchemes/default` (steadyState or Euler/backward), and fvSolution branches on
+it with `#ifeq`. There is one `PIMPLE` block for both.
+"""
 from typing import Any, Dict
 
 from .writer import foam_file
 
-_SOLVER_FOR = {
-    ("incompressible", "steady"): "simpleFoam",
-    ("incompressible", "transient"): "pimpleFoam",
-    ("compressible", "steady"): "rhoSimpleFoam",
-    ("compressible", "transient"): "rhoPimpleFoam",
+# incompressible / compressible -> foamRun solver module
+_MODULE = {
+    "incompressible": "incompressibleFluid",
+    "compressible": "fluid",
 }
 
 _DIV = {
     "firstOrder": "Gauss upwind",
-    "secondOrder": "Gauss linearUpwind grad({f})",
+    "secondOrder": "Gauss linearUpwind limited",
     "central": "Gauss linear",
-    "blended": "Gauss linearUpwindV 0.75",
+    "blended": "Gauss linearUpwindV limited",
 }
 _TIME = {
     "steadyState": "steadyState",
@@ -26,17 +30,14 @@ _TIME = {
 
 
 def pick_solver(phys: Dict[str, Any]) -> str:
+    """The foamRun solver module for this case."""
     comp = phys.get("compressibility", "incompressible")
-    time = phys.get("timeFormulation", "steady")
-    regime = phys.get("speedRegime", "subsonic")
-    if comp == "compressible" and regime in ("transonic", "supersonic", "hypersonic"):
-        return "rhoCentralFoam"
-    return _SOLVER_FOR.get((comp, time), "simpleFoam")
+    return _MODULE.get(comp, "incompressibleFluid")
 
 
-def _div_scheme(order: str, field: str, steady: bool) -> str:
-    s = _DIV.get(order, _DIV["secondOrder"]).format(f=field)
-    return f"bounded {s}" if steady else s
+def _div_scheme(order: str, steady: bool) -> str:
+    s = _DIV.get(order, _DIV["secondOrder"])
+    return f"bounded {s}" if steady and s.startswith("Gauss") else s
 
 
 def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
@@ -47,101 +48,138 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
     controls = sol.get("controls", {})
     run = sol.get("run", {})
 
-    solver = pick_solver(phys)
-    time_scheme = methods.get("time", "steadyState" if phys.get("timeFormulation", "steady") == "steady" else "Euler")
+    module = pick_solver(phys)
+    compressible = phys.get("compressibility") == "compressible"
+    time_scheme = methods.get("time") or (
+        "steadyState" if phys.get("timeFormulation", "steady") == "steady" else "Euler"
+    )
     steady = time_scheme == "steadyState"
-    coupling = methods.get("coupling", "SIMPLEC" if steady else "PIMPLE")
+    ddt = _TIME.get(time_scheme, "steadyState")
 
     iters = int(run.get("iterations") or solver_controls.get("iterations", 1000))
-    dt = float(run.get("deltaT") or solver_controls.get("timeStep", 1e-4))
+    dt = float(run.get("deltaT") or solver_controls.get("timeStep", 1e-3))
     end = iters if steady else float(run.get("endTime", 1.0))
-    write_iv = int(run.get("writeInterval") or max(1, iters // 5))
+    write_iv = int(run.get("writeInterval") or max(1, (iters if steady else int(end / max(dt, 1e-9))) // 5))
     nno = int(methods.get("nNonOrthogonalCorrectors", 1))
-    mom_pred = "yes" if methods.get("momentumPredictor", True) else "no"
+    nouter = int(methods.get("nOuterCorrectors", 1))
+    ncorr = int(methods.get("nCorrectors", 2))
 
     control = (
-        f"application     {solver};\n"
-        "startFrom       " + ("startTime" if run.get("init") != "continue" else "latestTime") + ";\n"
+        f"solver          {module};\n"
+        "startFrom       " + ("latestTime" if run.get("init") == "continue" else "startTime") + ";\n"
         "startTime       0;\nstopAt          endTime;\n"
         f"endTime         {end};\ndeltaT          {1 if steady else dt};\n"
         f"writeControl    timeStep;\nwriteInterval   {write_iv};\n"
         "purgeWrite      2;\nwriteFormat     ascii;\nwritePrecision  8;\n"
-        "writeCompression off;\ntimeFormat      general;\nrunTimeModifiable true;\n"
-        + ("" if steady else f"adjustTimeStep  {'yes' if controls.get('adjustableTimeStep', True) else 'no'};\n"
-                             f"maxCo           {controls.get('maxCo', 5)};\n")
+        "writeCompression off;\ntimeFormat      general;\ntimePrecision   6;\nrunTimeModifiable true;\n"
+        + ("" if steady else
+           f"adjustTimeStep  {'yes' if controls.get('adjustableTimeStep', True) else 'no'};\n"
+           f"maxCo           {controls.get('maxCo', 5)};\n")
         + ("\n" + functions_block if functions_block else "")
     )
 
     mom = methods.get("momentum", "secondOrder")
     turb = methods.get("turbulence", "firstOrder")
-    ener = methods.get("energy", "secondOrder")
     grad = {"gauss": "Gauss linear", "leastSquares": "leastSquares",
-            "cellLimited": "cellLimited Gauss linear 1"}.get(methods.get("gradient", "gauss"), "Gauss linear")
+            "cellLimited": "cellLimited Gauss linear 1"}.get(methods.get("gradient", "cellLimited"),
+                                                             "cellLimited Gauss linear 1")
+    energy_div = ""
+    if compressible:
+        ener = methods.get("energy", "secondOrder")
+        energy_div = (
+            f"    div(phi,e)      {_div_scheme(ener, steady)};\n"
+            f"    div(phi,K)      {_div_scheme(ener, steady)};\n"
+            f"    div(phi,(p|rho)) {_div_scheme(ener, steady)};\n"
+        )
+
+    mom_div = _div_scheme(mom, steady)
+    turb_div = _div_scheme(turb, steady)
     schemes = (
-        f"ddtSchemes\n{{\n    default         {_TIME.get(time_scheme, 'steadyState')};\n}}\n\n"
-        f"gradSchemes\n{{\n    default         {grad};\n}}\n\n"
+        "ddtSchemes\n{\n"
+        f"    default         {ddt};\n}}\n\n"
+        "gradSchemes\n{\n"
+        "    default         Gauss linear;\n"
+        "    limited         cellLimited Gauss linear 1;\n"
+        "    grad(U)         $limited;\n"
+        "    grad(k)         $limited;\n"
+        "    grad(omega)     $limited;\n"
+        "    grad(epsilon)   $limited;\n}\n\n"
         "divSchemes\n{\n    default         none;\n"
-        f"    div(phi,U)      {_div_scheme(mom, 'U', steady)};\n"
-        f"    div(phi,k)      {_div_scheme(turb, 'k', steady)};\n"
-        f"    div(phi,omega)  {_div_scheme(turb, 'omega', steady)};\n"
-        f"    div(phi,epsilon) {_div_scheme(turb, 'epsilon', steady)};\n"
-        f"    div(phi,nuTilda) {_div_scheme(turb, 'nuTilda', steady)};\n"
-        + (f"    div(phi,e)      {_div_scheme(ener, 'e', steady)};\n"
-           f"    div(phi,K)      {_div_scheme(ener, 'K', steady)};\n"
-           if phys.get("compressibility") == "compressible" else "")
-        + "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}\n\n"
+        f"    div(phi,U)      {mom_div};\n"
+        f"    turbulence      {turb_div};\n"
+        "    div(phi,k)      $turbulence;\n"
+        "    div(phi,omega)  $turbulence;\n"
+        "    div(phi,epsilon) $turbulence;\n"
+        "    div(phi,nuTilda) $turbulence;\n"
+        + energy_div
+        + "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n"
+        + ("    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;\n" if compressible else "")
+        + "}\n\n"
         "laplacianSchemes\n{\n    default         Gauss linear corrected;\n}\n\n"
         "interpolationSchemes\n{\n    default         linear;\n}\n\n"
         "snGradSchemes\n{\n    default         corrected;\n}\n\n"
-        # kOmegaSST and other models need a near-wall distance method
         "wallDist\n{\n    method          meshWave;\n}\n"
     )
 
-    relax = controls.get("relax", {"p": 0.5, "U": 0.7, "k": 0.7, "omega": 0.7, "e": 0.7})
+    p_name = "p_rgh" if compressible else "p"
     res = controls.get("residualTargets", {"p": 1e-4, "U": 1e-4, "turbulence": 1e-4})
-    outer = int(methods.get("nOuterCorrectors", 1))
-    inner = int(methods.get("nCorrectors", 2))
+    p_rt = "0.05" if steady else "0.01"
+    u_rt = "0.1" if steady else "0.01"
 
-    coupling_block = (
-        f"{coupling}\n{{\n"
-        f"    nNonOrthogonalCorrectors {nno};\n"
-        + (f"    consistent      {'yes' if coupling == 'SIMPLEC' else 'no'};\n"
-           f"    residualControl\n    {{\n        p               {res['p']};\n        U               {res['U']};\n"
-           f"        \"(k|omega|epsilon|nuTilda)\" {res['turbulence']};\n    }}\n"
-           if steady else
-           f"    nOuterCorrectors {outer};\n    nCorrectors     {inner};\n    momentumPredictor {mom_pred};\n")
-        + "}\n"
-    )
-
-    p_reltol = "0.05" if steady else "0.01"
-    u_reltol = "0.1" if steady else "0.01"
-    p_solver = (
-        "        solver          GAMG;\n        smoother        GaussSeidel;\n"
-        "        tolerance       1e-7;\n"
-    )
-    u_solver = (
-        "        solver          smoothSolver;\n        smoother        symGaussSeidel;\n"
-        "        tolerance       1e-8;\n"
-    )
-    # PIMPLE/PISO look up <field>Final for the last corrector; the `(Final)?`
-    # groups make one entry serve both the inner and final solves.
     solution_txt = (
         "solvers\n{\n"
-        f'    "(p|p_rgh|Phi)"\n    {{\n{p_solver}        relTol          {p_reltol};\n    }}\n'
-        f'    "(p|p_rgh|Phi)Final"\n    {{\n{p_solver}        relTol          0;\n    }}\n'
-        f'    "(U|k|omega|epsilon|nuTilda|e|h)"\n    {{\n{u_solver}        relTol          {u_reltol};\n    }}\n'
-        f'    "(U|k|omega|epsilon|nuTilda|e|h)Final"\n    {{\n{u_solver}        relTol          0;\n    }}\n'
+        f"    {p_name}\n    {{\n"
+        "        solver          GAMG;\n        smoother        GaussSeidel;\n"
+        f"        tolerance       1e-7;\n        relTol          {p_rt};\n    }}\n"
+        f"    {p_name}Final\n    {{\n        ${p_name};\n        relTol          0;\n    }}\n"
+        f"    Phi\n    {{\n        ${p_name};\n        relTol          0.01;\n    }}\n"
+        '    "(U|k|omega|epsilon|nuTilda|e|h)"\n    {\n'
+        "        solver          smoothSolver;\n        smoother        symGaussSeidel;\n"
+        f"        tolerance       1e-8;\n        relTol          {u_rt};\n    }}\n"
+        '    "(U|k|omega|epsilon|nuTilda|e|h)Final"\n    {\n        $U;\n        relTol          0;\n    }\n'
         "}\n\n"
-        + coupling_block + "\n"
-        "relaxationFactors\n{\n"
-        f"    fields\n    {{\n        p               {relax.get('p', 0.5)};\n    }}\n"
-        f"    equations\n    {{\n        U               {relax.get('U', 0.7)};\n"
-        f"        \"(k|omega|epsilon|nuTilda)\" {relax.get('k', 0.7)};\n"
-        f"        e               {relax.get('e', 0.7)};\n    }}\n}}\n"
+        "PIMPLE\n{\n"
+        + (f"    nNonOrthogonalCorrectors {nno};\n"
+           "    pRefCell        0;\n    pRefValue       0;\n"
+           f'    residualControl\n    {{\n        p               {res["p"]};\n'
+           f'        U               {res["U"]};\n        "(k|omega|epsilon)" {res["turbulence"]};\n    }}\n'
+           if steady else
+           f"    nOuterCorrectors {nouter};\n    nCorrectors     {ncorr};\n"
+           f"    nNonOrthogonalCorrectors {nno};\n"
+           "    pRefCell        0;\n    pRefValue       0;\n"
+           "    momentumPredictor " + ("yes" if methods.get("momentumPredictor", True) else "no") + ";\n")
+        + "}\n\n"
+        + _relaxation(controls, steady, compressible)
     )
 
-    return {
+    out = {
         "system/controlDict": foam_file("dictionary", "controlDict", control, "system"),
         "system/fvSchemes": foam_file("dictionary", "fvSchemes", schemes, "system"),
         "system/fvSolution": foam_file("dictionary", "fvSolution", solution_txt, "system"),
     }
+    return out
+
+
+def _relaxation(controls: Dict[str, Any], steady: bool, compressible: bool) -> str:
+    r = controls.get("relax", {})
+    if steady:
+        p = r.get("p", 0.7)
+        u = r.get("U", 0.3)
+        t = r.get("k", 0.3)
+    else:
+        p = r.get("p", 1.0)
+        u = r.get("U", 1.0)
+        t = r.get("k", 1.0)
+    lines = [
+        "relaxationFactors\n{",
+        "    fields\n    {",
+        f"        {'rho' if compressible else 'p'}             {p};" if not compressible else f"        p_rgh           {p};",
+        "    }",
+        "    equations\n    {",
+        f"        U               {u};",
+        f'        "(k|omega|epsilon|nuTilda)" {t};',
+    ]
+    if compressible:
+        lines.append(f"        e               {r.get('e', 0.5)};")
+    lines += ["    }", "}\n"]
+    return "\n".join(lines)

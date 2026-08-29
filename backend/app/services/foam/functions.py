@@ -30,7 +30,7 @@ def build_functions(
         blocks.append(
             "    forceCoeffs\n    {\n"
             "        type            forceCoeffs;\n"
-            "        libs            (forces);\n"
+            "        libs            ('libforces.so');\n"
             "        writeControl    timeStep;\n        writeInterval   1;\n"
             f"        patches         ({patch});\n"
             f"        rho             {'rhoInf' if not compressible else 'rho'};\n"
@@ -50,7 +50,7 @@ def build_functions(
         fld = s.get("field", "p")
         blocks.append(
             f"    surface{i}\n    {{\n"
-            "        type            surfaceFieldValue;\n        libs            (fieldFunctionObjects);\n"
+            "        type            surfaceFieldValue;\n        libs            ('libfieldFunctionObjects.so');\n"
             "        writeControl    timeStep;\n        writeInterval   1;\n"
             "        regionType      patch;\n"
             f"        name            {s.get('patch', 'outlet')};\n"
@@ -64,7 +64,7 @@ def build_functions(
         pts = " ".join(f"({p.get('x', 0)} {p.get('y', 0)} 0)" for p in probes)
         blocks.append(
             "    probes\n    {\n"
-            "        type            probes;\n        libs            (sampling);\n"
+            "        type            probes;\n        libs            ('libsampling.so');\n"
             "        writeControl    timeStep;\n        writeInterval   1;\n"
             f"        probeLocations  ( {pts} );\n"
             "        fields          (p U);\n"
@@ -73,7 +73,7 @@ def build_functions(
 
     blocks.append(
         "    residuals\n    {\n"
-        "        type            solverInfo;\n        libs            (utilityFunctionObjects);\n"
+        "        type            solverInfo;\n        libs            ('libutilityFunctionObjects.so');\n"
         "        fields          (\".*\");\n        writeResidualFields no;\n"
         "    }"
     )

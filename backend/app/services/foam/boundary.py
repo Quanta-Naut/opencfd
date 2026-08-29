@@ -1,10 +1,14 @@
 """Map a patch (role + kind + params) to the OpenFOAM boundary condition for
-each solved field. One place so the ``0/`` files stay consistent."""
+each solved field, for OpenFOAM Foundation 13.
+
+Constraint patches (symmetry / empty / wedge) are NOT handled here - the field
+files pull `#includeEtc "caseDicts/setConstraintTypes"` which sets them from the
+polyMesh patch type.
+"""
 from typing import Any, Dict, List
 
 
 def normalise_patches(patches: List[Dict[str, Any]] | None, ref_velocity: float) -> List[Dict[str, Any]]:
-    """Fill defaults / add the implicit empty patch for 2D."""
     out: List[Dict[str, Any]] = []
     for p in patches or []:
         role = str(p.get("role", "wall"))
@@ -26,27 +30,21 @@ def field_bc(field: str, patch: Dict[str, Any], phys: Dict[str, Any], turb: Dict
     bc = patch["bc"]
     kind = bc.get("kind")
     U = float(phys.get("inletVelocity", 20.0))
-    wall_functions = phys.get("wallModel") == "wall_functions" or phys.get("wallTreatment") == "wall_functions"
+    compressible = phys.get("compressibility") == "compressible"
 
-    # ---- momentum -------------------------------------------------------------
+    # ---- momentum ---------------------------------------------------------
     if field == "U":
         if role == "inlet":
             if kind == "massFlowInlet":
-                return {"type": "flowRateInletVelocity", "massFlowRate": bc.get("massFlowRate", 1.0),
-                        "value": f"uniform {_vec(U)}"}
+                return {"type": "flowRateInletVelocity",
+                        "massFlowRate": bc.get("massFlowRate", 1.0), "value": f"uniform {_vec(U)}"}
             if kind == "totalPressureInlet":
                 return {"type": "pressureInletVelocity", "value": f"uniform {_vec(0)}"}
             return {"type": "fixedValue", "value": f"uniform {_vec(bc.get('velocity', U))}"}
         if role == "outlet":
-            return {"type": "inletOutlet", "inletValue": f"uniform {_vec(0)}", "value": f"uniform {_vec(0)}"} \
-                if kind != "outflow" else {"type": "zeroGradient"}
+            return {"type": "pressureInletOutletVelocity", "value": f"uniform {_vec(0)}"}
         if role == "farfield":
             return {"type": "freestreamVelocity", "freestreamValue": f"uniform {_vec(bc.get('velocity', U))}"}
-        if role == "symmetry":
-            return {"type": "symmetry"}
-        if role == "periodic":
-            return {"type": "cyclic"}
-        # wall
         if kind == "slipWall":
             return {"type": "slip"}
         if kind == "movingWall":
@@ -57,65 +55,65 @@ def field_bc(field: str, patch: Dict[str, Any], phys: Dict[str, Any], turb: Dict
                     "origin": "(0 0 0)", "axis": "(0 0 1)", "omega": rpm * 3.14159265 / 30.0}
         return {"type": "noSlip"}
 
-    # ---- pressure -----------------------------------------------------------
-    if field == "p":
-        if role == "outlet" and kind == "pressureOutlet":
+    # ---- pressure (p for incompressible, p_rgh for compressible) ---------
+    if field in ("p", "p_rgh"):
+        if compressible and field == "p":
+            return {"type": "calculated", "value": "$internalField"}
+        if role == "outlet":
             return {"type": "fixedValue", "value": f"uniform {bc.get('staticPressure', 0)}"}
         if role == "inlet" and kind == "totalPressureInlet":
-            return {"type": "totalPressure", "p0": f"uniform {bc.get('totalPressure', 0)}", "value": "uniform 0"}
+            return {"type": "totalPressure", "p0": f"uniform {bc.get('totalPressure', 0)}"}
         if role == "farfield":
             return {"type": "freestreamPressure", "freestreamValue": "uniform 0"}
-        if role == "symmetry":
-            return {"type": "symmetry"}
-        if role == "periodic":
-            return {"type": "cyclic"}
         return {"type": "zeroGradient"}
 
-    # ---- temperature (compressible) ---------------------------------------
+    # ---- temperature (compressible) ------------------------------------
     if field == "T":
         T_inf = float(phys.get("inletTemperature", 288.15))
-        if role in ("inlet",):
+        if role == "inlet":
             return {"type": "fixedValue", "value": f"uniform {T_inf}"}
         if role == "outlet":
             return {"type": "inletOutlet", "inletValue": f"uniform {T_inf}", "value": f"uniform {T_inf}"}
         if role == "farfield":
             return {"type": "freestream", "freestreamValue": f"uniform {T_inf}"}
-        if role in ("symmetry", "periodic"):
-            return {"type": "symmetry" if role == "symmetry" else "cyclic"}
         thermal = bc.get("thermal", "adiabatic")
         if thermal == "fixedTemperature":
             return {"type": "fixedValue", "value": f"uniform {bc.get('wallTemperature', T_inf)}"}
         if thermal == "fixedHeatFlux":
             return {"type": "externalWallHeatFluxTemperature", "mode": "flux",
-                    "q": f"uniform {bc.get('wallHeatFlux', 0)}", "value": f"uniform {T_inf}"}
+                    "q": f"uniform {bc.get('wallHeatFlux', 0)}", "kappaMethod": "fluidThermo",
+                    "value": f"uniform {T_inf}"}
         return {"type": "zeroGradient"}
 
-    # ---- turbulence: k, epsilon, omega, nut, nuTilda ---------------------
-    inlet_val = {"k": turb["k"], "epsilon": turb["epsilon"], "omega": turb["omega"],
-                 "nut": turb["nut"], "nuTilda": 4.0 * phys.get("kinematicViscosity", 1.5e-5)}[field]
+    # ---- turbulence: k, epsilon, omega, nut, nuTilda -----------------
+    inlet_val = {
+        "k": turb["k"], "epsilon": turb["epsilon"], "omega": turb["omega"], "nut": turb["nut"],
+        "nuTilda": 4.0 * float(phys.get("kinematicViscosity", 1.5e-5)),
+    }[field]
 
     if role == "inlet":
+        if field == "nut":
+            return {"type": "calculated", "value": f"uniform {inlet_val}"}
         return {"type": "fixedValue", "value": f"uniform {inlet_val}"}
     if role == "outlet":
+        if field == "nut":
+            return {"type": "calculated", "value": f"uniform {inlet_val}"}
         return {"type": "inletOutlet", "inletValue": f"uniform {inlet_val}", "value": f"uniform {inlet_val}"}
     if role == "farfield":
-        return {"type": "freestream", "freestreamValue": f"uniform {inlet_val}"} if field != "nut" \
-            else {"type": "calculated", "value": f"uniform {inlet_val}"}
-    if role == "symmetry":
-        return {"type": "symmetry"}
-    if role == "periodic":
-        return {"type": "cyclic"}
+        if field == "nut":
+            return {"type": "calculated", "value": f"uniform {inlet_val}"}
+        return {"type": "freestream", "freestreamValue": f"uniform {inlet_val}"}
 
     # wall
     ks = bc.get("roughnessHeight", 0.0) or 0.0
     if field == "nut":
-        if ks > 0 and wall_functions:
-            return {"type": "nutkRoughWallFunction", "Ks": f"uniform {ks}",
-                    "Cs": f"uniform {bc.get('roughnessConstant', 0.5)}", "value": "uniform 0"}
-        return {"type": "nutkWallFunction" if wall_functions else "nutLowReWallFunction", "value": "uniform 0"}
+        if ks > 0:
+            return {"type": "nutURoughWallFunction", "roughnessHeight": f"uniform {ks}",
+                    "roughnessConstant": f"uniform {bc.get('roughnessConstant', 0.5)}",
+                    "roughnessFactor": "uniform 1", "value": "uniform 0"}
+        return {"type": "nutkWallFunction", "value": "uniform 0"}
     if field == "k":
-        return {"type": "kqRWallFunction", "value": f"uniform {inlet_val}"} if wall_functions \
-            else {"type": "kLowReWallFunction", "value": f"uniform {inlet_val}"}
+        return {"type": "kqRWallFunction", "value": f"uniform {inlet_val}"}
     if field == "epsilon":
         return {"type": "epsilonWallFunction", "value": f"uniform {inlet_val}"}
     if field == "omega":

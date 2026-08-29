@@ -39,7 +39,9 @@ def to_block(d: Dict[str, Any], indent: int = 4) -> str:
     return "\n".join(out)
 
 
-def boundary_field(patch_dicts: Dict[str, Dict[str, Any]]) -> str:
-    return "boundaryField\n{\n" + "\n\n".join(
+def boundary_field(patch_dicts: Dict[str, Dict[str, Any]], trailer: str = "") -> str:
+    body = "\n\n".join(
         f"    {name}\n    {{\n{to_block(spec, 8)}\n    }}" for name, spec in patch_dicts.items()
-    ) + "\n}"
+    )
+    tail = f"\n\n    {trailer}" if trailer else ""
+    return "boundaryField\n{\n" + body + tail + "\n}"
