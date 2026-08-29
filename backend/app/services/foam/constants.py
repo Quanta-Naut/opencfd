@@ -17,7 +17,10 @@ def write_constants(phys: Dict[str, Any], regime: str) -> Dict[str, str]:
     model = _MODEL_FOAM.get(str(phys.get("turbulenceModelId", "kOmegaSST")), "kOmegaSST")
     turb_on = regime == "turbulent"
 
-    out["constant/momentumTransport" if not compressible else "constant/turbulenceProperties"] = foam_file(
+    # The turbulence dict is named `turbulenceProperties` on the ESI fork and
+    # `momentumTransport` on the Foundation fork. Write both with identical
+    # content so the case runs on either - OpenFOAM reads only the one it wants.
+    turb_body = foam_file(
         "dictionary", "turbulenceProperties", location="constant",
         body=(
             "simulationType  RAS;\n\n"
@@ -28,6 +31,8 @@ def write_constants(phys: Dict[str, Any], regime: str) -> Dict[str, str]:
             "}\n"
         ),
     )
+    out["constant/turbulenceProperties"] = turb_body
+    out["constant/momentumTransport"] = turb_body
 
     if not compressible:
         out["constant/transportProperties"] = foam_file(

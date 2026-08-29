@@ -72,17 +72,19 @@ class OpenFoamAdapter(SolverAdapter):
     def available(self) -> Dict[str, Any]:
         try:
             probe = self._run_sync(
-                'command -v simpleFoam >/dev/null 2>&1 && (foamVersion 2>/dev/null | head -1 || echo found) || echo missing',
+                'if command -v simpleFoam >/dev/null 2>&1; then '
+                'echo "OPENFOAM_OK ${WM_PROJECT_VERSION:-${FOAM_API:-unknown}}"; '
+                'else echo OPENFOAM_MISSING; fi',
                 timeout=25,
             )
         except FileNotFoundError as e:
             return {"ok": False, "detail": f"shell not found: {e}"}
         except subprocess.TimeoutExpired:
             return {"ok": False, "detail": "OpenFOAM probe timed out"}
-        out = (probe.stdout or "").strip().splitlines()
-        tail = out[-1] if out else ""
-        if probe.returncode == 0 and tail and tail != "missing":
-            return {"ok": True, "detail": f"OpenFOAM ready ({tail})", "version": tail}
+        out = (probe.stdout or "")
+        if "OPENFOAM_OK" in out:
+            ver = out.split("OPENFOAM_OK", 1)[1].strip().split() or ["unknown"]
+            return {"ok": True, "detail": f"OpenFOAM {ver[0]} ready", "version": ver[0]}
         return {
             "ok": False,
             "detail": "OpenFOAM not found on PATH (set OPENCFD_FOAM_BASHRC or install it)",

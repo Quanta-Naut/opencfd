@@ -92,7 +92,9 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         + "    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}\n\n"
         "laplacianSchemes\n{\n    default         Gauss linear corrected;\n}\n\n"
         "interpolationSchemes\n{\n    default         linear;\n}\n\n"
-        "snGradSchemes\n{\n    default         corrected;\n}\n"
+        "snGradSchemes\n{\n    default         corrected;\n}\n\n"
+        # kOmegaSST and other models need a near-wall distance method
+        "wallDist\n{\n    method          meshWave;\n}\n"
     )
 
     relax = controls.get("relax", {"p": 0.5, "U": 0.7, "k": 0.7, "omega": 0.7, "e": 0.7})

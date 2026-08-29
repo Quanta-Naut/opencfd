@@ -22,6 +22,36 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   const [activeTab, setActiveTab] = useState<'residuals' | 'forces' | 'console' | 'dicts'>('residuals');
   const [selectedDict, setSelectedDict] = useState<string>('system/controlDict');
 
+  // Drag-resizable body height.
+  const MIN_H = 120;
+  const [bodyH, setBodyH] = useState<number>(() => {
+    const saved = Number(typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_drawer_h'));
+    return saved >= MIN_H ? saved : 220;
+  });
+  const dragRef = React.useRef<{ startY: number; startH: number } | null>(null);
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!dragRef.current) return;
+      const maxH = Math.max(MIN_H, window.innerHeight - 160);
+      const next = Math.min(maxH, Math.max(MIN_H, dragRef.current.startH + (dragRef.current.startY - e.clientY)));
+      setBodyH(next);
+    };
+    const onUp = () => {
+      if (dragRef.current) {
+        dragRef.current = null;
+        try { localStorage.setItem('opencfd_drawer_h', String(bodyH)); } catch { /* ignore */ }
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [bodyH]);
+  const startDrag = (e: React.MouseEvent) => {
+    dragRef.current = { startY: e.clientY, startH: bodyH };
+    document.body.style.userSelect = 'none';
+  };
+
   // When a run starts, open the drawer so its output is visible. On an error,
   // jump to the console where the failure is spelled out.
   const prevStatus = React.useRef(executionStatus);
@@ -41,10 +71,10 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   // above it instead of overlapping the console. 24px status bar + 32px header
   // + 176px expanded body.
   useEffect(() => {
-    const h = 24 + 32 + (isExpanded ? 176 : 0);
+    const h = 24 + 32 + (isExpanded ? bodyH : 0);
     document.documentElement.style.setProperty('--app-bottom-bar', `${h}px`);
     return () => { document.documentElement.style.removeProperty('--app-bottom-bar'); };
-  }, [isExpanded]);
+  }, [isExpanded, bodyH]);
 
   // Live ticker stats - real values from the last residual point the solver sent
   const last = residuals.length > 0 ? residuals[residuals.length - 1] : undefined;
@@ -52,6 +82,10 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   const cd = typeof last?.cd === 'number' ? last.cd : null;
   const cl = typeof last?.cl === 'number' ? last.cl : null;
   const fmtCoef = (v: number | null) => (v === null ? '-' : v.toFixed(4));
+  const forceSeries = React.useMemo(
+    () => residuals.filter((r) => typeof r.cd === 'number' || typeof r.cl === 'number'),
+    [residuals],
+  );
 
   return (
     <div className="w-full bg-white border-t border-[#E1E4E8] flex flex-col select-none shrink-0 z-20">
@@ -141,9 +175,15 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
         </div>
       </div>
 
-      {/* 2. EXPANDED CONTENT DRAWER (HEIGHT ~ 160PX) */}
+      {/* 2. EXPANDED CONTENT DRAWER - drag the top edge to resize */}
       {isExpanded && (
-        <div className="h-44 bg-white relative overflow-hidden">
+        <>
+        <div
+          onMouseDown={startDrag}
+          className="h-1.5 -mt-1.5 cursor-ns-resize bg-transparent hover:bg-[#2563EB]/40 transition-colors"
+          title="Drag to resize"
+        />
+        <div className="bg-white relative overflow-hidden" style={{ height: bodyH }}>
           {/* TAB 1: RESIDUALS CONVERGENCE */}
           {activeTab === 'residuals' && (
             <div className="w-full h-full p-2">
@@ -191,28 +231,33 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
 
           {/* TAB 2: AERODYNAMIC FORCES */}
           {activeTab === 'forces' && (
-            <div className="w-full h-full p-2 flex items-center justify-center">
-              {cd === null && cl === null ? (
-                <span className="text-[#A5ACB5] text-xs font-mono">
-                  Force coefficients appear here once the solver reports them
-                </span>
-              ) : (
-                <div className="grid grid-cols-3 gap-6 text-center">
-                  <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
-                    <span className="text-[10px] uppercase text-[#69717D] font-mono block">Drag Coefficient (Cd)</span>
-                    <span className="text-xl font-bold font-mono text-[#171A1F]">{fmtCoef(cd)}</span>
-                  </div>
-                  <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
-                    <span className="text-[10px] uppercase text-[#69717D] font-mono block">Lift Coefficient (Cl)</span>
-                    <span className="text-xl font-bold font-mono text-[#171A1F]">{fmtCoef(cl)}</span>
-                  </div>
-                  <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
-                    <span className="text-[10px] uppercase text-[#69717D] font-mono block">Lift-to-Drag Ratio (L/D)</span>
-                    <span className="text-xl font-bold font-mono text-[#2563EB]">
-                      {cd && cl ? (cl / cd).toFixed(2) : '-'}
-                    </span>
-                  </div>
+            <div className="w-full h-full p-2 flex flex-col">
+              {forceSeries.length < 2 ? (
+                <div className="flex-1 flex items-center justify-center text-[#A5ACB5] text-xs font-mono">
+                  Cd / Cl plot here once the solver reports force coefficients
                 </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-6 px-2 pb-1 text-[11px] font-mono">
+                    <span className="text-[#69717D]">Cd <strong className="text-[#171A1F]">{fmtCoef(cd)}</strong></span>
+                    <span className="text-[#69717D]">Cl <strong className="text-[#171A1F]">{fmtCoef(cl)}</strong></span>
+                    <span className="text-[#69717D]">L/D <strong className="text-[#2563EB]">{cd && cl ? (cl / cd).toFixed(2) : '-'}</strong></span>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <RechartsLineChart data={forceSeries} margin={{ top: 5, right: 15, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#F0F2F5" />
+                        <XAxis dataKey="iteration" stroke="#A5ACB5" fontSize={10} tickLine={false} />
+                        <YAxis stroke="#A5ACB5" fontSize={10} tickLine={false} width={48}
+                          tickFormatter={(v) => (typeof v === 'number' ? v.toFixed(2) : v)} />
+                        <Tooltip contentStyle={{ backgroundColor: '#FFFFFF', border: '1px solid #E1E4E8', borderRadius: '6px', fontSize: '11px' }} />
+                        <Legend wrapperStyle={{ fontSize: '10px', paddingTop: '2px' }} />
+                        <Line type="monotone" dataKey="cd" name="Cd" stroke="#DC2626" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                        <Line type="monotone" dataKey="cl" name="Cl" stroke="#2563EB" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                      </RechartsLineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -264,6 +309,7 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
             </div>
           )}
         </div>
+        </>
       )}
     </div>
   );
