@@ -39,19 +39,23 @@ jobs:
           python-version: "3.11"
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Linux system deps for Tauri
+      - name: Linux system deps for Tauri and gmsh
         if: matrix.target == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
-            build-essential curl wget file libssl-dev libgtk-3-dev
+            build-essential curl wget file libssl-dev libgtk-3-dev \
+            libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 libxinerama1 libgomp1
 
       - name: Install JS deps
         run: |
           npm ci
           npm --prefix frontend ci
           npm --prefix frontend run build
+
+      - name: Generate app icons
+        run: npx tauri icon src-tauri/icons/icon.png
 
       - name: Bake the OpenFOAM pack coordinates
         shell: bash
