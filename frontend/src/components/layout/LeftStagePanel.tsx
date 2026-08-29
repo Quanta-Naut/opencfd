@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StageId, StageStatus } from './WorkflowStrip';
+import { SolverPanel } from '../solver/SolverPanel';
 import { Tooltip } from '../ui/Tooltip';
 import { CFDProjectState, TurbulenceModel, SolverType } from '../../types/cfd';
 import {
@@ -54,6 +55,11 @@ interface LeftStagePanelProps {
   meshError?: string | null;
   meshStale?: boolean;
   onRunSolver: () => void;
+  onStopSolver?: () => void;
+  onSetSolution?: (patch: (c: import('../../solver/solverConfig').SolverConfig) => import('../../solver/solverConfig').SolverConfig) => void;
+  solverPatchNames?: string[];
+  solverWallPatches?: string[];
+  solverConvergence?: { iteration: number; maxResidual: number; cd?: number; cl?: number } | null;
   isMeshing: boolean;
   onSelectBoundary: (name: string) => void;
   selectedBoundary: string;
@@ -503,6 +509,11 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   meshError,
   meshStale,
   onRunSolver,
+  onStopSolver,
+  onSetSolution,
+  solverPatchNames,
+  solverWallPatches,
+  solverConvergence,
   isMeshing,
   onSelectBoundary,
   selectedBoundary,
@@ -1322,57 +1333,17 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
         />
       )}
 
-      {activeStage === 'solver' && !stageStatus?.solver?.locked && (
-        <div className="p-4 space-y-4 text-xs text-[#171A1F]">
-          <div>
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
-              OpenFOAM Solver
-            </span>
-            <select
-              value={state.physics.solver}
-              onChange={(e) => updatePhysics({ solver: e.target.value as SolverType })}
-              className="w-full px-2.5 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md font-mono text-[#171A1F]"
-            >
-              <option value="simpleFoam">simpleFoam (Steady Incompressible)</option>
-              <option value="pisoFoam">pisoFoam (Transient PISO)</option>
-              <option value="icoFoam">icoFoam (Laminar Transient)</option>
-              <option value="pimpleFoam">pimpleFoam (PIMPLE)</option>
-            </select>
-          </div>
-
-          <div className="border-t border-[#E1E4E8] pt-3 space-y-2.5">
-            <div className="flex justify-between items-center">
-              <span className="text-[#69717D]">Max Iterations</span>
-              <input
-                type="number"
-                step="50"
-                value={state.solver.iterations}
-                onChange={(e) => updateSolver({ iterations: parseInt(e.target.value) || 150 })}
-                className="w-20 px-2 py-1 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-right font-mono"
-              />
-            </div>
-
-            <div className="flex justify-between items-center">
-              <span className="text-[#69717D]">Write Interval</span>
-              <input
-                type="number"
-                step="10"
-                value={state.solver.writeInterval}
-                onChange={(e) => updateSolver({ writeInterval: parseInt(e.target.value) || 25 })}
-                className="w-20 px-2 py-1 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-right font-mono"
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={onRunSolver}
-            disabled={state.executionStatus === 'running'}
-            className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors disabled:opacity-40"
-          >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Run OpenFOAM Solver</span>
-          </button>
-        </div>
+      {activeStage === 'solver' && !stageStatus?.solver?.locked && onSetSolution && (
+        <SolverPanel
+          state={state}
+          setSolution={onSetSolution}
+          patchNames={solverPatchNames ?? []}
+          wallPatches={solverWallPatches ?? []}
+          running={state.executionStatus === 'running'}
+          onRun={onRunSolver}
+          onStop={onStopSolver ?? (() => {})}
+          convergence={solverConvergence ?? null}
+        />
       )}
 
       {/* 07 RESULTS */}

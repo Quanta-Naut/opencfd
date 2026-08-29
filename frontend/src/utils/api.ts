@@ -392,6 +392,7 @@ export async function generateCaseFiles(
   solverControls: any,
   patches: any[] = [],
   refLength = 1,
+  solution: any = {},
 ) {
   try {
     const res = await fetch(`${API_BASE}/api/solver/case-files`, {
@@ -404,6 +405,7 @@ export async function generateCaseFiles(
         solver_controls: solverControls,
         patches,
         ref_length: refLength,
+        solution,
       }),
     });
     if (!res.ok) throw new Error('API failed');

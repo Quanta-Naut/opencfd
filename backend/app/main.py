@@ -55,6 +55,7 @@ class CaseFilesRequest(BaseModel):
     solver_controls: Dict[str, Any] = {}
     patches: List[Dict[str, Any]] = []
     ref_length: float = 1.0
+    solution: Dict[str, Any] = {}
 
 class PostProcessRequest(BaseModel):
     mesh_data: Dict[str, Any] = {}
@@ -230,6 +231,7 @@ async def case_files_endpoint(req: CaseFilesRequest):
             solver_controls=req.solver_controls,
             patches=req.patches,
             ref_length=req.ref_length,
+            solution=req.solution,
         )
         return {"success": True, "files": files}
     except Exception as e:
@@ -306,11 +308,18 @@ async def websocket_solver_stream(websocket: WebSocket):
     try:
         msg = await websocket.receive_text()
         config = json.loads(msg)
-        iterations = int(config.get("iterations", 100))
-        regime = config.get("regime", "turbulent")
-        velocity = float(config.get("velocity", 20.0))
-
-        async for item in simulate_cfd_run(iterations=iterations, regime=regime, velocity=velocity):
+        async for item in simulate_cfd_run(
+            iterations=int(config.get("iterations", 1000)),
+            regime=config.get("regime", "turbulent"),
+            velocity=float(config.get("velocity", 20.0)),
+            reynolds=float(config.get("reynolds", 1.0e6)),
+            cells=int(config.get("cells", 20000)),
+            relax=config.get("relax") or {},
+            momentumOrder=config.get("momentumOrder", "secondOrder"),
+            turbulenceModel=config.get("turbulenceModel", "kOmegaSST"),
+            forces=bool(config.get("forces", True)),
+            init=config.get("init", "uniform"),
+        ):
             await websocket.send_json(item)
     except WebSocketDisconnect:
         pass

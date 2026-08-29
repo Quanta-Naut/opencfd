@@ -204,6 +204,8 @@ export interface CFDProjectState {
   caseSetup: CaseSetupConfig;
   yplus: YPlusCalculation;
   solver: SolverControls;
+  /** Solution-tab configuration (methods, controls, monitors, run). */
+  solution: import('../solver/solverConfig').SolverConfig;
   postprocess: PostProcessConfig;
   executionStatus: 'idle' | 'meshing' | 'running' | 'completed' | 'error';
   residuals: ResidualDataPoint[];

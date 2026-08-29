@@ -9,6 +9,7 @@ import { StatusBar } from './components/layout/StatusBar';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
 import { wallResolution } from './caseSetup/flowCalc';
 import { defaultPatchBC } from './caseSetup/bcCatalog';
+import { defaultSolverConfig, directionsForAoA } from './solver/solverConfig';
 import {
   CFDProjectState,
   GeometryConfig,
@@ -365,6 +366,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       },
       ...(savedSession?.state?.solver || {}),
     },
+    solution: {
+      ...defaultSolverConfig(),
+      ...(savedSession?.state?.solution || {}),
+    },
     postprocess: {
       activeField: 'U_mag',
       colormap: 'viridis',
@@ -408,8 +413,18 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     if (cs.refLengthOverride && cs.refLengthOverride > 0) return cs.refLengthOverride;
     return (flowType === 'internal' ? state.geometry.domainHeight : state.geometry.chord) || 1;
   }, [state.caseSetup.refLengthOverride, flowType, state.geometry.domainHeight, state.geometry.chord]);
-  const makeCaseFiles = () =>
-    generateCaseFiles(state.physics, state.boundaries, state.solver, patchSpec, caseRefLength);
+  const makeCaseFiles = () => {
+    // fold the angle-of-attack into the force directions before sending
+    const dirs = directionsForAoA(state.geometry.angleOfAttackDeg || 0);
+    const sol = {
+      ...state.solution,
+      monitors: {
+        ...state.solution.monitors,
+        forces: { ...state.solution.monitors.forces, ...dirs },
+      },
+    };
+    return generateCaseFiles(state.physics, state.boundaries, state.solver, patchSpec, caseRefLength, sol);
+  };
 
   // ── Auto-save session to the project folder on disk (~/.OpenCFD/projects) ──
   const buildSession = (): StudioSession => ({
@@ -895,10 +910,18 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     state.physics.kinematicViscosity, flowType, state.geometry.chord, state.geometry.domainHeight,
   ]);
 
-  const handleRunSolver = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
+  const handleSetSolution = (patch: (c: import('./solver/solverConfig').SolverConfig) => import('./solver/solverConfig').SolverConfig) =>
+    setState((prev) => ({ ...prev, solution: patch(prev.solution) }));
+
+  const solverConvergence = useMemo(() => {
+    const r = state.residuals[state.residuals.length - 1];
+    if (!r) return null;
+    const maxResidual = Math.max(r.p, r.Ux, r.Uy, r.k ?? 0, r.omega ?? 0, r.epsilon ?? 0);
+    return { iteration: r.iteration, maxResidual, cd: (r as any).cd, cl: (r as any).cl };
+  }, [state.residuals]);
+
+  const handleRunSolver = async () => {
+    if (wsRef.current) wsRef.current.close();
 
     setState((prev) => ({
       ...prev,
@@ -906,9 +929,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       residuals: [],
       terminalLogs: [
         ...prev.terminalLogs,
-        `[OpenFOAM] Executing ${state.physics.solver} (RANS ${state.physics.turbulenceModel})...`,
+        `[OpenFOAM] Writing case (${patchSpec.length} patches), solver ${state.solution.methods.coupling}...`,
       ],
     }));
+
+    // regenerate the case dictionaries with the current solution config
+    try { await makeCaseFiles(); } catch { /* mock still runs */ }
 
     const ws = new WebSocket('ws://localhost:8000/ws/solver');
     wsRef.current = ws;
@@ -916,9 +942,16 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     ws.onopen = () => {
       ws.send(
         JSON.stringify({
-          iterations: state.solver.iterations,
+          iterations: state.solution.run.iterations,
           regime: state.physics.regime,
-          velocity: state.boundaries.inletVelocity,
+          velocity: state.physics.inletVelocity,
+          reynolds: (state.physics.inletVelocity * caseRefLength) / Math.max(state.physics.kinematicViscosity, 1e-12),
+          cells: meshData?.num_elements ?? 20000,
+          relax: state.solution.controls.relax,
+          momentumOrder: state.solution.methods.momentum,
+          turbulenceModel: state.physics.turbulenceModelId,
+          forces: state.solution.monitors.forces.enabled,
+          init: state.solution.run.init,
         })
       );
     };
@@ -1026,6 +1059,11 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           meshError={meshError}
           meshStale={meshStale}
           onRunSolver={handleRunSolver}
+          onStopSolver={handleStopSolver}
+          onSetSolution={handleSetSolution}
+          solverPatchNames={patchRoles.map((p) => p.name)}
+          solverWallPatches={patchRoles.filter((p) => p.role === 'wall').map((p) => p.name)}
+          solverConvergence={solverConvergence}
           isMeshing={isMeshing}
           onSelectBoundary={setSelectedBoundary}
           selectedBoundary={selectedBoundary}

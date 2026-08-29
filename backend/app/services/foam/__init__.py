@@ -7,6 +7,7 @@ from .boundary import normalise_patches
 from .fields import write_fields
 from .constants import write_constants
 from .system import write_system, pick_solver
+from .functions import build_functions
 
 _TURB_FIELDS = {
     "kOmegaSST": ["k", "omega", "nut"], "kOmega": ["k", "omega", "nut"],
@@ -36,6 +37,7 @@ def generate_openfoam_case_files(
     solver_controls: Dict[str, Any],
     patches: List[Dict[str, Any]] | None = None,
     ref_length: float = 1.0,
+    solution: Dict[str, Any] | None = None,
 ) -> Dict[str, str]:
     for sub in ("0", "constant", "system"):
         os.makedirs(os.path.join(case_dir, sub), exist_ok=True)
@@ -58,12 +60,15 @@ def generate_openfoam_case_files(
             {"name": "wall", "role": "wall", "bc": {"kind": "noSlipWall"}},
         ], U)
 
+    wall_patches = [p["name"] for p in patch_specs if p["role"] == "wall"]
+    functions_block = build_functions(solution or {}, physics, wall_patches, ref_len)
+
     files: Dict[str, str] = {}
     files.update(write_fields(patch_specs, physics, turb,
                              [f for f in turb_fields] if regime == "turbulent" else [],
                              compressible))
     files.update(write_constants(physics, regime))
-    files.update(write_system(physics, solver_controls))
+    files.update(write_system(physics, solver_controls, solution or {}, functions_block))
 
     for rel, content in files.items():
         path = os.path.join(case_dir, rel)
