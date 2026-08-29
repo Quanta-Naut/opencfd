@@ -113,13 +113,25 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         + "}\n"
     )
 
+    p_reltol = "0.05" if steady else "0.01"
+    u_reltol = "0.1" if steady else "0.01"
+    p_solver = (
+        "        solver          GAMG;\n        smoother        GaussSeidel;\n"
+        "        tolerance       1e-7;\n"
+    )
+    u_solver = (
+        "        solver          smoothSolver;\n        smoother        symGaussSeidel;\n"
+        "        tolerance       1e-8;\n"
+    )
+    # PIMPLE/PISO look up <field>Final for the last corrector; the `(Final)?`
+    # groups make one entry serve both the inner and final solves.
     solution_txt = (
         "solvers\n{\n"
-        '    "(p|p_rgh|Phi)"\n    {\n        solver          GAMG;\n        smoother        GaussSeidel;\n'
-        '        tolerance       1e-7;\n        relTol          ' + ("0.05" if steady else "0.01") + ";\n    }\n"
-        '    "(U|k|omega|epsilon|nuTilda|e|h)"\n    {\n        solver          smoothSolver;\n'
-        '        smoother        symGaussSeidel;\n        tolerance       1e-8;\n        relTol          '
-        + ("0.1" if steady else "0.01") + ";\n    }\n}\n\n"
+        f'    "(p|p_rgh|Phi)"\n    {{\n{p_solver}        relTol          {p_reltol};\n    }}\n'
+        f'    "(p|p_rgh|Phi)Final"\n    {{\n{p_solver}        relTol          0;\n    }}\n'
+        f'    "(U|k|omega|epsilon|nuTilda|e|h)"\n    {{\n{u_solver}        relTol          {u_reltol};\n    }}\n'
+        f'    "(U|k|omega|epsilon|nuTilda|e|h)Final"\n    {{\n{u_solver}        relTol          0;\n    }}\n'
+        "}\n\n"
         + coupling_block + "\n"
         "relaxationFactors\n{\n"
         f"    fields\n    {{\n        p               {relax.get('p', 0.5)};\n    }}\n"
