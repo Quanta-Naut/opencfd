@@ -101,11 +101,20 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
         {activeInfo?.detail && (
           <p className="text-[9px] text-[#8B95A1] leading-relaxed">{activeInfo.detail}</p>
         )}
-        {env && !isReal && env.platform === 'Windows' && (
-          <p className="text-[9px] text-[#B45309] leading-relaxed">
-            {env.adapters?.['openfoam-wsl']?.detail}
-          </p>
-        )}
+        {env && !isReal && (() => {
+          const wslInfo = env.adapters?.['openfoam-wsl'];
+          const localInfo = env.adapters?.['openfoam-local'];
+          const why = wslInfo || localInfo;
+          if (!why || why.ok) return null;
+          const diag = why.diagnostics || why.raw_list || why.stderr;
+          return (
+            <details className="text-[9px] text-[#B45309] leading-relaxed">
+              <summary className="cursor-pointer">Why is this the mock? ({why.detail})</summary>
+              {why.distro && <div className="mt-1 text-[#8B95A1]">distro: {why.distro} · alive: {String(why.managed_alive)}</div>}
+              {diag && <pre className="mt-1 whitespace-pre-wrap text-[#8B95A1] max-h-32 overflow-y-auto">{diag}</pre>}
+            </details>
+          );
+        })()}
 
         <Head>Run type</Head>
         <div className="grid grid-cols-2 gap-1.5">

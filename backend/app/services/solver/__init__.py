@@ -14,6 +14,7 @@ import os
 import platform
 from typing import Any, Dict
 
+from app.services.wsl import distro_alive, raw_list
 from .base import SolverAdapter
 from .mock import MockAdapter
 from .openfoam import LocalOpenFoam, WslOpenFoam, wsl_distros, wsl_present
@@ -51,12 +52,20 @@ def detect_environment() -> Dict[str, Any]:
 
     if wsl_present():
         distros = wsl_distros()
-        chosen = MANAGED_DISTRO if MANAGED_DISTRO in distros else (distros[0] if distros else None)
+        # Trust a direct probe of the managed distro over list parsing (wsl.exe
+        # list output is fussy and localised).
+        managed_alive = distro_alive(MANAGED_DISTRO)
+        chosen = (
+            MANAGED_DISTRO if (managed_alive or MANAGED_DISTRO in distros)
+            else (distros[0] if distros else None)
+        )
         wsl = WslOpenFoam(distro=chosen, foam_bashrc=_foam_bashrc())
-        info = wsl.available()
+        info = wsl.available() if chosen else {"ok": False, "detail": "no WSL distro found"}
         info["distros"] = distros
         info["distro"] = chosen
         info["managed"] = chosen == MANAGED_DISTRO
+        info["managed_alive"] = managed_alive
+        info["raw_list"] = raw_list()[-600:]
         env["adapters"]["openfoam-wsl"] = info
     elif system == "Windows":
         env["adapters"]["openfoam-wsl"] = {
@@ -91,14 +100,15 @@ def select_adapter(mode: str, config: Dict[str, Any] | None = None) -> SolverAda
         distros = wsl_distros()
         distro = (
             config.get("wslDistro")
-            or (MANAGED_DISTRO if MANAGED_DISTRO in distros else None)
+            or (MANAGED_DISTRO if (distro_alive(MANAGED_DISTRO) or MANAGED_DISTRO in distros) else None)
             or (distros[0] if distros else None)
         )
-        wsl = WslOpenFoam(distro=distro, foam_bashrc=bashrc)
-        if mode in ("auto", "real", "openfoam-wsl") and wsl.available().get("ok"):
-            return wsl
-        if mode in ("real", "openfoam-wsl"):
-            return wsl  # let run() surface the real error
+        if distro:
+            wsl = WslOpenFoam(distro=distro, foam_bashrc=bashrc)
+            if mode in ("auto", "real", "openfoam-wsl") and wsl.available().get("ok"):
+                return wsl
+            if mode in ("real", "openfoam-wsl"):
+                return wsl  # let run() surface the real error
 
     if mode == "real" and not _ON_WINDOWS:
         return LocalOpenFoam(foam_bashrc=bashrc)  # surfaces "not found" via run()

@@ -59,6 +59,30 @@ def list_distros() -> Tuple[List[str], bool]:
     return names, any_v2
 
 
+def distro_alive(name: str) -> bool:
+    """Direct check that a distro can run a command - independent of list parsing."""
+    if not wsl_present():
+        return False
+    try:
+        p = subprocess.run(
+            ["wsl.exe", "-d", name, "--", "true"], capture_output=True, timeout=25
+        )
+        return p.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def raw_list() -> str:
+    """The raw `wsl -l -v` text, decoded - for diagnostics."""
+    if not wsl_present():
+        return ""
+    try:
+        p = subprocess.run(["wsl.exe", "--list", "--verbose"], capture_output=True, timeout=20)
+        return _decode(p.stdout).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def wsl_status_line() -> str:
     if not wsl_present():
         return ""

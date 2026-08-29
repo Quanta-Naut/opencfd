@@ -131,10 +131,12 @@ class OpenFoamAdapter(SolverAdapter):
         if "OPENFOAM_OK" in out:
             ver = out.split("OPENFOAM_OK", 1)[1].strip().split() or ["unknown"]
             return {"ok": True, "detail": f"OpenFOAM {ver[0]} ready", "version": ver[0]}
+        combined = (out + "\n" + (probe.stderr or "")).strip()
         return {
             "ok": False,
-            "detail": "OpenFOAM not found on PATH (set OPENCFD_FOAM_BASHRC or install it)",
-            "stderr": (probe.stderr or "").strip()[-400:],
+            "detail": "OpenFOAM did not respond in this environment - see diagnostics",
+            "diagnostics": combined[-600:],
+            "probe_rc": probe.returncode,
         }
 
     # ---- the run --------------------------------------------------------
