@@ -17,6 +17,21 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.services.foam.system import pick_solver
 from .base import SolverAdapter
+
+
+def _classic_solver(phys: Dict[str, Any]) -> str:
+    """Classic ESI-fork solver binary for this case."""
+    comp = phys.get("compressibility", "incompressible")
+    steady = phys.get("timeFormulation", "steady") == "steady"
+    regime = phys.get("speedRegime", "subsonic")
+    if comp == "compressible" and regime in ("transonic", "supersonic", "hypersonic"):
+        return "rhoCentralFoam"
+    return {
+        ("incompressible", True): "simpleFoam",
+        ("incompressible", False): "pimpleFoam",
+        ("compressible", True): "rhoSimpleFoam",
+        ("compressible", False): "rhoPimpleFoam",
+    }[(comp, steady)]
 from .logparse import ResidualStream, read_force_coeffs
 from .mesh_bridge import write_foam_msh
 
@@ -140,26 +155,34 @@ class OpenFoamAdapter(SolverAdapter):
         }
 
     # ---- the run --------------------------------------------------------
-    async def _stream(self, body: str, tag: str) -> AsyncGenerator[Dict[str, Any], None]:
-        """Run a preparation step, forwarding its output as log lines. Raises on
-        non-zero exit."""
-        proc = await asyncio.create_subprocess_exec(
-            *self._script(body),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        assert proc.stdout is not None
-        try:
-            async for raw in proc.stdout:
-                line = raw.decode(errors="replace").rstrip()
-                if line:
-                    yield {"type": "log", "line": f"[{tag}] {line}"}
-            rc = await asyncio.wait_for(proc.wait(), timeout=_STEP_TIMEOUT)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise RuntimeError(f"{tag} timed out")
-        if rc != 0:
-            raise RuntimeError(f"{tag} failed (exit {rc})")
+    async def _stream(self, body: str, tag: str, retries: int = 1) -> AsyncGenerator[Dict[str, Any], None]:
+        """Run a preparation step (gmshToFoam / checkMesh / ...), forwarding its
+        output as log lines. Raises on non-zero exit; a signal crash is retried.
+
+        Uses a blocking subprocess in a worker thread rather than asyncio's
+        child transport: OpenFOAM's runtime segfaults during arg/env parsing when
+        launched via create_subprocess_exec inside a `unshare` wrapper.
+        """
+        loop = asyncio.get_event_loop()
+        argv = self._script(body)
+        for attempt in range(retries + 1):
+            def _run() -> subprocess.CompletedProcess:
+                return subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT, timeout=_STEP_TIMEOUT)
+            try:
+                cp = await loop.run_in_executor(None, _run)
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(f"{tag} timed out")
+            rc = cp.returncode
+            crashed = rc < 0 or rc in (134, 137, 139)
+            if not crashed or attempt == retries:
+                for ln in (cp.stdout or b"").decode(errors="replace").splitlines():
+                    if ln.strip():
+                        yield {"type": "log", "line": f"[{tag}] {ln.rstrip()}"}
+                if rc != 0:
+                    raise RuntimeError(f"{tag} failed (exit {rc})")
+                return
+            await asyncio.sleep(1.5)
 
     # gmshToFoam makes every named patch `type patch`. OpenFOAM then rejects a
     # field that assigns a constraint BC (symmetry/empty/wedge/cyclic) to a
@@ -200,9 +223,15 @@ class OpenFoamAdapter(SolverAdapter):
         # name -> polyMesh patch type; explicit patchTypes win, walls fill in
         patch_types: Dict[str, str] = {w: "wall" for w in wall_patches}
         patch_types.update(config.get("patchTypes") or {})
-        module = pick_solver(physics)
-        solver_bin = 'foamRun'
-        solver_cmd = f'foamRun -solver {module}'
+        module = pick_solver(physics)  # foamRun module (Foundation) / hint
+        # Foundation 13 has `foamRun -solver <module>`; the ESI fork keeps the
+        # classic binaries. Pick at run time from what the environment has.
+        has_foamrun = self._run_sync("command -v foamRun >/dev/null 2>&1 && echo yes || echo no").stdout.strip()
+        if has_foamrun == "yes":
+            solver_cmd = f"foamRun -solver {module}"
+        else:
+            solver_cmd = _classic_solver(physics)
+        solver_bin = solver_cmd.split()[0]
         span = float(config.get("span", 1.0)) or 1.0
 
         yield {"type": "log", "line": f"[OpenCFD] Case: {case}"}
@@ -249,7 +278,7 @@ class OpenFoamAdapter(SolverAdapter):
 
         # 3. gmshToFoam
         try:
-            async for ev in self._stream(f"gmshToFoam {shlex.quote('mesh.msh')}", "gmshToFoam"):
+            async for ev in self._stream(f"gmshToFoam {shlex.quote('mesh.msh')}", "gmshToFoam", retries=3):
                 yield ev
         except RuntimeError as e:
             yield {"type": "error", "message": str(e)}
@@ -327,6 +356,12 @@ class OpenFoamAdapter(SolverAdapter):
 
 class LocalOpenFoam(OpenFoamAdapter):
     name = "openfoam-local"
+
+    def _prefix(self) -> List[str]:
+        # dev escape hatch: wrap every command (e.g. to enter an extracted
+        # OpenFOAM rootfs via `unshare`); empty in normal use.
+        w = os.environ.get("OPENCFD_FOAM_WRAPPER", "").strip()
+        return shlex.split(w) if w else []
 
     def _env_snippet(self) -> str:
         if self.foam_bashrc:

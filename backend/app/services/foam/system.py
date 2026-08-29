@@ -30,9 +30,23 @@ _TIME = {
 
 
 def pick_solver(phys: Dict[str, Any]) -> str:
-    """The foamRun solver module for this case."""
+    """The foamRun solver module for this case (Foundation 13)."""
     comp = phys.get("compressibility", "incompressible")
     return _MODULE.get(comp, "incompressibleFluid")
+
+
+def classic_application(phys: Dict[str, Any]) -> str:
+    """Classic ESI-fork solver binary - written as `application` in controlDict
+    so a case also runs on the ESI fork."""
+    comp = phys.get("compressibility", "incompressible")
+    steady = phys.get("timeFormulation", "steady") == "steady"
+    regime = phys.get("speedRegime", "subsonic")
+    if comp == "compressible" and regime in ("transonic", "supersonic", "hypersonic"):
+        return "rhoCentralFoam"
+    return {
+        ("incompressible", True): "simpleFoam", ("incompressible", False): "pimpleFoam",
+        ("compressible", True): "rhoSimpleFoam", ("compressible", False): "rhoPimpleFoam",
+    }[(comp, steady)]
 
 
 def _div_scheme(order: str, steady: bool) -> str:
@@ -65,7 +79,8 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
     ncorr = int(methods.get("nCorrectors", 2))
 
     control = (
-        f"solver          {module};\n"
+        f"solver          {module};\n"                      # Foundation 13
+        f"application     {classic_application(phys)};\n"    # ESI fork
         "startFrom       " + ("latestTime" if run.get("init") == "continue" else "startTime") + ";\n"
         "startTime       0;\nstopAt          endTime;\n"
         f"endTime         {end};\ndeltaT          {1 if steady else dt};\n"
@@ -149,6 +164,14 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
            "    pRefCell        0;\n    pRefValue       0;\n"
            "    momentumPredictor " + ("yes" if methods.get("momentumPredictor", True) else "no") + ";\n")
         + "}\n\n"
+        # ESI fork: simpleFoam reads SIMPLE, pimpleFoam reads PIMPLE. Foundation
+        # foamRun reads PIMPLE only. Writing both keeps the case fork-portable.
+        + ("SIMPLE\n{\n"
+           f"    nNonOrthogonalCorrectors {nno};\n"
+           "    consistent      yes;\n"
+           f'    residualControl\n    {{\n        p               {res["p"]};\n'
+           f'        U               {res["U"]};\n        "(k|omega|epsilon)" {res["turbulence"]};\n    }}\n'
+           "}\n\n" if steady else "")
         + _relaxation(controls, steady, compressible)
     )
 
