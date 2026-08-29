@@ -1369,7 +1369,7 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
         # nodes on interior block interfaces - so grid lines flow smoothly across
         # block seams. True geometry-boundary nodes stay pinned. Kept only if it
         # does not make the worst cell worse.
-        smooth_iters = 0 if params.get("smooth") is False else int(params.get("smoothIterations", 120))
+        smooth_iters = 0 if params.get("smooth") is False else int(params.get("smoothIterations", 200))
         smoothed = 0
         if smooth_iters > 0:
             fixed_idx = set()
