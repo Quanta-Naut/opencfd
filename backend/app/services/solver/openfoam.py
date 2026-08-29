@@ -21,7 +21,8 @@ from .logparse import ResidualStream, read_force_coeffs
 from .mesh_bridge import write_foam_msh
 
 # Sourced before every command so `simpleFoam` etc. are on PATH. Covers the ESI
-# .deb layout, the Foundation /opt layout, and a user build under ~/OpenFOAM.
+# .deb layout, the Foundation /opt layout (also the Windows WSL pack), and a
+# user build under ~/OpenFOAM.
 _FOAM_ENV = (
     'for _f in "$OPENCFD_FOAM_BASHRC" '
     '/opt/openfoam*/etc/bashrc /usr/lib/openfoam/openfoam*/etc/bashrc '
@@ -30,6 +31,51 @@ _FOAM_ENV = (
 )
 
 _STEP_TIMEOUT = 900  # seconds for a preparation step (gmshToFoam, checkMesh, ...)
+
+_CONDA_ROOTS = ("MAMBA_ROOT_PREFIX", "CONDA_PREFIX", "CONDA_ROOT")
+
+
+def _conda_env_with_foam() -> Optional[Path]:
+    """Find a conda/mamba env that has simpleFoam (openfoam from conda-forge)."""
+    seen: set = set()
+    roots = [os.environ.get(k) for k in _CONDA_ROOTS] + [
+        str(Path.home() / d) for d in ("micromamba", "mambaforge", "miniforge3", "miniconda3", "anaconda3")
+    ]
+    for root in roots:
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        rp = Path(root)
+        # `root` may itself be an env (CONDA_PREFIX) or a base with envs/
+        candidates = [rp, *sorted(rp.glob("envs/*"))]
+        for env in candidates:
+            if (env / "bin" / "simpleFoam").is_file():
+                return env
+    return None
+
+
+def discover_foam_env_command() -> str:
+    """Shell snippet that puts OpenFOAM on PATH, for `bash -lc`.
+
+    Priority: explicit OPENCFD_FOAM_BASHRC, then already-on-PATH (backend launched
+    inside an activated env), then a conda-forge openfoam env, then the standard
+    system / WSL-pack locations.
+    """
+    explicit = os.environ.get("OPENCFD_FOAM_BASHRC")
+    if explicit and Path(explicit).is_file():
+        return f". {shlex.quote(explicit)}"
+    if shutil.which("simpleFoam"):
+        return ":"  # inherited PATH already has it
+    env = _conda_env_with_foam()
+    if env:
+        act = env / "etc" / "conda" / "activate.d"
+        return (
+            f'export CONDA_PREFIX={shlex.quote(str(env))} ; '
+            f'export PATH={shlex.quote(str(env / "bin"))}:$PATH ; '
+            f'export LD_LIBRARY_PATH={shlex.quote(str(env / "lib"))}:${{LD_LIBRARY_PATH:-}} ; '
+            f'for _f in {shlex.quote(str(act))}/*.sh; do [ -r "$_f" ] && . "$_f"; done'
+        )
+    return _FOAM_ENV
 
 
 class OpenFoamAdapter(SolverAdapter):
@@ -52,7 +98,7 @@ class OpenFoamAdapter(SolverAdapter):
     def _env_snippet(self) -> str:
         if self.foam_bashrc:
             return f'. {shlex.quote(self.foam_bashrc)}'
-        return _FOAM_ENV
+        return _FOAM_ENV  # overridden by LocalOpenFoam for host-side discovery
 
     def _script(self, body: str, *, in_case: bool = True) -> List[str]:
         # env is sourced with `;` (a failed lookup must not short-circuit the run)
@@ -263,6 +309,11 @@ class OpenFoamAdapter(SolverAdapter):
 
 class LocalOpenFoam(OpenFoamAdapter):
     name = "openfoam-local"
+
+    def _env_snippet(self) -> str:
+        if self.foam_bashrc:
+            return f'. {shlex.quote(self.foam_bashrc)}'
+        return discover_foam_env_command()
 
 
 class WslOpenFoam(OpenFoamAdapter):
