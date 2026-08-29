@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Loader2, ServerCog, TriangleAlert, RefreshCw } from 'lucide-react';
-import { setupStatus, WS_BASE } from '../../utils/api';
+import { setupStatus, backendReachable, WS_BASE } from '../../utils/api';
 
-type Phase = 'checking' | 'ready' | 'needs-wsl' | 'needs-pack' | 'needs-provision' | 'provisioning' | 'error';
+type Phase =
+  | 'checking'
+  | 'no-backend'
+  | 'ready'
+  | 'needs-wsl'
+  | 'needs-pack'
+  | 'needs-provision'
+  | 'provisioning'
+  | 'error';
 
 interface Step {
   step: string;
@@ -20,12 +28,23 @@ export function SetupGate({ children }: { children: ReactNode }) {
 
   const check = useCallback(async () => {
     setPhase('checking');
-    const s = await setupStatus();
-    setStatus(s);
-    if (!s.needs_provision) return setPhase('ready');
-    if (s.wsl && !s.wsl.installed) return setPhase('needs-wsl');
-    if (!s.pack_configured) return setPhase('needs-pack');
-    return setPhase('needs-provision');
+    // The bundled backend sidecar can take a few seconds to come up.
+    let up = false;
+    for (let i = 0; i < 15; i++) {
+      if (await backendReachable()) { up = true; break; }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (!up) return setPhase('no-backend');
+    try {
+      const s = await setupStatus();
+      setStatus(s);
+      if (!s.needs_provision) return setPhase('ready');
+      if (s.wsl && !s.wsl.installed) return setPhase('needs-wsl');
+      if (!s.pack_configured) return setPhase('needs-pack');
+      return setPhase('needs-provision');
+    } catch {
+      return setPhase('no-backend');
+    }
   }, []);
 
   useEffect(() => { check(); }, [check]);
@@ -54,8 +73,20 @@ export function SetupGate({ children }: { children: ReactNode }) {
       <div className="w-full max-w-md bg-white border border-[#E1E4E8] rounded-xl p-7 shadow-sm">
         {phase === 'checking' && (
           <div className="flex items-center gap-3 text-sm text-[#69717D]">
-            <Loader2 className="w-4 h-4 animate-spin" /> Checking the solver environment...
+            <Loader2 className="w-4 h-4 animate-spin" /> Starting the OpenCFD engine...
           </div>
+        )}
+
+        {phase === 'no-backend' && (
+          <>
+            <Header icon={<TriangleAlert className="w-5 h-5 text-[#DC2626]" />} title="Engine not responding" />
+            <p className="text-[13px] text-[#69717D] leading-relaxed mt-3">
+              The OpenCFD backend did not start. It should be listening on
+              <code className="mx-1 px-1.5 py-0.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded font-mono text-[12px]">127.0.0.1:8000</code>.
+              Wait a moment and retry; if it keeps failing, restart OpenCFD.
+            </p>
+            <Recheck onClick={check} />
+          </>
         )}
 
         {phase === 'needs-wsl' && (

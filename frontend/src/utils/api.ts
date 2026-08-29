@@ -1,20 +1,22 @@
 import { YPlusCalculation, GeometryConfig, PhysicsConfig, BoundaryConditions, SolverControls } from '../types/cfd';
+import { API_BASE, WS_BASE } from './backend';
 
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname || 'localhost'}:8000`
-  : 'http://localhost:8000';
+export { WS_BASE };
 
-export const WS_BASE = typeof window !== 'undefined'
-  ? `ws://${window.location.hostname || 'localhost'}:8000`
-  : 'ws://localhost:8000';
-
+// Throws on an unreachable backend so the caller can show a real state; a
+// reachable-but-error response still resolves (with an empty-ish object).
 export async function setupStatus(): Promise<any> {
+  const res = await fetch(`${API_BASE}/api/setup/status`);
+  if (!res.ok) return { os: 'unknown', needs_provision: false, detail: `status ${res.status}` };
+  return (await res.json()).data;
+}
+
+export async function backendReachable(): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/api/setup/status`);
-    if (!res.ok) throw new Error('API failed');
-    return (await res.json()).data;
+    const res = await fetch(`${API_BASE}/api/setup/status`, { method: 'GET' });
+    return res.ok || res.status < 500;
   } catch {
-    return { os: 'unknown', needs_provision: false, detail: 'Setup status unavailable.' };
+    return false;
   }
 }
 

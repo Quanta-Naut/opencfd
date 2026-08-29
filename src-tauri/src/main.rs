@@ -19,15 +19,19 @@ fn spawn_backend(app: &tauri::AppHandle) {
     };
 
     match sidecar.spawn() {
-        Ok((mut rx, _child)) => {
+        Ok((mut rx, child)) => {
+            eprintln!("[opencfd] backend sidecar started (pid {})", child.pid());
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
                     match event {
                         CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
-                            print!("[backend] {}", String::from_utf8_lossy(&line));
+                            eprint!("[backend] {}", String::from_utf8_lossy(&line));
+                        }
+                        CommandEvent::Error(err) => {
+                            eprintln!("[opencfd] backend error: {err}");
                         }
                         CommandEvent::Terminated(payload) => {
-                            eprintln!("[opencfd] backend exited: {:?}", payload.code);
+                            eprintln!("[opencfd] backend exited: code {:?}", payload.code);
                             break;
                         }
                         _ => {}

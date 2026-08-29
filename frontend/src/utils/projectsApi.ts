@@ -1,6 +1,4 @@
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname || 'localhost'}:8000`
-  : 'http://localhost:8000';
+import { API_BASE } from './backend';
 
 export interface ProjectPreview {
   points: number[][];
