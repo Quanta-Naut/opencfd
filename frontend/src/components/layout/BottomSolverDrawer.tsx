@@ -22,6 +22,21 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   const [activeTab, setActiveTab] = useState<'residuals' | 'forces' | 'console' | 'dicts'>('residuals');
   const [selectedDict, setSelectedDict] = useState<string>('system/controlDict');
 
+  // When a run starts, open the drawer so its output is visible. On an error,
+  // jump to the console where the failure is spelled out.
+  const prevStatus = React.useRef(executionStatus);
+  useEffect(() => {
+    if (executionStatus === 'running' && prevStatus.current !== 'running') {
+      setIsExpanded(true);
+      setActiveTab('residuals');
+    }
+    if (executionStatus === 'error') {
+      setIsExpanded(true);
+      setActiveTab('console');
+    }
+    prevStatus.current = executionStatus;
+  }, [executionStatus]);
+
   // Tell floating things (toasts) how tall the bottom bar area is so they can sit
   // above it instead of overlapping the console. 24px status bar + 32px header
   // + 176px expanded body.
@@ -31,10 +46,12 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
     return () => { document.documentElement.style.removeProperty('--app-bottom-bar'); };
   }, [isExpanded]);
 
-  // Compute live ticker stats
-  const lastIter = residuals.length > 0 ? residuals[residuals.length - 1].iteration : 0;
-  const cdApprox = (0.028 + 0.002 * Math.sin(lastIter * 0.1)).toFixed(3);
-  const clApprox = (0.342 + 0.01 * Math.cos(lastIter * 0.1)).toFixed(3);
+  // Live ticker stats - real values from the last residual point the solver sent
+  const last = residuals.length > 0 ? residuals[residuals.length - 1] : undefined;
+  const lastIter = last?.iteration ?? 0;
+  const cd = typeof last?.cd === 'number' ? last.cd : null;
+  const cl = typeof last?.cl === 'number' ? last.cl : null;
+  const fmtCoef = (v: number | null) => (v === null ? '-' : v.toFixed(4));
 
   return (
     <div className="w-full bg-white border-t border-[#E1E4E8] flex flex-col select-none shrink-0 z-20">
@@ -101,11 +118,14 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
 
         {/* Center/Right: Live Ticker Statistics */}
         <div className="flex items-center gap-4 text-[11px] font-mono text-[#69717D]">
+          {executionStatus === 'running' && <span className="text-[#2563EB]">running</span>}
+          {executionStatus === 'completed' && <span className="text-[#16A34A]">converged</span>}
+          {executionStatus === 'error' && <span className="text-[#DC2626]">failed</span>}
           <span>
-            Cd: <strong className="text-[#171A1F]">{cdApprox}</strong>
+            Cd: <strong className="text-[#171A1F]">{fmtCoef(cd)}</strong>
           </span>
           <span>
-            Cl: <strong className="text-[#171A1F]">{clApprox}</strong>
+            Cl: <strong className="text-[#171A1F]">{fmtCoef(cl)}</strong>
           </span>
           <span>
             Iter: <strong className="text-[#171A1F]">{lastIter}</strong>
@@ -140,8 +160,10 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
                       stroke="#A5ACB5"
                       fontSize={10}
                       tickLine={false}
-                      domain={[0, 'auto']}
-                      tickFormatter={(v) => typeof v === 'number' ? v.toExponential(0) : v}
+                      scale="log"
+                      domain={['auto', 'auto']}
+                      allowDataOverflow
+                      tickFormatter={(v) => (typeof v === 'number' ? v.toExponential(0) : v)}
                     />
                     <Tooltip
                       contentStyle={{
@@ -170,33 +192,46 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
           {/* TAB 2: AERODYNAMIC FORCES */}
           {activeTab === 'forces' && (
             <div className="w-full h-full p-2 flex items-center justify-center">
-              <div className="grid grid-cols-3 gap-6 text-center">
-                <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
-                  <span className="text-[10px] uppercase text-[#69717D] font-mono block">Drag Coefficient (Cd)</span>
-                  <span className="text-xl font-bold font-mono text-[#171A1F]">{cdApprox}</span>
+              {cd === null && cl === null ? (
+                <span className="text-[#A5ACB5] text-xs font-mono">
+                  Force coefficients appear here once the solver reports them
+                </span>
+              ) : (
+                <div className="grid grid-cols-3 gap-6 text-center">
+                  <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
+                    <span className="text-[10px] uppercase text-[#69717D] font-mono block">Drag Coefficient (Cd)</span>
+                    <span className="text-xl font-bold font-mono text-[#171A1F]">{fmtCoef(cd)}</span>
+                  </div>
+                  <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
+                    <span className="text-[10px] uppercase text-[#69717D] font-mono block">Lift Coefficient (Cl)</span>
+                    <span className="text-xl font-bold font-mono text-[#171A1F]">{fmtCoef(cl)}</span>
+                  </div>
+                  <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
+                    <span className="text-[10px] uppercase text-[#69717D] font-mono block">Lift-to-Drag Ratio (L/D)</span>
+                    <span className="text-xl font-bold font-mono text-[#2563EB]">
+                      {cd && cl ? (cl / cd).toFixed(2) : '-'}
+                    </span>
+                  </div>
                 </div>
-                <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
-                  <span className="text-[10px] uppercase text-[#69717D] font-mono block">Lift Coefficient (Cl)</span>
-                  <span className="text-xl font-bold font-mono text-[#171A1F]">{clApprox}</span>
-                </div>
-                <div className="p-3 bg-[#F5F6F8] rounded-md border border-[#E1E4E8]">
-                  <span className="text-[10px] uppercase text-[#69717D] font-mono block">Lift-to-Drag Ratio (L/D)</span>
-                  <span className="text-xl font-bold font-mono text-[#2563EB]">
-                    {(parseFloat(clApprox) / parseFloat(cdApprox)).toFixed(2)}
-                  </span>
-                </div>
-              </div>
+              )}
             </div>
           )}
 
           {/* TAB 3: LIVE CONSOLE LOGS */}
           {activeTab === 'console' && (
             <div className="w-full h-full p-3 font-mono text-[11px] leading-relaxed text-[#171A1F] overflow-y-auto bg-[#F5F6F8]/60">
+              {terminalLogs.length === 0 && (
+                <span className="text-[#A5ACB5]">No output yet.</span>
+              )}
               {terminalLogs.map((log, i) => (
                 <div
                   key={i}
-                  className={`py-0.5 ${
-                    log.includes('converged') ? 'text-[#16A34A] font-semibold' : log.includes('error') ? 'text-[#DC2626]' : ''
+                  className={`py-0.5 whitespace-pre-wrap ${
+                    /converged|finished/i.test(log)
+                      ? 'text-[#16A34A] font-semibold'
+                      : /error|fail|cannot|not found|no such/i.test(log)
+                        ? 'text-[#DC2626]'
+                        : ''
                   }`}
                 >
                   {log}

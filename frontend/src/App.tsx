@@ -29,6 +29,7 @@ import {
   fetchFieldSolution,
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
+  WS_BASE,
 } from './utils/api';
 import { saveProjectSession, renameProject } from './utils/projectsApi';
 import { toast } from './components/ui/Toast';
@@ -938,9 +939,13 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     }));
 
     // regenerate the case dictionaries with the current solution config
-    try { await makeCaseFiles(); } catch { /* mock still runs */ }
+    try {
+      await makeCaseFiles();
+    } catch (e: any) {
+      toast(`Could not write the case files: ${e?.message ?? e}`, 'error');
+    }
 
-    const ws = new WebSocket('ws://localhost:8000/ws/solver');
+    const ws = new WebSocket(`${WS_BASE}/ws/solver`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -985,12 +990,14 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           executionStatus: 'completed',
           terminalLogs: [...prev.terminalLogs, `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`],
         }));
+        toast('Solver run finished.', 'success');
       } else if (msg.type === 'error') {
         setState((prev) => ({
           ...prev,
           executionStatus: 'error',
           terminalLogs: [...prev.terminalLogs, `[Error] ${msg.message}`],
         }));
+        toast(msg.message, 'error');
       }
     };
 
@@ -998,8 +1005,9 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       setState((prev) => ({
         ...prev,
         executionStatus: 'error',
-        terminalLogs: [...prev.terminalLogs, '[Error] Solver stream communication error.'],
+        terminalLogs: [...prev.terminalLogs, '[Error] Could not reach the solver stream (backend down?).'],
       }));
+      toast('Could not reach the solver stream.', 'error');
     };
   };
 

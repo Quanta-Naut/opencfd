@@ -179,9 +179,15 @@ export interface ResidualDataPoint {
   p: number;
   Ux: number;
   Uy: number;
+  Uz?: number;
   k?: number;
   omega?: number;
   epsilon?: number;
+  e?: number;
+  nuTilda?: number;
+  time?: number;
+  cd?: number;
+  cl?: number;
 }
 
 export interface PostProcessConfig {
