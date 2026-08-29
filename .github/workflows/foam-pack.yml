@@ -1,0 +1,73 @@
+name: OpenFOAM WSL pack
+
+# Builds the rootfs tarball the Windows app downloads and imports as the private
+# `OpenCFD-FOAM` WSL distro. Run this once per pinned OpenFOAM release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      openfoam_version:
+        description: OpenFOAM Foundation version (e.g. 13)
+        default: "13"
+      ubuntu_version:
+        description: Ubuntu base image tag
+        default: "22.04"
+      ubuntu_codename:
+        description: Ubuntu codename for the OpenFOAM apt repo
+        default: "jammy"
+      publish_release:
+        description: Attach the pack to a GitHub Release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the OpenFOAM image
+        run: |
+          docker build \
+            --build-arg OPENFOAM_VERSION='${{ inputs.openfoam_version }}' \
+            --build-arg UBUNTU_VERSION='${{ inputs.ubuntu_version }}' \
+            --build-arg UBUNTU_CODENAME='${{ inputs.ubuntu_codename }}' \
+            -t opencfd-foam:${{ inputs.openfoam_version }} \
+            docker/foam-pack
+
+      - name: Export the root filesystem
+        run: |
+          set -euo pipefail
+          NAME=opencfd-foam-${{ inputs.openfoam_version }}
+          cid=$(docker create opencfd-foam:${{ inputs.openfoam_version }})
+          docker export "$cid" -o "$NAME.tar"
+          docker rm "$cid"
+          # gzip: universally accepted by `wsl --import`, no client-side decompress.
+          gzip -9 -f "$NAME.tar"
+          sha256sum "$NAME.tar.gz" | tee "$NAME.tar.gz.sha256"
+          ls -lh "$NAME.tar.gz"
+          echo "PACK_NAME=$NAME" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACK_NAME }}
+          path: |
+            ${{ env.PACK_NAME }}.tar.gz
+            ${{ env.PACK_NAME }}.tar.gz.sha256
+          retention-days: 14
+
+      - name: Publish Release
+        if: ${{ inputs.publish_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: foam-pack-${{ inputs.openfoam_version }}
+          name: OpenFOAM ${{ inputs.openfoam_version }} WSL pack
+          body: |
+            Rootfs for the `OpenCFD-FOAM` WSL distro (Ubuntu ${{ inputs.ubuntu_version }} + OpenFOAM ${{ inputs.openfoam_version }}).
+            Consumed by the app's first-run setup. SHA256 in the `.sha256` file.
+          files: |
+            ${{ env.PACK_NAME }}.tar.gz
+            ${{ env.PACK_NAME }}.tar.gz.sha256

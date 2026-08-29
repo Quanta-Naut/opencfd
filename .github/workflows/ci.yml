@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm --prefix frontend ci
+      - run: npm --prefix frontend run build
+      - run: npm --prefix frontend run lint
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r backend/requirements.txt
+      - name: Import check
+        working-directory: backend
+        run: python -c "import app.main; print('backend ok')"
+      - name: Solver + setup services smoke test
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          from app.services.solver import detect_environment, select_adapter
+          from app.services.solver.mesh_bridge import write_foam_msh
+          from app.services.setup import setup_status
+          import tempfile, os
+          assert select_adapter("auto", {}).name in ("mock", "openfoam-local", "openfoam-wsl")
+          assert detect_environment()["active"] == "mock"
+          assert setup_status()["needs_provision"] is False  # not Windows
+          p = os.path.join(tempfile.mkdtemp(), "m.msh")
+          write_foam_msh(
+              {"nodes": [[0, 0], [1, 0], [1, 1], [0, 1]],
+               "elements": [[0, 1, 2, 3]],
+               "boundaries": {"inlet": [0, 3], "outlet": [1, 2]}},
+              p, span=1.0,
+          )
+          assert os.path.getsize(p) > 0
+          print("services ok")
+          PY

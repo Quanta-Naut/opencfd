@@ -1,0 +1,11 @@
+-r requirements.txt
+
+# Dev/analysis extras. Not imported by app/ at runtime today (post-processing
+# uses numpy only), so they are excluded from the frozen sidecar. Install these
+# locally if you add VTK/PyVista/plot output back to the backend.
+pyvista==0.48.4
+vtk==9.6.2
+matplotlib==3.10.9
+scipy==1.15.3
+requests==2.34.2
+pooch==1.9.0

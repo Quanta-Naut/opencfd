@@ -1,0 +1,12 @@
+# Runtime dependencies for the shipped OpenCFD backend.
+# Kept deliberately lean - the frozen sidecar only needs these.
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+websockets==16.1.1
+python-multipart==0.0.32
+pydantic==2.13.4
+
+numpy==2.2.6
+shapely==2.1.2
+ezdxf==1.4.4
+gmsh==4.15.2

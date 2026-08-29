@@ -1,0 +1,103 @@
+name: Release installers
+
+# Push a tag like v0.3.0 to build the desktop installers for all three OSes.
+# Each installer bundles the frozen FastAPI backend as a Tauri sidecar; the
+# Windows build additionally carries the OpenFOAM pack URL for first-run setup.
+#
+# NOTE: the PyInstaller + Tauri sidecar wiring below has not been run yet. Expect
+# to iterate on hidden imports (gmsh) and the sidecar capability config once we
+# can trigger this.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows
+          - os: macos-13
+            target: macos-x64
+          - os: macos-14
+            target: macos-arm64
+          - os: ubuntu-22.04
+            target: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux system deps for Tauri
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            build-essential curl wget file libssl-dev libgtk-3-dev
+
+      - name: Build the frontend
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+
+      - name: Freeze the backend sidecar
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pip install -r requirements.txt
+          pyinstaller --noconfirm --clean opencfd-backend.spec
+          python -c "import os; print(os.listdir('dist'))"
+
+      - name: Stage the sidecar for Tauri
+        shell: bash
+        run: |
+          set -euxo pipefail
+          triple=$(rustc -Vv | sed -n 's/host: //p')
+          mkdir -p src-tauri/binaries
+          src="backend/dist/opencfd-backend"
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            # onedir build: zip the folder next to a launcher named for the triple
+            cp -r "$src" "src-tauri/binaries/opencfd-backend"
+            cp "src-tauri/binaries/opencfd-backend/opencfd-backend.exe" \
+               "src-tauri/binaries/opencfd-backend-${triple}.exe"
+          else
+            cp -r "$src" "src-tauri/binaries/opencfd-backend"
+            cp "src-tauri/binaries/opencfd-backend/opencfd-backend" \
+               "src-tauri/binaries/opencfd-backend-${triple}"
+            chmod +x "src-tauri/binaries/opencfd-backend-${triple}"
+          fi
+
+      - name: Windows - carry the OpenFOAM pack URL
+        if: matrix.target == 'windows'
+        shell: bash
+        run: |
+          {
+            echo "OPENCFD_FOAM_PACK_URL=${{ vars.OPENCFD_FOAM_PACK_URL }}"
+            echo "OPENCFD_FOAM_PACK_SHA256=${{ vars.OPENCFD_FOAM_PACK_SHA256 }}"
+            echo "OPENCFD_FOAM_PACK_VERSION=${{ vars.OPENCFD_FOAM_PACK_VERSION }}"
+          } >> "$GITHUB_ENV"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: OpenCFD ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.target == 'macos-arm64' && '--target aarch64-apple-darwin' || '' }}
