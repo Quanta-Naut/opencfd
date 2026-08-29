@@ -1,6 +1,7 @@
 import { useCallback, useState, type ReactNode } from 'react';
 import App from './App';
 import { HomeScreen } from './components/home/HomeScreen';
+import { SetupGate } from './components/setup/SetupGate';
 import { TutorialPage } from './components/help/TutorialPage';
 import { ToastHost } from './components/ui/Toast';
 import { getProject } from './utils/projectsApi';
@@ -38,17 +39,23 @@ export function Root() {
   if (route === '/tutorial' || route === 'tutorial') {
     view = <TutorialPage />;
   } else if (!open) {
-    view = <HomeScreen onOpen={handleOpen} opening={opening} openError={error} />;
+    view = (
+      <SetupGate>
+        <HomeScreen onOpen={handleOpen} opening={opening} openError={error} />
+      </SetupGate>
+    );
   } else {
     view = (
-      <App
-        key={open.id}
-        projectId={open.id}
-        projectName={open.name}
-        initialSession={open.session}
-        onExitHome={() => setOpen(null)}
-        onProjectRenamed={(name) => setOpen((prev) => (prev ? { ...prev, name } : prev))}
-      />
+      <SetupGate>
+        <App
+          key={open.id}
+          projectId={open.id}
+          projectName={open.name}
+          initialSession={open.session}
+          onExitHome={() => setOpen(null)}
+          onProjectRenamed={(name) => setOpen((prev) => (prev ? { ...prev, name } : prev))}
+        />
+      </SetupGate>
     );
   }
 

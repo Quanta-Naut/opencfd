@@ -4,6 +4,20 @@ const API_BASE = typeof window !== 'undefined'
   ? `http://${window.location.hostname || 'localhost'}:8000`
   : 'http://localhost:8000';
 
+export const WS_BASE = typeof window !== 'undefined'
+  ? `ws://${window.location.hostname || 'localhost'}:8000`
+  : 'ws://localhost:8000';
+
+export async function setupStatus(): Promise<any> {
+  try {
+    const res = await fetch(`${API_BASE}/api/setup/status`);
+    if (!res.ok) throw new Error('API failed');
+    return (await res.json()).data;
+  } catch {
+    return { os: 'unknown', needs_provision: false, detail: 'Setup status unavailable.' };
+  }
+}
+
 export function computeFallbackYPlus(params: {
   velocity: number;
   length: number;
@@ -386,6 +400,16 @@ export async function requestMeshFromSketch(params: {
   return data.data;
 }
 
+export async function solverEnvironment(): Promise<any> {
+  try {
+    const res = await fetch(`${API_BASE}/api/solver/environment`);
+    if (!res.ok) throw new Error('API failed');
+    return (await res.json()).data;
+  } catch {
+    return { platform: 'unknown', adapters: { mock: { ok: true, detail: 'Built-in mock solver.' } }, active: 'mock' };
+  }
+}
+
 export async function generateCaseFiles(
   physics: any,
   boundaries: any,
@@ -393,6 +417,7 @@ export async function generateCaseFiles(
   patches: any[] = [],
   refLength = 1,
   solution: any = {},
+  projectId?: string,
 ) {
   try {
     const res = await fetch(`${API_BASE}/api/solver/case-files`, {
@@ -400,6 +425,7 @@ export async function generateCaseFiles(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         case_dir: '/tmp/opencfd_case',
+        project_id: projectId ?? null,
         physics,
         boundaries,
         solver_controls: solverControls,

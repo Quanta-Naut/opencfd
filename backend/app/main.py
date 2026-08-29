@@ -9,7 +9,8 @@ from pydantic import BaseModel
 from app.services.yplus_service import calculate_yplus, calculate_inflow_turbulence
 from app.services.gmsh_service import generate_mesh_data, generate_structured_mesh
 from app.services.foam import generate_openfoam_case_files
-from app.services.foam_service import simulate_cfd_run
+from app.services.solver import detect_environment, select_adapter, resolve_case_dir
+from app.services import setup as solver_setup
 from app.services.postprocess_service import generate_field_solution
 from app.services.cad2d_service import (
     parse_dat_or_csv_airfoil,
@@ -50,6 +51,7 @@ class MeshRequest(BaseModel):
 
 class CaseFilesRequest(BaseModel):
     case_dir: str = "/tmp/openfoam_case"
+    project_id: str | None = None
     physics: Dict[str, Any] = {}
     boundaries: Dict[str, Any] = {}
     solver_controls: Dict[str, Any] = {}
@@ -221,11 +223,49 @@ async def mesh_from_sketch_endpoint(req: MeshFromSketchRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/solver/environment")
+async def solver_environment_endpoint():
+    try:
+        return {"success": True, "data": detect_environment()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/setup/status")
+async def setup_status_endpoint():
+    try:
+        return {"success": True, "data": solver_setup.setup_status()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/setup/teardown")
+async def setup_teardown_endpoint():
+    try:
+        return {"success": True, "data": solver_setup.teardown()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.websocket("/ws/setup")
+async def websocket_setup_stream(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        await websocket.receive_text()  # any message starts provisioning
+        async for item in solver_setup.provision():
+            await websocket.send_json(item)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        await websocket.send_json({"type": "error", "message": str(e)})
+
+
 @app.post("/api/solver/case-files")
 async def case_files_endpoint(req: CaseFilesRequest):
     try:
+        case_dir = str(resolve_case_dir(req.project_id)) if req.project_id else req.case_dir
         files = generate_openfoam_case_files(
-            case_dir=req.case_dir,
+            case_dir=case_dir,
             physics=req.physics,
             boundaries=req.boundaries,
             solver_controls=req.solver_controls,
@@ -233,7 +273,7 @@ async def case_files_endpoint(req: CaseFilesRequest):
             ref_length=req.ref_length,
             solution=req.solution,
         )
-        return {"success": True, "files": files}
+        return {"success": True, "files": files, "case_dir": case_dir}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -308,18 +348,13 @@ async def websocket_solver_stream(websocket: WebSocket):
     try:
         msg = await websocket.receive_text()
         config = json.loads(msg)
-        async for item in simulate_cfd_run(
-            iterations=int(config.get("iterations", 1000)),
-            regime=config.get("regime", "turbulent"),
-            velocity=float(config.get("velocity", 20.0)),
-            reynolds=float(config.get("reynolds", 1.0e6)),
-            cells=int(config.get("cells", 20000)),
-            relax=config.get("relax") or {},
-            momentumOrder=config.get("momentumOrder", "secondOrder"),
-            turbulenceModel=config.get("turbulenceModel", "kOmegaSST"),
-            forces=bool(config.get("forces", True)),
-            init=config.get("init", "uniform"),
-        ):
+        mode = config.get("mode", "auto")
+        adapter = select_adapter(mode, config)
+        case_dir = str(resolve_case_dir(config.get("project_id")))
+        await websocket.send_json(
+            {"type": "log", "line": f"[OpenCFD] solver backend: {adapter.name}"}
+        )
+        async for item in adapter.run(case_dir, config):
             await websocket.send_json(item)
     except WebSocketDisconnect:
         pass

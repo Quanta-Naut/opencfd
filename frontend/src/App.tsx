@@ -425,7 +425,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         forces: { ...state.solution.monitors.forces, ...dirs },
       },
     };
-    return generateCaseFiles(state.physics, state.boundaries, state.solver, patchSpec, caseRefLength, sol);
+    return generateCaseFiles(state.physics, state.boundaries, state.solver, patchSpec, caseRefLength, sol, projectId);
   };
 
   // ── Auto-save session to the project folder on disk (~/.OpenCFD/projects) ──
@@ -946,6 +946,13 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     ws.onopen = () => {
       ws.send(
         JSON.stringify({
+          mode: 'auto',
+          project_id: projectId,
+          physics: state.physics,
+          mesh: meshData
+            ? { nodes: meshData.nodes, elements: meshData.elements, boundaries: meshData.boundaries }
+            : null,
+          wallPatches: patchRoles.filter((p) => p.role === 'wall').map((p) => p.name),
           iterations: state.solution.run.iterations,
           regime: state.physics.regime,
           velocity: state.physics.inletVelocity,
@@ -976,7 +983,13 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         setState((prev) => ({
           ...prev,
           executionStatus: 'completed',
-          terminalLogs: [...prev.terminalLogs, '[OpenFOAM] Solution converged successfully.'],
+          terminalLogs: [...prev.terminalLogs, `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`],
+        }));
+      } else if (msg.type === 'error') {
+        setState((prev) => ({
+          ...prev,
+          executionStatus: 'error',
+          terminalLogs: [...prev.terminalLogs, `[Error] ${msg.message}`],
         }));
       }
     };

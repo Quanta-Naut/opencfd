@@ -1,6 +1,7 @@
 import React from 'react';
 import { Play, Square } from 'lucide-react';
 import { CFDProjectState } from '../../types/cfd';
+import { solverEnvironment } from '../../utils/api';
 import {
   SolverConfig, StabilityPreset, PRESET_RELAX, PRESET_METHODS, SpatialOrder,
 } from '../../solver/solverConfig';
@@ -49,6 +50,16 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
   const transient = state.physics.timeFormulation === 'transient';
   const compressible = state.physics.compressibility === 'compressible';
 
+  const [env, setEnv] = React.useState<any>(null);
+  React.useEffect(() => {
+    let live = true;
+    solverEnvironment().then((e) => { if (live) setEnv(e); });
+    return () => { live = false; };
+  }, []);
+  const activeAdapter = env?.active ?? null;
+  const activeInfo = activeAdapter ? env?.adapters?.[activeAdapter] : null;
+  const isReal = activeAdapter && activeAdapter !== 'mock';
+
   const applyPreset = (p: StabilityPreset) =>
     setSolution((cfg) => ({
       ...cfg,
@@ -72,6 +83,29 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
   return (
     <div className="h-full min-h-0 flex flex-col text-xs text-[#171A1F]">
       <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-4 space-y-2">
+
+        <Head>Solver backend</Head>
+        <div className="flex items-center gap-2 text-[11px]">
+          <span
+            className={`inline-block w-1.5 h-1.5 rounded-full ${
+              isReal ? 'bg-[#16A34A]' : env ? 'bg-[#D97706]' : 'bg-[#C0C6CE]'
+            }`}
+          />
+          <span className="font-medium text-[#171A1F]">
+            {activeAdapter === 'openfoam-local' && 'OpenFOAM (native)'}
+            {activeAdapter === 'openfoam-wsl' && `OpenFOAM (WSL${activeInfo?.distro ? ` · ${activeInfo.distro}` : ''})`}
+            {activeAdapter === 'mock' && 'Mock solver'}
+            {!activeAdapter && 'Checking...'}
+          </span>
+        </div>
+        {activeInfo?.detail && (
+          <p className="text-[9px] text-[#8B95A1] leading-relaxed">{activeInfo.detail}</p>
+        )}
+        {env && !isReal && env.platform === 'Windows' && (
+          <p className="text-[9px] text-[#B45309] leading-relaxed">
+            {env.adapters?.['openfoam-wsl']?.detail}
+          </p>
+        )}
 
         <Head>Run type</Head>
         <div className="grid grid-cols-2 gap-1.5">
