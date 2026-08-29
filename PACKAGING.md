@@ -163,6 +163,16 @@ After the repo exists: run `foam-pack.yml` first, copy the release asset URL and
 checksum into the three `OPENCFD_FOAM_PACK_*` Actions variables, then push a
 `v*` tag to cut installers.
 
+**Current pack** (built 2026-08-29, `jammy` + `openfoam13`, works first try):
+- `https://github.com/Quanta-Naut/opencfd/releases/download/foam-pack-13/opencfd-foam-13.tar.gz`
+- 382 MB gzipped, SHA256 `49114fcaf884c4207e7fc2de515075496473f158da366fffc8da1402d575d3b7`
+- The three `OPENCFD_FOAM_PACK_*` repo Actions variables are set to this.
+
+`release.yml` writes these into `backend/app/services/setup/pack.json` (gitignored)
+before the PyInstaller freeze; the spec bundles that file; `setup` reads env vars
+first, then the bundled `pack.json`. 382 MB is small enough to bundle in the
+installer later if we want a fully offline first run.
+
 Backend runtime deps are `backend/requirements.txt` (lean: no VTK/PyVista/SciPy -
 `app/` only imports numpy/shapely/ezdxf/gmsh at runtime). `requirements-dev.txt`
 keeps the analysis extras for local work.

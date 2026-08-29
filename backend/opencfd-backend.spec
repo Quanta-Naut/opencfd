@@ -6,9 +6,16 @@
 # and data files PyInstaller's static analysis misses. uvicorn resolves its loop
 # and protocol backends by string at runtime, so those are listed by hand.
 
+import os
+
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
+
+# Pack coordinates baked by release.yml (optional for a local freeze).
+_pack = os.path.join("app", "services", "setup", "pack.json")
+if os.path.exists(_pack):
+    datas.append((_pack, os.path.join("app", "services", "setup")))
 
 for pkg in ("gmsh", "shapely", "ezdxf"):
     d, b, h = collect_all(pkg)

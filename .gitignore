@@ -20,6 +20,10 @@ src-tauri/target/
 *.log
 *.tmp
 
+# Build-generated pack coordinates (written by release.yml)
+backend/app/services/setup/pack.json
+src-tauri/binaries/
+
 # Workspace metadata
 .agents/
 .codex/

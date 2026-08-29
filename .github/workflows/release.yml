@@ -55,6 +55,18 @@ jobs:
           npm --prefix frontend ci
           npm --prefix frontend run build
 
+      - name: Bake the OpenFOAM pack coordinates
+        shell: bash
+        run: |
+          cat > backend/app/services/setup/pack.json <<JSON
+          {
+            "url": "${{ vars.OPENCFD_FOAM_PACK_URL }}",
+            "sha256": "${{ vars.OPENCFD_FOAM_PACK_SHA256 }}",
+            "version": "${{ vars.OPENCFD_FOAM_PACK_VERSION }}"
+          }
+          JSON
+          cat backend/app/services/setup/pack.json
+
       - name: Freeze the backend sidecar
         working-directory: backend
         run: |

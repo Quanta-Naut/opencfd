@@ -29,11 +29,33 @@ STATE_DIR = Path.home() / ".OpenCFD"
 WSL_DIR = STATE_DIR / "wsl"
 MARKER = STATE_DIR / "solver-setup.json"
 
-# Set by the installer / build. Until CI publishes the pack these are empty and
-# provisioning reports "pack not configured" instead of failing mid-download.
-PACK_URL = os.environ.get("OPENCFD_FOAM_PACK_URL", "")
-PACK_SHA256 = os.environ.get("OPENCFD_FOAM_PACK_SHA256", "")
-PACK_VERSION = os.environ.get("OPENCFD_FOAM_PACK_VERSION", "dev")
+# Pack coordinates. The env vars win (handy for local testing); otherwise a
+# `pack.json` written next to this module at build time (see release.yml). Until
+# CI publishes a pack all three stay empty and provisioning reports
+# "pack not configured" instead of failing mid-download.
+def _pack_config() -> Dict[str, str]:
+    cfg = {
+        "url": os.environ.get("OPENCFD_FOAM_PACK_URL", ""),
+        "sha256": os.environ.get("OPENCFD_FOAM_PACK_SHA256", ""),
+        "version": os.environ.get("OPENCFD_FOAM_PACK_VERSION", ""),
+    }
+    if not cfg["url"]:
+        try:
+            data = json.loads((Path(__file__).with_name("pack.json")).read_text())
+            cfg = {
+                "url": data.get("url", ""),
+                "sha256": data.get("sha256", ""),
+                "version": str(data.get("version", "")),
+            }
+        except Exception:  # noqa: BLE001
+            pass
+    return cfg
+
+
+_PACK = _pack_config()
+PACK_URL = _PACK["url"]
+PACK_SHA256 = _PACK["sha256"]
+PACK_VERSION = _PACK["version"] or "dev"
 
 _IS_WINDOWS = os.name == "nt"
 
