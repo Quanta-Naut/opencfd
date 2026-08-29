@@ -11,6 +11,21 @@ export async function setupStatus(): Promise<any> {
   return (await res.json()).data;
 }
 
+export async function fetchSolverResults(mesh: any, projectId?: string): Promise<any | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/solver/results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId ?? null, mesh }),
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j.success ? j.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function backendReachable(): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/api/setup/status`, { method: 'GET' });

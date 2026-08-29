@@ -10,6 +10,7 @@ from app.services.yplus_service import calculate_yplus, calculate_inflow_turbule
 from app.services.gmsh_service import generate_mesh_data, generate_structured_mesh
 from app.services.foam import generate_openfoam_case_files
 from app.services.solver import detect_environment, select_adapter, resolve_case_dir
+from app.services.solver.results import read_field_results
 from app.services import setup as solver_setup
 from app.services.postprocess_service import generate_field_solution
 from app.services.cad2d_service import (
@@ -227,6 +228,23 @@ async def mesh_from_sketch_endpoint(req: MeshFromSketchRequest):
 async def solver_environment_endpoint():
     try:
         return {"success": True, "data": detect_environment()}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class SolverResultsRequest(BaseModel):
+    project_id: str | None = None
+    mesh: Dict[str, Any] = {}
+
+
+@app.post("/api/solver/results")
+async def solver_results_endpoint(req: SolverResultsRequest):
+    try:
+        case_dir = str(resolve_case_dir(req.project_id))
+        data = read_field_results(case_dir, req.mesh)
+        if data is None:
+            return {"success": False, "detail": "no solver output found for this project"}
+        return {"success": True, "data": data}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

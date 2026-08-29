@@ -27,6 +27,7 @@ import {
   generateStructuredMesh,
   generateCaseFiles,
   fetchFieldSolution,
+  fetchSolverResults,
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
   WS_BASE,
@@ -991,6 +992,21 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           terminalLogs: [...prev.terminalLogs, `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`],
         }));
         toast('Solver run finished.', 'success');
+        if (meshData) {
+          fetchSolverResults(
+            { nodes: meshData.nodes, elements: meshData.elements },
+            projectId,
+          ).then((fields) => {
+            if (fields) {
+              setFieldData(fields);
+              setState((prev) => ({
+                ...prev,
+                terminalLogs: [...prev.terminalLogs, `[Results] Loaded fields from time ${fields.time}.`],
+              }));
+              toast('Results loaded - open the Results tab.', 'success');
+            }
+          });
+        }
       } else if (msg.type === 'error') {
         setState((prev) => ({
           ...prev,
