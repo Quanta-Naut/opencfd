@@ -261,6 +261,12 @@ export const RightContextInspector: React.FC<RightContextInspectorProps> = ({
                 <span className="text-[#171A1F] text-[10px]">{meshData.algorithm.replace('Gmsh ', '')}</span>
               </div>
             )}
+            {meshData?.settings?.smoothing && meshData.settings.smoothing !== 'off' && (
+              <div className="flex justify-between gap-2">
+                <span className="shrink-0">Smoothing</span>
+                <span className="text-[#171A1F] text-[10px] text-right">{meshData.settings.smoothing}</span>
+              </div>
+            )}
           </div>
           {(() => {
             const raw: string[] = Array.isArray(meshData?.warnings) ? meshData.warnings : [];

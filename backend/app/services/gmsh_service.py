@@ -1048,24 +1048,24 @@ def _one_ring8(node: int, quad_ids: List[int], quads: List[List[int]]):
 
 
 def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
-                    fixed_idx: set, iterations: int = 120, omega: float = 0.4,
-                    taper: int = 6, w_max: float = 0.8) -> int:
+                    fixed_idx: set, iterations: int = 0, omega: float = 0.65,
+                    taper: int = 6, w_max: float = 0.85) -> Dict[str, Any]:
     """Elliptic (Winslow) smoothing of the free interior nodes, in place.
 
-    Solves alpha*x_xx - 2*beta*x_xy + gamma*x_yy = 0 by Jacobi relaxation on the
-    8-node stencil so grid lines flow across block seams instead of kinking.
-    True geometry-boundary nodes and block corners (`fixed_idx`) never move.
+    Solves alpha*x_xx - 2*beta*x_xy + gamma*x_yy = 0 by damped-Jacobi relaxation
+    on the 8-node stencil so grid lines flow across block seams instead of
+    kinking. True geometry-boundary nodes and block corners (`fixed_idx`) never
+    move. The correction is tapered back toward the transfinite position near
+    fixed nodes so topological corners keep their clean quality.
 
-    The smoothed position is blended back toward the original transfinite
-    position with a weight that ramps from 0 next to a fixed node up to `w_max`
-    `taper` layers in - this keeps the topological corners (O-grid / C-grid
-    singular points) at their clean transfinite quality while the deep interior
-    gets the full elliptic treatment. Returns the number of nodes moved."""
-    if iterations <= 0 or not elements:
-        return 0
+    `iterations` == 0 picks a count from the mesh size (Jacobi needs ~O(grid
+    width) sweeps to carry information across a block); it also stops early once
+    the sweep displacement is negligible. Returns a status dict."""
+    if not elements:
+        return {"moved": 0, "sweeps": 0, "converged": False, "free": 0}
     quads = [e for e in elements if len(e) == 4]
     if not quads:
-        return 0
+        return {"moved": 0, "sweeps": 0, "converged": False, "free": 0}
     n = len(nodes)
     node_quads: List[List[int]] = [[] for _ in range(n)]
     adj: List[set] = [set() for _ in range(n)]
@@ -1088,7 +1088,7 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
             free.append(i)
             sten.append(s)
     if not free:
-        return 0
+        return {"moved": 0, "sweeps": 0, "converged": False, "free": 0}
 
     # BFS layer distance of every free node from the nearest fixed node
     from collections import deque
@@ -1113,7 +1113,18 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
     st = np.array(sten, dtype=np.int64)  # columns: n s e w ne nw sw se
     N, S, E, W, NE, NW, SW, SE = (st[:, k] for k in range(8))
 
-    for _ in range(iterations):
+    # characteristic cell length, for the early-stop tolerance
+    seg = np.linalg.norm(P[E] - P0[fi], axis=1)
+    char = float(np.median(seg[seg > 0])) if np.any(seg > 0) else 1.0
+    tol = 1e-3 * char
+
+    if iterations <= 0:
+        # Jacobi carries info ~one cell per sweep; a block ~sqrt(free) cells wide
+        iterations = int(min(4000, max(250, 3.0 * math.sqrt(len(free)))))
+
+    sweeps = 0
+    converged = False
+    for it in range(iterations):
         xN, xS, xE, xW = P[N], P[S], P[E], P[W]
         x_xi = 0.5 * (xE - xW)
         x_et = 0.5 * (xN - xS)
@@ -1128,7 +1139,13 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
                - 0.5 * beta[:, None] * (P[NE] - P[NW] - P[SE] + P[SW]))
         newpos = rhs / safe[:, None]
         upd = fi[good]
-        P[upd] += omega * (newpos[good] - P[upd])
+        delta = omega * (newpos[good] - P[upd])
+        P[upd] += delta
+        sweeps = it + 1
+        if it % 25 == 24:
+            if float(np.abs(delta).max() if delta.size else 0.0) < tol:
+                converged = True
+                break
 
     # taper the correction back toward transfinite near fixed nodes
     w = np.array([min(w_max, max(0.0, (layer[i] - 1) / float(taper))) for i in free])
@@ -1136,11 +1153,11 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
 
     moved = 0
     for i in free:
-        if abs(P[i][0] - nodes[i][0]) > 1e-9 or abs(P[i][1] - nodes[i][1]) > 1e-9:
+        if abs(P[i][0] - nodes[i][0]) > 1e-7 or abs(P[i][1] - nodes[i][1]) > 1e-7:
             moved += 1
         nodes[i][0] = float(P[i][0])
         nodes[i][1] = float(P[i][1])
-    return moved
+    return {"moved": moved, "sweeps": sweeps, "converged": converged, "free": len(free)}
 
 
 def _distribute_cells(total: int, lengths: List[float]) -> List[int]:
@@ -1369,9 +1386,11 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
         # nodes on interior block interfaces - so grid lines flow smoothly across
         # block seams. True geometry-boundary nodes stay pinned. Kept only if it
         # does not make the worst cell worse.
-        smooth_iters = 0 if params.get("smooth") is False else int(params.get("smoothIterations", 200))
+        want_smooth = params.get("smooth") is not False
+        smooth_iters = int(params.get("smoothIterations", 0))  # 0 -> auto in the smoother
         smoothed = 0
-        if smooth_iters > 0:
+        smoothing_note = "off" if not want_smooth else "not attempted"
+        if want_smooth and elements:
             fixed_idx = set()
             for idxs in boundaries.values():
                 fixed_idx.update(idxs)
@@ -1387,25 +1406,38 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     pass
             trial = copy.deepcopy(nodes)
-            smoothed = _winslow_smooth(trial, elements, fixed_idx, iterations=smooth_iters)
-            if smoothed:
+            info = _winslow_smooth(trial, elements, fixed_idx, iterations=smooth_iters)
+            if info["free"] == 0:
+                smoothing_note = "skipped: every interior node borders a block junction"
+            elif info["moved"] == 0:
+                smoothing_note = "skipped: nothing to relax (grid already harmonic)"
+            else:
                 tq = _mesh_quality(trial, elements)
                 a0, a1 = quality.get("min_angle_degrees", 0), tq.get("min_angle_degrees", 0)
-                # Keep the smoothed grid only when it is genuinely better: a
-                # higher worst-cell angle, or no meaningful loss there plus a
-                # smoother mesh overall. Transfinite grids that are already
-                # boundary-fitted (O-grid ring, C-grid wrap) are left alone.
-                better = tq.get("triangles", 0) == 0 and (
-                    a1 >= a0 + 0.5
-                    or (a1 >= a0 - 1.5
-                        and tq.get("mean", 0) >= quality.get("mean", 0)
-                        and tq.get("p05", 0) >= quality.get("p05", 0) - 1e-4)
-                )
-                if better:
+                dmean = tq.get("mean", 0) - quality.get("mean", 0)
+                dp05 = tq.get("p05", 0) - quality.get("p05", 0)
+                # Keep the smoothed grid when it is clearly smoother overall
+                # (5th-percentile or mean cell quality up meaningfully) and the
+                # worst cell stays healthy - never introduce a sub-20-degree
+                # cell, and don't let the worst angle collapse. Grids that are
+                # already boundary-fitted with no interior gain (C-grid wrap)
+                # keep their transfinite form.
+                if (tq.get("triangles", 0) == 0
+                        and a1 >= 20.0 and a1 >= a0 - 6.0
+                        and (dp05 > 0.02 or dmean > 5e-3)):
                     nodes = trial
                     quality = tq
+                    smoothed = info["moved"]
+                    conv = "converged" if info["converged"] else f"{info['sweeps']} sweeps"
+                    smoothing_note = (
+                        f"applied to {smoothed} nodes ({conv}); "
+                        f"p05 {quality.get('p05', 0):.3f}, min angle {a1:.1f}"
+                    )
                 else:
-                    smoothed = 0
+                    smoothing_note = (
+                        f"discarded: min angle {a0:.1f} -> {a1:.1f}, "
+                        f"mean {dmean:+.4f}, p05 {dp05:+.4f} - transfinite grid kept"
+                    )
 
         return {
             "generator": "Gmsh transfinite (structured)"
@@ -1417,8 +1449,8 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
             "settings": {
                 "blocks": len(surfaces),
                 "edges": len(edge_defs),
-                "smoothing_iterations": smooth_iters if smoothed else 0,
                 "smoothed_nodes": smoothed,
+                "smoothing": smoothing_note,
             },
             "num_nodes": len(nodes),
             "num_elements": len(elements),
