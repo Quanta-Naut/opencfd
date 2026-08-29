@@ -14,10 +14,17 @@ import argparse
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 BACKEND_DIR = os.path.join(ROOT_DIR, "backend")
 FRONTEND_DIR = os.path.join(ROOT_DIR, "frontend")
-PYTHON_EXE = os.path.join(BACKEND_DIR, "venv", "bin", "python3")
 
-if not os.path.exists(PYTHON_EXE):
-    PYTHON_EXE = sys.executable
+# venv python: Scripts\python.exe on Windows, bin/python3 elsewhere
+_venv = os.path.join(BACKEND_DIR, "venv")
+PYTHON_EXE = next(
+    (p for p in (
+        os.path.join(_venv, "Scripts", "python.exe"),
+        os.path.join(_venv, "bin", "python3"),
+        os.path.join(_venv, "bin", "python"),
+    ) if os.path.exists(p)),
+    sys.executable,
+)
 
 def main():
     parser = argparse.ArgumentParser(description="Launch OpenCFD Studio")
