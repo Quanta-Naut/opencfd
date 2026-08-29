@@ -1312,53 +1312,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
         </div>
       )}
 
-      {/* 05 BOUNDARIES */}
-      {activeStage === 'boundaries' && stageStatus?.boundaries?.locked && (
-        <StageGate
-          title="Boundaries are locked"
-          reason="Finish geometry, domain and boundary tagging first:"
-          missing={stageStatus.boundaries.missing}
-          onCta={onSelectStage ? () => onSelectStage('geometry') : undefined}
-        />
-      )}
-
-      {activeStage === 'boundaries' && !stageStatus?.boundaries?.locked && (
-        <div className="p-4 space-y-3 text-xs text-[#171A1F]">
-          <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
-            Boundary Patches
-          </span>
-          <div className="space-y-1">
-            {[
-              { name: 'inlet', type: 'Velocity Inlet', val: `${state.boundaries.inletVelocity} m/s` },
-              { name: 'outlet', type: 'Pressure Outlet', val: '0 Pa' },
-              { name: 'airfoil', type: 'No-Slip Wall', val: 'Solid' },
-              { name: 'top', type: 'Slip Wall', val: 'Free' },
-              { name: 'bottom', type: 'Slip Wall', val: 'Free' },
-            ].map((patch) => {
-              const isSelected = selectedBoundary === patch.name;
-              return (
-                <button
-                  key={patch.name}
-                  onClick={() => onSelectBoundary(patch.name)}
-                  className={`w-full p-2.5 rounded-md border text-left flex items-center justify-between transition-colors ${
-                    isSelected
-                      ? 'bg-blue-50/60 border-[#2563EB] text-[#171A1F]'
-                      : 'bg-white border-[#E1E4E8] text-[#69717D] hover:bg-[#F5F6F8]'
-                  }`}
-                >
-                  <div>
-                    <span className="font-semibold text-[#171A1F] block">{patch.name}</span>
-                    <span className="text-[10px] text-[#69717D]">{patch.type}</span>
-                  </div>
-                  <span className="text-[10px] font-mono text-[#2563EB] font-medium">{patch.val}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* 06 SOLVER */}
+      {/* 04 SOLVER */}
       {activeStage === 'solver' && stageStatus?.solver?.locked && (
         <StageGate
           title="Solver is locked"

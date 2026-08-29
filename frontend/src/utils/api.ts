@@ -386,7 +386,13 @@ export async function requestMeshFromSketch(params: {
   return data.data;
 }
 
-export async function generateCaseFiles(physics: any, boundaries: any, solverControls: any) {
+export async function generateCaseFiles(
+  physics: any,
+  boundaries: any,
+  solverControls: any,
+  patches: any[] = [],
+  refLength = 1,
+) {
   try {
     const res = await fetch(`${API_BASE}/api/solver/case-files`, {
       method: 'POST',
@@ -396,6 +402,8 @@ export async function generateCaseFiles(physics: any, boundaries: any, solverCon
         physics,
         boundaries,
         solver_controls: solverControls,
+        patches,
+        ref_length: refLength,
       }),
     });
     if (!res.ok) throw new Error('API failed');

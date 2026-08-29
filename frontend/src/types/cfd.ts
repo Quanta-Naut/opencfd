@@ -2,12 +2,21 @@ export type FlowRegime = 'laminar' | 'turbulent';
 export type Compressibility = 'incompressible' | 'compressible';
 export type TimeFormulation = 'steady' | 'transient';
 
-export type TurbulenceModel = 
+// Kept for older code paths; Case Setup uses TurbulenceModelId from
+// ../../caseSetup/turbulenceCatalog which is a superset.
+export type TurbulenceModel =
   | 'kOmegaSST'
   | 'kEpsilon'
   | 'realizableKE'
   | 'RNGkEpsilon'
   | 'SpalartAllmaras';
+
+export type SpeedRegime =
+  | 'incompressible'
+  | 'subsonic'
+  | 'transonic'
+  | 'supersonic'
+  | 'hypersonic';
 
 export type SolverType = 'simpleFoam' | 'icoFoam' | 'pisoFoam' | 'pimpleFoam';
 
@@ -111,6 +120,27 @@ export interface PhysicsConfig {
 
   // Wall treatment
   wallTreatment: 'wall_functions' | 'low_re_resolved';
+
+  // ── Case Setup additions ──
+  /** Turbulence model id from caseSetup/turbulenceCatalog (superset of TurbulenceModel). */
+  turbulenceModelId: string;
+  /** Wall-treatment choice used by Case Setup (superset of wallTreatment). */
+  wallModel: 'auto' | 'wall_functions' | 'resolved';
+  speedRegime: SpeedRegime;
+}
+
+/** Near-wall resolution + per-patch boundary conditions, edited in Case Setup. */
+export interface CaseSetupConfig {
+  /** Target y+ for the wall cells; drives the mesh first-cell height. */
+  targetYPlus: number;
+  /** Prism / wall-normal layer growth ratio. */
+  growthRate: number;
+  /** Manual characteristic length; null = auto (chord or hydraulic diameter). */
+  refLengthOverride: number | null;
+  /** Push the computed first-cell height into the mesh automatically. */
+  linkFirstCellToMesh: boolean;
+  /** Per-patch boundary conditions, keyed by patch (tag) name. */
+  patches: Record<string, import('../caseSetup/bcCatalog').PatchBC>;
 }
 
 export interface BoundaryConditions {
@@ -171,6 +201,7 @@ export interface CFDProjectState {
   geometry: GeometryConfig;
   physics: PhysicsConfig;
   boundaries: BoundaryConditions;
+  caseSetup: CaseSetupConfig;
   yplus: YPlusCalculation;
   solver: SolverControls;
   postprocess: PostProcessConfig;

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Lock } from 'lucide-react';
 
-export type StageId = 'geometry' | 'caseSetup' | 'mesh' | 'physics' | 'yplus' | 'boundaries' | 'solver' | 'results';
+export type StageId = 'geometry' | 'caseSetup' | 'mesh' | 'physics' | 'yplus' | 'solver' | 'results';
 
 export interface StageStatus {
   locked: boolean;
@@ -24,9 +24,8 @@ export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
     { id: 'geometry', num: '01', label: 'Geometry' },
     { id: 'caseSetup', num: '02', label: 'Case Setup' },
     { id: 'mesh', num: '03', label: 'Mesh' },
-    { id: 'boundaries', num: '04', label: 'Boundaries' },
-    { id: 'solver', num: '05', label: 'Solver' },
-    { id: 'results', num: '06', label: 'Results' },
+    { id: 'solver', num: '04', label: 'Solver' },
+    { id: 'results', num: '05', label: 'Results' },
   ];
 
   return (

@@ -6,7 +6,9 @@ import { CadWorkbench2D } from './components/cad/CadWorkbench2D';
 import { RightContextInspector } from './components/layout/RightContextInspector';
 import { BottomSolverDrawer } from './components/layout/BottomSolverDrawer';
 import { StatusBar } from './components/layout/StatusBar';
-import { CaseSetupDrawer } from './components/layout/CaseSetupDrawer';
+import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
+import { wallResolution } from './caseSetup/flowCalc';
+import { defaultPatchBC } from './caseSetup/bcCatalog';
 import {
   CFDProjectState,
   GeometryConfig,
@@ -159,6 +161,16 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     [cadEntities, flowType, edgeTagMap]
   );
 
+  // Distinct tagged patches (name == tag), for the Case Setup boundary table.
+  const patchRoles = useMemo(() => {
+    const seen = new Map<string, BoundaryTag>();
+    for (const e of boundaryEdges) if (e.explicit) seen.set(e.tag, e.tag);
+    const order: BoundaryTag[] = ['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic'];
+    return [...seen.keys()]
+      .sort((a, b) => order.indexOf(a as BoundaryTag) - order.indexOf(b as BoundaryTag))
+      .map((t) => ({ name: t, role: t as any }));
+  }, [boundaryEdges]);
+
   // Self-healing edge tags (Ansys "Named Selection" behaviour): every tag's
   // location is remembered for the whole session. When an edge is redrawn (new
   // entity id) close to where a tag used to be, it gets that tag back - even if
@@ -291,7 +303,18 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         kappa: 0.41,
       },
       wallTreatment: 'low_re_resolved',
+      turbulenceModelId: 'kOmegaSST',
+      wallModel: 'auto',
+      speedRegime: 'incompressible',
       ...(savedSession?.state?.physics || {}),
+    },
+    caseSetup: {
+      targetYPlus: 1.0,
+      growthRate: 1.2,
+      refLengthOverride: null,
+      linkFirstCellToMesh: true,
+      patches: {},
+      ...(savedSession?.state?.caseSetup || {}),
     },
     boundaries: {
       inletVelocity: 35.0,
@@ -369,6 +392,24 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   const [caseFiles, setCaseFiles] = useState<Record<string, string>>({});
   const [isMeshing, setIsMeshing] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Full patch BC spec (roles + per-patch overrides) sent to the case generator.
+  const patchSpec = useMemo(
+    () =>
+      patchRoles.map(({ name, role }) => ({
+        name,
+        role,
+        bc: state.caseSetup.patches[name] ?? defaultPatchBC(role as any, state.physics.inletVelocity),
+      })),
+    [patchRoles, state.caseSetup.patches, state.physics.inletVelocity],
+  );
+  const caseRefLength = useMemo(() => {
+    const cs = state.caseSetup;
+    if (cs.refLengthOverride && cs.refLengthOverride > 0) return cs.refLengthOverride;
+    return (flowType === 'internal' ? state.geometry.domainHeight : state.geometry.chord) || 1;
+  }, [state.caseSetup.refLengthOverride, flowType, state.geometry.domainHeight, state.geometry.chord]);
+  const makeCaseFiles = () =>
+    generateCaseFiles(state.physics, state.boundaries, state.solver, patchSpec, caseRefLength);
 
   // ── Auto-save session to the project folder on disk (~/.OpenCFD/projects) ──
   const buildSession = (): StudioSession => ({
@@ -537,11 +578,6 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       reason: 'Finish geometry, domain and boundary tagging first',
       missing: meshGate.missing,
     },
-    boundaries: {
-      locked: !meshGate.ready,
-      reason: 'Finish geometry, domain and boundary tagging first',
-      missing: meshGate.missing,
-    },
     solver: { locked: !meshReady, reason: 'Generate a mesh first' },
     results: { locked: !meshReady, reason: 'Generate a mesh first' },
   };
@@ -622,7 +658,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           state.physics.regime
         );
         setFieldData(fields);
-        const dicts = await generateCaseFiles(state.physics, state.boundaries, state.solver);
+        const dicts = await makeCaseFiles();
         setCaseFiles(dicts);
       } catch (postProcessError: any) {
         setState((prev) => ({
@@ -756,7 +792,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       try {
         const fields = await fetchFieldSolution(mesh, state.geometry.type, state.boundaries.inletVelocity, state.physics.regime);
         setFieldData(fields);
-        const dicts = await generateCaseFiles(state.physics, state.boundaries, state.solver);
+        const dicts = await makeCaseFiles();
         setCaseFiles(dicts);
       } catch (postProcessError: any) {
         setState((prev) => ({
@@ -793,7 +829,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       );
       setFieldData(fields);
 
-      const dicts = await generateCaseFiles(state.physics, state.boundaries, state.solver);
+      const dicts = await makeCaseFiles();
       setCaseFiles(dicts);
 
       setState((prev) => ({
@@ -825,6 +861,39 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       ],
     }));
   };
+
+  // Case Setup drives the mesh first-cell height when the link is on.
+  useEffect(() => {
+    const cs = state.caseSetup;
+    if (!cs.linkFirstCellToMesh) return;
+    const refLen = cs.refLengthOverride && cs.refLengthOverride > 0
+      ? cs.refLengthOverride
+      : (flowType === 'internal' ? state.geometry.domainHeight : state.geometry.chord) || 1;
+    const wr = wallResolution(
+      { velocity: state.physics.inletVelocity, density: state.physics.density,
+        kinematicViscosity: state.physics.kinematicViscosity, refLength: refLen },
+      cs.targetYPlus, cs.growthRate,
+    );
+    const mm = Number(wr.firstCellHeightMm.toPrecision(4));
+    setState((prev) => {
+      if (Math.abs(prev.geometry.firstLayerHeightMm - mm) < mm * 1e-3
+          && prev.geometry.numPrismLayers === wr.layerCount) return prev;
+      return {
+        ...prev,
+        geometry: {
+          ...prev.geometry,
+          firstLayerHeightMm: mm,
+          numPrismLayers: wr.layerCount,
+          prismExpansionRatio: cs.growthRate,
+          usePrismLayers: true,
+        },
+      };
+    });
+  }, [
+    state.caseSetup.linkFirstCellToMesh, state.caseSetup.targetYPlus, state.caseSetup.growthRate,
+    state.caseSetup.refLengthOverride, state.physics.inletVelocity, state.physics.density,
+    state.physics.kinematicViscosity, flowType, state.geometry.chord, state.geometry.domainHeight,
+  ]);
 
   const handleRunSolver = () => {
     if (wsRef.current) {
@@ -911,19 +980,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       <div className="flex-1 flex min-h-0 relative">
         {activeStage === 'caseSetup' && (
           <div className="absolute inset-0 z-30 bg-[#F5F6F8] overflow-hidden flex">
-            <CaseSetupDrawer
+            <CaseSetupPanel
               state={state}
+              setState={setState}
               flowType={flowType}
               onFlowTypeChange={setFlowType}
-              updatePhysics={(p) => setState((prev) => ({
-                ...prev,
-                physics: { ...prev.physics, ...p },
-                boundaries: {
-                  ...prev.boundaries,
-                  ...(p.inletVelocity !== undefined ? { inletVelocity: p.inletVelocity } : {}),
-                },
-              }))}
-              updateBoundaries={(p) => setState((prev) => ({ ...prev, boundaries: { ...prev.boundaries, ...p } }))}
+              patchRoles={patchRoles}
             />
           </div>
         )}

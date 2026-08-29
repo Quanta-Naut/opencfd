@@ -8,7 +8,8 @@ from pydantic import BaseModel
 
 from app.services.yplus_service import calculate_yplus, calculate_inflow_turbulence
 from app.services.gmsh_service import generate_mesh_data, generate_structured_mesh
-from app.services.foam_service import generate_openfoam_case_files, simulate_cfd_run
+from app.services.foam import generate_openfoam_case_files
+from app.services.foam_service import simulate_cfd_run
 from app.services.postprocess_service import generate_field_solution
 from app.services.cad2d_service import (
     parse_dat_or_csv_airfoil,
@@ -52,6 +53,8 @@ class CaseFilesRequest(BaseModel):
     physics: Dict[str, Any] = {}
     boundaries: Dict[str, Any] = {}
     solver_controls: Dict[str, Any] = {}
+    patches: List[Dict[str, Any]] = []
+    ref_length: float = 1.0
 
 class PostProcessRequest(BaseModel):
     mesh_data: Dict[str, Any] = {}
@@ -224,7 +227,9 @@ async def case_files_endpoint(req: CaseFilesRequest):
             case_dir=req.case_dir,
             physics=req.physics,
             boundaries=req.boundaries,
-            solver_controls=req.solver_controls
+            solver_controls=req.solver_controls,
+            patches=req.patches,
+            ref_length=req.ref_length,
         )
         return {"success": True, "files": files}
     except Exception as e:
