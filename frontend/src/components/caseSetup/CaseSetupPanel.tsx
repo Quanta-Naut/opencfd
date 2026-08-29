@@ -7,6 +7,7 @@ import { turbulenceModel } from '../../caseSetup/turbulenceCatalog';
 import { defaultPatchBC, PatchEntry, PatchRole } from '../../caseSetup/bcCatalog';
 import { AnalysisSection } from './AnalysisSection';
 import { ReferenceSection } from './ReferenceSection';
+import { ThermoSection } from './ThermoSection';
 import { TurbulenceSection } from './TurbulenceSection';
 import { NearWallSection } from './NearWallSection';
 import { BoundarySection } from './BoundarySection';
@@ -150,6 +151,7 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
         <div className="w-full p-5 lg:p-7 grid grid-cols-1 xl:grid-cols-2 gap-4 content-start items-start">
           <AnalysisSection {...section} flowType={flowType} onFlowTypeChange={onFlowTypeChange} />
           <ReferenceSection {...section} flowType={flowType} />
+          {compressible && <ThermoSection {...section} />}
           {physics.regime === 'turbulent' && <TurbulenceSection {...section} />}
           <NearWallSection {...section} model={model} />
           <BoundarySection {...section} model={model} patches={patches} onPatchBC={setPatchBC} />

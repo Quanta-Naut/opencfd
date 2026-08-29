@@ -38,7 +38,7 @@ export const ReferenceSection: React.FC<SectionProps & { flowType: FlowType }> =
         </Field>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-[430px]">
         <Field label="Kinematic viscosity ν">
           <NumberInput value={physics.kinematicViscosity} step={1e-7} min={1e-9} unit="m²/s" onChange={(v) => setPhysics({ kinematicViscosity: v })} />
         </Field>
@@ -64,14 +64,6 @@ export const ReferenceSection: React.FC<SectionProps & { flowType: FlowType }> =
             )}
           </div>
         </Field>
-        {compressible && (
-          <Field label="Specific heat ratio γ / R">
-            <div className="flex gap-1.5">
-              <NumberInput value={physics.specificHeatRatio} step={0.01} onChange={(v) => setPhysics({ specificHeatRatio: v })} />
-              <NumberInput value={physics.gasConstant} step={1} unit="J/kgK" onChange={(v) => setPhysics({ gasConstant: v })} />
-            </div>
-          </Field>
-        )}
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
