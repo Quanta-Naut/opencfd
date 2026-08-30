@@ -1085,11 +1085,11 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     const clamped = Math.max(0, Math.min(times.length - 1, index));
     if (times[clamped] === undefined) return;
 
-    // Optimistic UI update — move slider immediately
+    // 1. Instant optimistic UI update for 60fps realtime scrubbing
     setTransientFrameIndex(clamped);
     transientFrameIndexRef.current = clamped;
 
-    // Cache hit → instant, no debounce needed
+    // 2. Cache hit → instant GPU field update
     if (frameCacheRef.current.has(clamped)) {
       const cached = frameCacheRef.current.get(clamped)!;
       setFieldData(cached);
@@ -1097,68 +1097,83 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       return;
     }
 
-    // Debounce actual network fetch by 80ms to absorb rapid slider drags
-    if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
-    scrubDebounceRef.current = window.setTimeout(() => {
-      scrubDebounceRef.current = null;
-      // Cancel previous request and start new one
-      if (fetchAbortRef.current) fetchAbortRef.current.abort();
-      const aborter = new AbortController();
-      fetchAbortRef.current = aborter;
-      setResultsLoading(true);
-      void fetchFrame(times[clamped], clamped, aborter.signal).then((ok) => {
-        setResultsLoading(false);
-        if (ok) prefetchAdjacent(clamped);
-      });
-    }, 80);
+    // 3. Realtime network fetch with immediate in-flight abort
+    if (fetchAbortRef.current) fetchAbortRef.current.abort();
+    const aborter = new AbortController();
+    fetchAbortRef.current = aborter;
+
+    void fetchFrame(times[clamped], clamped, aborter.signal).then((ok) => {
+      if (ok) prefetchAdjacent(clamped);
+    });
   }, [prefetchAdjacent]);
 
-  // Single stable interval — reads everything from refs, never stale
-  const playIntervalRef = useRef<number | null>(null);
+  // Single stable interval/timeout loop — calibrated to actual physical simulation time
+  const playTimeoutRef = useRef<number | null>(null);
   const stopPlayback = useCallback(() => {
-    if (playIntervalRef.current !== null) {
-      window.clearInterval(playIntervalRef.current);
-      playIntervalRef.current = null;
+    if (playTimeoutRef.current !== null) {
+      window.clearTimeout(playTimeoutRef.current);
+      playTimeoutRef.current = null;
     }
     setTransientPlaying(false);
     transientPlayingRef.current = false;
   }, []);
 
-  const startPlayback = useCallback(() => {
-    if (playIntervalRef.current !== null) window.clearInterval(playIntervalRef.current);
-    setTransientPlaying(true);
-    transientPlayingRef.current = true;
+  const scheduleNextFrame = useCallback(() => {
+    if (!transientPlayingRef.current) return;
+    const times = transientTimesRef.current;
+    const current = transientFrameIndexRef.current;
 
-    const tick = () => {
-      if (!transientPlayingRef.current) { stopPlayback(); return; }
-      const times = transientTimesRef.current;
-      const current = transientFrameIndexRef.current;
-      if (times.length < 2 || current >= times.length - 1) { stopPlayback(); return; }
+    if (times.length < 2 || current >= times.length - 1) {
+      stopPlayback();
+      return;
+    }
 
-      const next = current + 1;
+    const next = current + 1;
+    // Physical time delta between current and next frame in seconds
+    const dtReal = Math.max(0.001, (times[next] ?? 0) - (times[current] ?? 0));
+    // Delay in milliseconds scaled by chosen playback speed (e.g. 1x = 1:1 real simulation time)
+    const speed = transientSpeedRef.current || 1.0;
+    const delayMs = Math.max(16, Math.round((dtReal * 1000) / speed));
+
+    playTimeoutRef.current = window.setTimeout(() => {
+      if (!transientPlayingRef.current) return;
       transientFrameIndexRef.current = next;
       setTransientFrameIndex(next);
 
-      // Cancel any user-initiated scrub fetch that may be in-flight
-      if (fetchAbortRef.current) fetchAbortRef.current.abort();
-      const aborter = new AbortController();
-      fetchAbortRef.current = aborter;
-      void fetchFrame(times[next], next, aborter.signal);
-    };
+      if (frameCacheRef.current.has(next)) {
+        setFieldData(frameCacheRef.current.get(next)!);
+        prefetchAdjacent(next);
+        scheduleNextFrame();
+      } else {
+        if (fetchAbortRef.current) fetchAbortRef.current.abort();
+        const aborter = new AbortController();
+        fetchAbortRef.current = aborter;
+        void fetchFrame(times[next], next, aborter.signal).then(() => {
+          scheduleNextFrame();
+        });
+      }
+    }, delayMs);
+  }, [stopPlayback, prefetchAdjacent]);
 
-    const intervalMs = Math.max(50, Math.round(500 / (transientSpeedRef.current || 1.0)));
-    playIntervalRef.current = window.setInterval(tick, intervalMs);
-  }, [stopPlayback]);
+  const startPlayback = useCallback(() => {
+    if (playTimeoutRef.current !== null) window.clearTimeout(playTimeoutRef.current);
+    setTransientPlaying(true);
+    transientPlayingRef.current = true;
+    scheduleNextFrame();
+  }, [scheduleNextFrame]);
 
-  // When speed changes mid-playback, restart to apply new interval
+  // When speed changes mid-playback, restart to apply new timing
   useEffect(() => {
     transientSpeedRef.current = transientSpeed;
-    if (transientPlayingRef.current) startPlayback();
-  }, [transientSpeed]);
+    if (transientPlayingRef.current) {
+      if (playTimeoutRef.current !== null) window.clearTimeout(playTimeoutRef.current);
+      scheduleNextFrame();
+    }
+  }, [transientSpeed, scheduleNextFrame]);
 
   // Cleanup on unmount
   useEffect(() => () => {
-    if (playIntervalRef.current) window.clearInterval(playIntervalRef.current);
+    if (playTimeoutRef.current) window.clearTimeout(playTimeoutRef.current);
     if (fetchAbortRef.current) fetchAbortRef.current.abort();
     if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
   }, []);

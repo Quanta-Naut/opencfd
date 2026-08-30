@@ -77,11 +77,10 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
     prevStatus.current = executionStatus;
   }, [executionStatus]);
 
-  // Tell floating things (toasts) how tall the bottom bar area is so they can sit
-  // above it instead of overlapping the console. 24px status bar + 32px header
-  // + 176px expanded body.
+  // Tell floating things (player, colorbar) how tall the bottom drawer is inside the canvas
+  // area so they sit snugly right above it. 32px header + (isExpanded ? bodyH : 0).
   useEffect(() => {
-    const h = 24 + 32 + (isExpanded ? bodyH : 0);
+    const h = 32 + (isExpanded ? bodyH : 0);
     document.documentElement.style.setProperty('--app-bottom-bar', `${h}px`);
     return () => { document.documentElement.style.removeProperty('--app-bottom-bar'); };
   }, [isExpanded, bodyH]);

@@ -246,11 +246,15 @@ export function useWebGLField() {
     }
 
     // World→NDC mat3 (column-major)
-    // ndc_x = (pan.x + cw/2 + world_x*zoom) * 2/cw - 1
-    const sx = 2*zoom/cw, sy = -2*zoom/ch;
-    const tx = (pan.x + cw/2) * 2/cw - 1;
-    const ty = -((pan.y + ch/2) * 2/ch - 1);
-    const mat = new Float32Array([sx,0,0, 0,sy,0, tx,ty,1]);
+    // Canvas 2D: screen_x = cw/2 + pan.x + world_x*zoom
+    //            screen_y = ch/2 + pan.y - world_y*zoom
+    // WebGL NDC: ndc_x = 2*screen_x/cw - 1 = (2*zoom/cw)*world_x + (2*pan.x/cw)
+    //            ndc_y = 1 - 2*screen_y/ch = (2*zoom/ch)*world_y - (2*pan.y/ch)
+    const sx = 2 * zoom / cw;
+    const sy = 2 * zoom / ch;
+    const tx = 2 * pan.x / cw;
+    const ty = -2 * pan.y / ch;
+    const mat = new Float32Array([sx, 0, 0, 0, sy, 0, tx, ty, 1]);
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -271,16 +275,6 @@ export function useWebGLField() {
     gl.uniform1i(gl.getUniformLocation(prog, 'u_colormap'), 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.idxBuf);
     gl.drawElements(gl.TRIANGLES, g.triCount, gl.UNSIGNED_INT, 0);
-
-    // Draw boundary edges
-    gl.useProgram(edgeProg);
-    const aPosE = gl.getAttribLocation(edgeProg, 'a_pos');
-    gl.bindBuffer(gl.ARRAY_BUFFER, g.posBuf);
-    gl.enableVertexAttribArray(aPosE);
-    gl.vertexAttribPointer(aPosE, 2, gl.FLOAT, false, 0, 0);
-    gl.uniformMatrix3fv(gl.getUniformLocation(edgeProg, 'u_transform'), false, mat);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.edgeIdxBuf);
-    gl.drawElements(gl.LINES, g.edgeCount, gl.UNSIGNED_INT, 0);
   }, []);
 
   useEffect(() => () => { destroy(); }, [destroy]);

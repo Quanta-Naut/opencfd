@@ -689,10 +689,13 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   // ── WebGL geometry upload: fires once per mesh change ────────────────────────
   const [glReady, setGlReady] = useState(false);
   useEffect(() => {
-    if (!meshData?.nodes?.length || !meshData?.elements?.length) { setGlReady(false); return; }
-    const ok = glUpdateGeometry(meshData.nodes as [number,number][], meshData.elements);
+    if (!meshData?.nodes?.length || !meshData?.elements?.length || !glCanvasRef.current) {
+      setGlReady(false);
+      return;
+    }
+    const ok = glUpdateGeometry(meshData.nodes as [number, number][], meshData.elements);
     setGlReady(ok);
-  }, [meshData?.nodes, meshData?.elements, glUpdateGeometry]);
+  }, [meshData?.nodes, meshData?.elements, glCanvasRef.current, glUpdateGeometry]);
 
 
   // ── Camera Framing Helper ───────────────────────────────────────────────────
@@ -702,14 +705,26 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     const cw = canvas.clientWidth || 800;
     const ch = canvas.clientHeight || 600;
 
+    // Get bottom drawer overlay height if present
+    const bottomBarPx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar')) || 32;
+    // Visible canvas height above the bottom console drawer
+    const visibleH = Math.max(100, ch - bottomBarPx);
+
     const w = Math.max(0.01, box.maxX - box.minX);
     const h = Math.max(0.01, box.maxY - box.minY);
     const cx = (box.minX + box.maxX) / 2;
     const cy = (box.minY + box.maxY) / 2;
 
     const availW = cw * marginRatio;
-    const availH = ch * marginRatio;
+    const availH = visibleH * marginRatio;
     const newZoom = Math.max(0.5, Math.min(25000, Math.min(availW / w, availH / h)));
+    
+    // Screen Y = ch/2 + pan.y - worldY * zoom
+    // To shift the center of the rendered content UP on screen (away from the bottom console),
+    // pan.y must be DECREASED (i.e. - bottomBarPx/2), but because world Y is inverted (-wy*zoom),
+    // screen_y = ch/2 + pan.y - cy*zoom. We want screen_cy = (ch - bottomBarPx)/2 = ch/2 - bottomBarPx/2.
+    // So: ch/2 + pan.y - cy*zoom = ch/2 - bottomBarPx/2  ==>  pan.y = cy*zoom - (bottomBarPx / 2).
+    // Let's ensure bottomBarPx is measured accurately and add padding for the transient player.
     const newPan = {
       x: -cx * newZoom,
       y: cy * newZoom,
@@ -719,14 +734,16 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     setPan(newPan);
   }, []);
 
-  // Frame the loaded geometry / mesh once on mount so a reopened project opens
-  // centred instead of scrolled off toward a corner.
-  const didInitialFit = useRef(false);
+  // Frame the loaded geometry / mesh whenever meshData is loaded or when entering Results/Solver
+  const lastFittedMeshKey = useRef<string>('');
   useEffect(() => {
-    if (didInitialFit.current) return;
     const meshNodes: number[][] | undefined = showMesh && !meshStale ? meshData?.nodes : undefined;
     const ents = cadState.entities.filter(e => e.layer !== 'construction');
     if (!meshNodes?.length && ents.length === 0) return;
+
+    const currentKey = meshNodes?.length ? `mesh:${meshNodes.length}:${meshOnly ? 'results' : 'cad'}` : `cad:${ents.length}`;
+    if (lastFittedMeshKey.current === currentKey) return;
+
     const id = requestAnimationFrame(() => {
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
       if (meshNodes?.length) {
@@ -742,11 +759,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
       if (minX !== Infinity) {
         fitBoundingBox({ minX, maxX, minY, maxY }, 0.75);
-        didInitialFit.current = true;
+        lastFittedMeshKey.current = currentKey;
       }
     });
     return () => cancelAnimationFrame(id);
-  }, [cadState.entities, meshData, showMesh, meshStale, fitBoundingBox]);
+  }, [cadState.entities, meshData, showMesh, meshStale, meshOnly, fitBoundingBox]);
 
   // When switching between steps (e.g. to Step 2, Step 3), reset to 'select' tool by default
   useEffect(() => {
@@ -833,6 +850,8 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   }, [cadState.entities, canvasMode, fitBoundingBox, meshData, showMesh]);
   const [showConstruction, setShowConstruction] = useState(true);
   const [constructionMode, setConstructionMode] = useState(false); // draw to construction layer
+  const [showMeshWireframe, setShowMeshWireframe] = useState(false); // toggle mesh overlay in Results
+  const [showResultsStreamlines, setShowResultsStreamlines] = useState(false); // toggle streamlines overlay in Results
 
   // ── Op parameters ───────────────────────────────────────────────────────────
   const [filletR, setFilletR] = useState(0.05);
@@ -1373,11 +1392,10 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         else edgeCounts.set(key, [a, b, 1]);
       };
 
-      // Field overlay: when WebGL canvas is active, skip 2D per-element coloring
-      // (the WebGL overlay canvas handles it). Only compute haveField for wireframe style.
-      const vals: number[] | undefined = showField && !glReady ? fieldData?.fields?.[activeField] : undefined;
+      // Field overlay (Results): colour each element by the mean of its nodes'
+      // scalar values, normalised to the field range.
+      const vals: number[] | undefined = showField ? fieldData?.fields?.[activeField] : undefined;
       const haveField = Array.isArray(vals) && vals.length === nodes.length;
-      const glHaveField = glReady && showField && Array.isArray(fieldData?.fields?.[activeField]);
       let lo = 0;
       let hi = 1;
       if (haveField) {
@@ -1390,52 +1408,93 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         }
       }
 
-      // Draw mesh cells — only wireframe when WebGL is rendering field colors
-      ctx.strokeStyle = (haveField || glHaveField) ? 'rgba(255,255,255,0.12)' : '#CBD5E1';
-      ctx.lineWidth = (haveField || glHaveField) ? 0.4 : 0.65;
+      // In Results mode (showField is true), only stroke internal mesh cell edges if showMeshWireframe is enabled.
+      const shouldDrawWireframe = !showField || showMeshWireframe;
+      ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.18)' : '#CBD5E1';
+      ctx.lineWidth = haveField ? 0.45 : 0.65;
 
       for (const element of elements) {
         if (element.length < 3) continue;
         if (element.some((ni: number) => !nodes[ni])) continue; // guard: out-of-range node refs
         const points = element.map((nodeIndex: number) => ws(nodes[nodeIndex][0], nodes[nodeIndex][1]));
 
-        if (haveField) {
-          // Canvas 2D fallback coloring (only when WebGL unavailable)
+        if (glHaveField) {
+          // Smooth continuous field is always rendered underneath by GPU.
+          // When "Mesh" is toggled ON, overlay the crisp white wireframe grid lines directly on top of the smooth flow!
+          if (showMeshWireframe) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+            ctx.lineWidth = 0.55;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let index = 1; index < points.length; index += 1) {
+              ctx.lineTo(points[index].x, points[index].y);
+            }
+            ctx.closePath();
+            ctx.stroke();
+          }
+        } else if (haveField) {
           let s = 0;
           for (const ni of element) s += (vals as number[])[ni] ?? 0;
           const t = (s / element.length - lo) / (hi - lo);
-          ctx.fillStyle = colormapRGB(t, colormap);
-        } else if (glHaveField) {
-          // Transparent fill — WebGL overlay shows the colors
-          ctx.fillStyle = 'transparent';
+          const col = colormapRGB(t, colormap);
+          ctx.fillStyle = col;
+          ctx.strokeStyle = shouldDrawWireframe ? 'rgba(255,255,255,0.30)' : col;
+          ctx.lineWidth = shouldDrawWireframe ? 0.5 : 0.6;
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let index = 1; index < points.length; index += 1) {
+            ctx.lineTo(points[index].x, points[index].y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          if (shouldDrawWireframe) ctx.stroke();
         } else {
           ctx.fillStyle = '#FFFFFF';
+          ctx.strokeStyle = '#CBD5E1';
+          ctx.lineWidth = 0.65;
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let index = 1; index < points.length; index += 1) {
+            ctx.lineTo(points[index].x, points[index].y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
         }
-        ctx.beginPath();
-        ctx.moveTo(points[0].x, points[0].y);
-        for (let index = 1; index < points.length; index += 1) {
-          ctx.lineTo(points[index].x, points[index].y);
-        }
-        ctx.closePath();
-        if (!glHaveField) ctx.fill(); // Only fill when not using WebGL (WebGL handles color)
-        if (!glHaveField) ctx.stroke(); // Skip per-element stroke when WebGL is rendering
+
         for (let index = 0; index < element.length; index += 1) {
           addEdge(element[index], element[(index + 1) % element.length]);
         }
       }
 
-      // Exterior edges — always draw regardless of WebGL state
+      // Exterior edges explicitly show both the airfoil hole and domain edge.
       ctx.strokeStyle = '#111827';
-      ctx.lineWidth = glHaveField ? 0 : 1.7; // WebGL edge program handles boundary edges
-      if (!glHaveField) {
-        for (const [a, b, count] of edgeCounts.values()) {
-          if (count !== 1) continue;
-          if (!nodes[a] || !nodes[b]) continue; // guard: out-of-range node refs
-          const p0 = ws(nodes[a][0], nodes[a][1]);
-          const p1 = ws(nodes[b][0], nodes[b][1]);
+      ctx.lineWidth = 1.7;
+      for (const [a, b, count] of edgeCounts.values()) {
+        if (count !== 1) continue;
+        if (!nodes[a] || !nodes[b]) continue; // guard: out-of-range node refs
+        const p0 = ws(nodes[a][0], nodes[a][1]);
+        const p1 = ws(nodes[b][0], nodes[b][1]);
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
+
+      // Streamlines overlay (Results) — only when showResultsStreamlines is toggled on
+      if (showField && showResultsStreamlines && Array.isArray(fieldData?.streamlines) && fieldData.streamlines.length > 0) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.lineWidth = 1.4;
+        ctx.setLineDash([]);
+        for (const line of fieldData.streamlines) {
+          if (!Array.isArray(line) || line.length < 2) continue;
           ctx.beginPath();
+          const p0 = ws(line[0][0], line[0][1]);
           ctx.moveTo(p0.x, p0.y);
-          ctx.lineTo(p1.x, p1.y);
+          for (let i = 1; i < line.length; i++) {
+            const pi = ws(line[i][0], line[i][1]);
+            ctx.lineTo(pi.x, pi.y);
+          }
           ctx.stroke();
         }
       }
@@ -2026,7 +2085,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       ctx.restore();
     }
 
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly, showField, fieldData, activeField, colormap]);
+  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines]);
 
 
 
@@ -3355,6 +3414,12 @@ boundary
           <button
             title="Fit to Screen"
             onClick={() => {
+              if (showMesh && meshData?.nodes?.length) {
+                const xs = meshData.nodes.map((node: number[]) => node[0]);
+                const ys = meshData.nodes.map((node: number[]) => node[1]);
+                fitBoundingBox({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }, 0.72);
+                return;
+              }
               const allGeom = cadState.entities.filter(e => e.layer !== 'construction');
               if (allGeom.length > 0) {
                 let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -3371,8 +3436,9 @@ boundary
                   return;
                 }
               }
+              const bottomBarPx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar')) || 32;
               setZoom(INITIAL_ZOOM);
-              setPan({ x: 0, y: 0 });
+              setPan({ x: 0, y: -(bottomBarPx / 2) });
             }}
             className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
           >
@@ -3418,25 +3484,58 @@ boundary
             : 'crosshair',
         }}
       >
-        {displayOnly && !meshOnly && (
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-white/95 border border-[#E1E4E8] rounded-md px-1.5 py-1 shadow-sm text-xs">
-            <button
-              onClick={() => setCanvasMode('cad')}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'cad' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F]'}`}
-            >
-              {canvasMode === 'cad' ? '◉' : '○'} Blocks
-            </button>
-            <button
-              onClick={() => meshData && !meshStale && setCanvasMode('mesh')}
-              disabled={!meshData || meshStale}
-              title={meshStale ? 'Geometry changed - regenerate the mesh' : undefined}
-              className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'mesh' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed'}`}
-            >
-              {canvasMode === 'mesh' ? '◉' : '○'} Mesh
-            </button>
-            {meshStale && showMesh && (
-              <span className="ml-1 text-[10px] text-[#D97706] font-medium">stale - regenerate</span>
-            )}
+        {/* Top Controls Bar */}
+        {displayOnly && (
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-lg px-2 py-1 shadow-sm text-xs select-none">
+            {!meshOnly ? (
+              <>
+                <button
+                  onClick={() => setCanvasMode('cad')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'cad' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F]'}`}
+                >
+                  {canvasMode === 'cad' ? '◉' : '○'} Blocks
+                </button>
+                <button
+                  onClick={() => meshData && !meshStale && setCanvasMode('mesh')}
+                  disabled={!meshData || meshStale}
+                  title={meshStale ? 'Geometry changed - regenerate the mesh' : undefined}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'mesh' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed'}`}
+                >
+                  {canvasMode === 'mesh' ? '◉' : '○'} Mesh
+                </button>
+                {meshStale && showMesh && (
+                  <span className="ml-1 text-[10px] text-[#D97706] font-medium">stale - regenerate</span>
+                )}
+              </>
+            ) : showField ? (
+              <div className="flex items-center gap-1">
+                {/* Mesh Wireframe Toggle */}
+                <button
+                  onClick={() => setShowMeshWireframe((w) => !w)}
+                  title="Toggle Mesh Cells Wireframe Overlay"
+                  className={`px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors ${
+                    showMeshWireframe
+                      ? 'bg-[#2563EB] text-white font-semibold shadow-xs'
+                      : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
+                  }`}
+                >
+                  <span>Mesh</span>
+                </button>
+
+                {/* Streamlines Toggle */}
+                <button
+                  onClick={() => setShowResultsStreamlines((s) => !s)}
+                  title="Toggle Flow Streamlines Overlay"
+                  className={`px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors ${
+                    showResultsStreamlines
+                      ? 'bg-[#2563EB] text-white font-semibold shadow-xs'
+                      : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
+                  }`}
+                >
+                  <span>Streamlines</span>
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
 
@@ -3472,7 +3571,7 @@ boundary
           };
           const fieldLabel = labels[activeField] || { name: activeField, unit: '' };
           return (
-            <div className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 0.75rem)' }}>
+            <div className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}>
               <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
                 {fieldLabel.name} {fieldLabel.unit}
               </div>
@@ -3487,8 +3586,8 @@ boundary
         {/* ─── Transient Flow Simulation Player ─── */}
         {showField && isTransient && (
           <div
-            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white/95 backdrop-blur-sm border border-[#E1E4E8] rounded-xl shadow-lg px-4 py-2.5 flex items-center gap-3.5 select-none transition-all duration-150"
-            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 1rem)' }}
+            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white/95 backdrop-blur-sm border border-[#E1E4E8] rounded-xl shadow-lg px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
+            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
             {/* 5 Playback Control Buttons: First, Prev, Play/Pause, Next, Last */}
             <div className="flex items-center gap-1 shrink-0">
@@ -3565,9 +3664,9 @@ boundary
               />
             </div>
 
-            {/* Rightmost: Speed Controls (0.1x, 0.5x, 1x, 1.5x, 2x) */}
+            {/* Rightmost: Speed Controls (0.05x, 0.1x, 0.25x, 0.5x, 1x, 2x) */}
             <div className="flex items-center gap-1 shrink-0 pl-2 border-l border-[#E1E4E8]">
-              {([0.1, 0.5, 1, 1.5, 2] as const).map((spd) => (
+              {([0.05, 0.1, 0.25, 0.5, 1, 2] as const).map((spd) => (
                 <button
                   key={spd}
                   onClick={() => onSelectTransientSpeed?.(spd)}
