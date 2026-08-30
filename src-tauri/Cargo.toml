@@ -1,6 +1,6 @@
 [package]
 name = "opencfd-studio"
-version = "0.1.3"
+version = "0.1.4"
 description = "OpenCFD Desktop Application"
 authors = ["OpenCFD Team"]
 license = "MIT"
