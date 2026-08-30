@@ -4,8 +4,7 @@ import {
   Trash2,
   Pencil,
   Clock,
-  Box,
-  Grid3x3,
+  FolderOpen,
   Check,
   X,
   Loader2,
@@ -33,39 +32,37 @@ function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return '';
   const secs = Math.max(1, Math.round((Date.now() - then) / 1000));
-  if (secs < 60) return 'just now';
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins} min ago`;
-  const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days} d ago`;
-  return new Date(iso).toLocaleDateString();
+  const days = Math.floor(secs / 86400);
+  return `${days} ${days === 1 ? 'day' : 'days'} ago`;
 }
 
 const GeometryThumb: React.FC<{ preview: ProjectPreview | null }> = ({ preview }) => {
   if (!preview || preview.points.length < 2) {
     return (
-      <div className="h-28 flex items-center justify-center bg-[#F5F6F8] text-[#C4C9D0]">
-        <Box className="w-8 h-8" strokeWidth={1.5} />
+      <div className="h-52 flex items-center justify-center bg-[#F5F6F8] text-[#C4C9D0]">
+        <div className="text-center"><FolderOpen className="w-8 h-8 mx-auto mb-2" strokeWidth={1.5} /><span className="text-[10px]">No geometry yet</span></div>
       </div>
     );
   }
   const [minX, minY, maxX, maxY] = preview.bbox;
   const w = Math.max(maxX - minX, 1e-6);
   const h = Math.max(maxY - minY, 1e-6);
-  const pad = 0.12;
+  // Keep the original CAD aspect ratio. Normalising x and y independently into
+  // a square viewBox makes every rectangle look square in the card.
+  const padX = w * 0.12;
+  const padY = h * 0.12;
   const pts = preview.points
     .map(([x, y]) => {
-      const nx = ((x - minX) / w) * (1 - 2 * pad) + pad;
-      const ny = 1 - (((y - minY) / h) * (1 - 2 * pad) + pad);
-      return `${(nx * 100).toFixed(2)},${(ny * 100).toFixed(2)}`;
+      // SVG's y axis points down, so mirror y around the CAD bounding box.
+      return `${x.toFixed(5)},${(minY + maxY - y).toFixed(5)}`;
     })
     .join(' ');
   return (
-    <div className="h-28 bg-[#F5F6F8]">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" className="w-full h-full">
-        <polyline points={pts} fill="rgba(37,99,235,0.08)" stroke="#2563EB" strokeWidth={1.4} strokeLinejoin="round" />
+    <div className="h-52 bg-[#F5F6F8] p-3">
+      <svg viewBox={`${(minX - padX).toFixed(5)} ${(minY - padY).toFixed(5)} ${(w + 2 * padX).toFixed(5)} ${(h + 2 * padY).toFixed(5)}`} preserveAspectRatio="xMidYMid meet" className="w-full h-full">
+        {/* CAD thumbnails represent closed profiles (rectangles, airfoils, etc.).
+            polygon closes the final corner; polyline left that edge invisible. */}
+        <polygon points={pts} fill="rgba(37,99,235,0.08)" stroke="#2563EB" strokeWidth={1.4} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
       </svg>
     </div>
   );
@@ -102,6 +99,7 @@ const ProjectCardView: React.FC<{
       <button onClick={onOpen} className="block w-full text-left" disabled={editing}>
         <GeometryThumb preview={s.preview ?? null} />
         <div className="p-3.5">
+          <div className="flex items-center justify-between gap-3">
           {editing ? (
             <input
               ref={inputRef}
@@ -116,28 +114,11 @@ const ProjectCardView: React.FC<{
               className="w-full text-sm font-semibold text-[#171A1F] bg-transparent border-b-2 border-[#2563EB] outline-none mb-1"
             />
           ) : (
-            <div className="text-sm font-semibold text-[#171A1F] truncate mb-1">{project.name}</div>
+            <div className="text-sm font-semibold text-[#171A1F] truncate">{project.name}</div>
           )}
-          <div className="flex items-center gap-1.5 text-[11px] text-[#69717D]">
-            <Clock className="w-3 h-3" />
-            <span>{relativeTime(project.modified)}</span>
+          <div className="flex items-center gap-1 text-[10px] text-[#69717D] whitespace-nowrap">
+            <Clock className="w-3 h-3" /><span>{relativeTime(project.modified)}</span>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-            <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#F5F6F8] text-[#69717D]">
-              <Box className="w-3 h-3" />
-              {s.entityCount ?? 0} {(s.entityCount ?? 0) === 1 ? 'body' : 'bodies'}
-            </span>
-            {s.resolution && (
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#F5F6F8] text-[#69717D] capitalize">
-                {s.resolution}
-              </span>
-            )}
-            {s.hasMesh && (
-              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-50 text-green-700">
-                <Grid3x3 className="w-3 h-3" />
-                Meshed
-              </span>
-            )}
           </div>
         </div>
       </button>
@@ -192,6 +173,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
+  const [author, setAuthor] = useState('');
+  const [saveLocation, setSaveLocation] = useState('Default OpenCFD projects folder');
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const newInputRef = useRef<HTMLInputElement>(null);
 
@@ -229,6 +213,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
       const meta = await createProject(name);
       setCreating(false);
       setNewName('');
+      setAuthor('');
+      setSaveLocation('Default OpenCFD projects folder');
       onOpen(meta.id);
     } catch (err: any) {
       setError(err?.message || 'Could not create the project.');
@@ -266,9 +252,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
             <h1 className="text-xl font-bold tracking-tight">OpenCFD Studio</h1>
             <p className="text-xs text-[#69717D]">Open a project or start a new one</p>
           </div>
-          <a href="/tutorial" className="ml-auto text-xs font-medium text-[#2563EB] border border-[#2563EB]/30 rounded-lg px-3 py-1.5 hover:bg-blue-50 transition-colors">
-            How-to guide
-          </a>
+          <button onClick={() => setCreating(true)} className="ml-auto inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-[#2563EB] rounded-lg px-3.5 py-2 hover:bg-[#1D4ED8] transition-colors"><Plus className="w-3.5 h-3.5" />New project</button>
         </div>
 
         {(error || openError) && (
@@ -297,47 +281,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
         {/* Grid */}
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {/* New project tile */}
-          <div className="bg-white border-2 border-dashed border-[#D8DCE1] rounded-xl min-h-[13rem] flex flex-col items-center justify-center p-4 hover:border-[#2563EB] transition-colors">
-            {creating ? (
-              <div className="w-full space-y-2.5">
-                <input
-                  ref={newInputRef}
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Project name"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleCreate();
-                    if (e.key === 'Escape') { setCreating(false); setNewName(''); }
-                  }}
-                  className="w-full px-2.5 py-1.5 text-sm bg-[#F5F6F8] border border-[#E1E4E8] rounded-md outline-none focus:border-[#2563EB]"
-                />
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleCreate}
-                    disabled={busy}
-                    className="flex-1 py-1.5 text-xs font-medium rounded-md bg-[#2563EB] text-white hover:bg-[#1D4ED8] disabled:opacity-50 flex items-center justify-center gap-1"
-                  >
-                    {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
-                    Create
-                  </button>
-                  <button
-                    onClick={() => { setCreating(false); setNewName(''); }}
-                    className="px-3 py-1.5 text-xs rounded-md border border-[#E1E4E8] text-[#69717D] hover:bg-[#F5F6F8]"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button onClick={() => setCreating(true)} className="flex flex-col items-center gap-2 text-[#69717D] hover:text-[#2563EB] transition-colors">
-                <div className="w-11 h-11 rounded-full bg-[#F5F6F8] flex items-center justify-center">
-                  <Plus className="w-5 h-5" />
-                </div>
-                <span className="text-sm font-medium">New project</span>
-              </button>
-            )}
-          </div>
-
           {/* Existing projects */}
           {loading ? (
             <div className="col-span-full flex items-center gap-2 text-xs text-[#69717D] py-8 justify-center">
@@ -375,6 +318,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
           <p className="mt-6 text-center text-xs text-[#A5ACB5]">No projects yet - create your first one above.</p>
         )}
       </div>
+
+      {creating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#171A1F]/35 backdrop-blur-[2px] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) setCreating(false); }}>
+          <div className="w-full max-w-md rounded-2xl bg-white border border-[#E1E4E8] shadow-xl p-6" role="dialog" aria-modal="true" aria-labelledby="new-project-title">
+            <div className="flex items-start justify-between mb-6"><div><h2 id="new-project-title" className="text-lg font-bold">New project</h2><p className="text-xs text-[#69717D] mt-1">Set up the project workspace.</p></div><button onClick={() => setCreating(false)} className="p-1.5 rounded-md text-[#69717D] hover:bg-[#F5F6F8]" aria-label="Cancel"><X className="w-4 h-4" /></button></div>
+            <div className="space-y-4">
+              <label className="block text-xs font-medium text-[#69717D]">Project title<input ref={newInputRef} value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. NACA 0012 study" className="mt-1.5 w-full px-3 py-2 rounded-lg border border-[#E1E4E8] outline-none focus:border-[#2563EB]" /></label>
+              <label className="block text-xs font-medium text-[#69717D]">Author <span className="font-normal text-[#A5ACB5]">(optional)</span><input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Your name" className="mt-1.5 w-full px-3 py-2 rounded-lg border border-[#E1E4E8] outline-none focus:border-[#2563EB]" /></label>
+              <label className="block text-xs font-medium text-[#69717D]">Save location<input value={saveLocation} readOnly className="mt-1.5 w-full px-3 py-2 rounded-lg border border-[#E1E4E8] bg-[#F5F6F8] text-[#69717D]" /><button type="button" onClick={() => folderInputRef.current?.click()} className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-[#2563EB] hover:text-[#1D4ED8]"><FolderOpen className="w-3.5 h-3.5" />Browse…</button><input ref={folderInputRef} type="file" className="hidden" {...({ webkitdirectory: '', directory: '' } as any)} onChange={(e) => { const file = e.target.files?.[0]; if (file) setSaveLocation(file.webkitRelativePath?.split('/')[0] || 'Selected folder'); }} /></label>
+            </div>
+            <div className="flex justify-end gap-2 mt-7"><button onClick={() => { setCreating(false); setNewName(''); }} className="px-4 py-2 rounded-lg border border-[#E1E4E8] text-xs font-medium text-[#69717D] hover:bg-[#F5F6F8]">Cancel</button><button onClick={handleCreate} disabled={busy} className="px-4 py-2 rounded-lg bg-[#2563EB] text-white text-xs font-semibold hover:bg-[#1D4ED8] disabled:opacity-50 inline-flex items-center gap-1.5">{busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}Create project</button></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

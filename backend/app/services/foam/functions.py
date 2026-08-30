@@ -25,7 +25,7 @@ def build_functions(
         U = float(phys.get("inletVelocity", 20.0))
         rho = float(phys.get("density", 1.225))
         L = forces.get("refLength") or ref_length or 1.0
-        A = forces.get("refArea") or (L * 1.0)  # 2D: span = 1 m
+        A = forces.get("refArea") or (L * 0.1)  # 2D: nominal span = 0.1 m
         compressible = phys.get("compressibility") == "compressible"
         blocks.append(
             "    forceCoeffs\n    {\n"

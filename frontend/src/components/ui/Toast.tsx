@@ -53,7 +53,7 @@ const ToastItem: React.FC<ToastRow> = ({ id, msg, kind, expiring }) => {
   return (
     <div
       data-enter={entered && !expiring}
-      className="toast-item pointer-events-auto flex items-start gap-3 w-[360px] max-w-[86vw] rounded-xl bg-white border border-[#E4E7EC] shadow-[0_16px_40px_-10px_rgba(15,23,42,0.25),0_4px_12px_-4px_rgba(15,23,42,0.14)] pl-3.5 pr-3 py-3 overflow-hidden"
+      className="toast-item pointer-events-auto flex items-start gap-3 w-[360px] max-w-[86vw] rounded-xl bg-white border border-[#E4E7EC] pl-3.5 pr-3 py-3 overflow-hidden"
       style={{ borderLeft: `3px solid ${BAR[kind]}` }}
     >
       <span className="mt-0.5 shrink-0">{ICON[kind]}</span>
@@ -78,10 +78,7 @@ export const ToastHost: React.FC = () => {
   return createPortal(
     <div
       className="fixed z-[10000] flex flex-col gap-2 items-end"
-      style={{
-        bottom: 'calc(var(--app-bottom-bar, 0px) + 1.75rem)',
-        right: 'calc(var(--app-right-inset, 0px) + 1rem)',
-      }}
+      style={{ bottom: '1.5rem', right: '1rem' }}
     >
       {rows.map((r) => (
         <ToastItem key={r.id} {...r} />

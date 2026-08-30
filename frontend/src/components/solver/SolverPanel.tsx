@@ -1,7 +1,6 @@
 import React from 'react';
 import { Play, Square } from 'lucide-react';
 import { CFDProjectState } from '../../types/cfd';
-import { solverEnvironment } from '../../utils/api';
 import {
   SolverConfig, StabilityPreset, PRESET_RELAX, PRESET_METHODS, SpatialOrder,
 } from '../../solver/solverConfig';
@@ -14,9 +13,48 @@ const ORDER_OPTS: Array<[SpatialOrder, string]> = [
 ];
 
 const num =
-  'w-full px-2 py-1 bg-[#F5F6F8] border border-[#E1E4E8] rounded font-mono text-[11px] focus:outline-none focus:border-[#2563EB]';
+  'w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded font-mono text-[11px] text-[#171A1F] focus:outline-none focus:border-[#2563EB]';
 const sel =
-  'w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md text-[11px] focus:outline-none focus:border-[#2563EB]';
+  'w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-md text-[11px] text-[#171A1F] focus:outline-none focus:border-[#2563EB]';
+
+/** Numeric input with a local editing buffer. Controlled numeric values cannot
+ * represent an empty string, so parsing directly in onChange makes backspace
+ * appear broken. This keeps the draft as text and commits on valid edits/blur. */
+const NumericInput: React.FC<{
+  value: number;
+  onCommit: (value: number) => void;
+  className?: string;
+  step?: number | string;
+  min?: number;
+  max?: number;
+  placeholder?: string;
+}> = ({ value, onCommit, className = num, ...props }) => {
+  const [draft, setDraft] = React.useState(String(value));
+  const [focused, setFocused] = React.useState(false);
+  React.useEffect(() => {
+    if (!focused) setDraft(String(value));
+  }, [value, focused]);
+  return <input
+    type="text"
+    inputMode="decimal"
+    {...props}
+    className={className}
+    value={draft}
+    onFocus={() => setFocused(true)}
+    onChange={(e) => {
+      const next = e.target.value;
+      setDraft(next);
+      const parsed = Number(next);
+      if (next.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed);
+    }}
+    onBlur={() => {
+      setFocused(false);
+      const parsed = Number(draft);
+      if (draft.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed);
+      else setDraft(String(value));
+    }}
+  />;
+};
 
 const Head: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <div className="text-[10px] font-semibold uppercase tracking-wider text-[#69717D] pt-3 mt-1 border-t border-[#E1E4E8] first:border-t-0 first:pt-0 first:mt-0">
@@ -25,7 +63,7 @@ const Head: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <label className="grid grid-cols-[1fr_96px] items-center gap-2 text-[11px] text-[#69717D]">
+  <label className="grid grid-cols-[1fr_130px] items-center gap-2 text-[11px] text-[#69717D]">
     <span>{label}</span>
     {children}
   </label>
@@ -50,16 +88,6 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
   const transient = state.physics.timeFormulation === 'transient';
   const compressible = state.physics.compressibility === 'compressible';
 
-  const [env, setEnv] = React.useState<any>(null);
-  React.useEffect(() => {
-    let live = true;
-    solverEnvironment().then((e) => { if (live) setEnv(e); });
-    return () => { live = false; };
-  }, []);
-  const activeAdapter = env?.active ?? null;
-  const activeInfo = activeAdapter ? env?.adapters?.[activeAdapter] : null;
-  const isReal = activeAdapter && activeAdapter !== 'mock';
-
   const applyPreset = (p: StabilityPreset) =>
     setSolution((cfg) => ({
       ...cfg,
@@ -83,39 +111,6 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
   return (
     <div className="h-full min-h-0 flex flex-col text-xs text-[#171A1F]">
       <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-4 space-y-2">
-
-        <Head>Solver backend</Head>
-        <div className="flex items-center gap-2 text-[11px]">
-          <span
-            className={`inline-block w-1.5 h-1.5 rounded-full ${
-              isReal ? 'bg-[#16A34A]' : env ? 'bg-[#D97706]' : 'bg-[#C0C6CE]'
-            }`}
-          />
-          <span className="font-medium text-[#171A1F]">
-            {activeAdapter === 'openfoam-local' && 'OpenFOAM (native)'}
-            {activeAdapter === 'openfoam-wsl' && `OpenFOAM (WSL${activeInfo?.distro ? ` · ${activeInfo.distro}` : ''})`}
-            {activeAdapter === 'mock' && 'Mock solver'}
-            {!activeAdapter && 'Checking...'}
-          </span>
-        </div>
-        {activeInfo?.detail && (
-          <p className="text-[9px] text-[#8B95A1] leading-relaxed">{activeInfo.detail}</p>
-        )}
-        {env && !isReal && (() => {
-          const wslInfo = env.adapters?.['openfoam-wsl'];
-          const localInfo = env.adapters?.['openfoam-local'];
-          const why = wslInfo || localInfo;
-          if (!why || why.ok) return null;
-          const diag = why.diagnostics || why.raw_list || why.stderr;
-          return (
-            <details className="text-[9px] text-[#B45309] leading-relaxed">
-              <summary className="cursor-pointer">Why is this the mock? ({why.detail})</summary>
-              {why.distro && <div className="mt-1 text-[#8B95A1]">distro: {why.distro} · alive: {String(why.managed_alive)}</div>}
-              {diag && <pre className="mt-1 whitespace-pre-wrap text-[#8B95A1] max-h-32 overflow-y-auto">{diag}</pre>}
-            </details>
-          );
-        })()}
-
         <Head>Run type</Head>
         <div className="grid grid-cols-2 gap-1.5">
           {(['steady', 'transient'] as const).map((t) => (
@@ -140,12 +135,10 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
         {transient && (
           <>
             <Row label="End time (s)">
-              <input type="number" step={0.5} min={0} className={num} value={c.run.endTime}
-                onChange={(e) => setRun({ endTime: parseFloat(e.target.value) || 1 })} />
+              <NumericInput step={0.5} min={0} value={c.run.endTime} onCommit={(v) => setRun({ endTime: v })} />
             </Row>
             <Row label="Time step Δt (s)">
-              <input type="text" inputMode="decimal" className={num} value={c.run.deltaT}
-                onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setRun({ deltaT: v }); }} />
+              <NumericInput value={c.run.deltaT} onCommit={(v) => setRun({ deltaT: v })} />
             </Row>
             <Row label="Time scheme">
               <select className={sel} value={c.methods.time} onChange={(e) => setMethods({ time: e.target.value as any })}>
@@ -155,19 +148,16 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
               </select>
             </Row>
             <Row label="Max Courant">
-              <input type="number" step={1} min={0.1} className={num} value={c.controls.maxCo}
-                onChange={(e) => setControls({ maxCo: parseFloat(e.target.value) || 5 })} />
+              <NumericInput step={1} min={0.1} value={c.controls.maxCo} onCommit={(v) => setControls({ maxCo: v })} />
             </Row>
             <Row label="Outer correctors">
-              <input type="number" min={1} max={20} className={num} value={c.methods.nOuterCorrectors}
-                onChange={(e) => setMethods({ nOuterCorrectors: Math.max(1, parseInt(e.target.value) || 1) })} />
+              <NumericInput min={1} max={20} value={c.methods.nOuterCorrectors} onCommit={(v) => setMethods({ nOuterCorrectors: Math.max(1, Math.round(v)) })} />
             </Row>
           </>
         )}
         {!transient && (
           <Row label="Iterations">
-            <input type="number" step={100} min={1} className={num} value={c.run.iterations}
-              onChange={(e) => setRun({ iterations: parseInt(e.target.value) || 500 })} />
+            <NumericInput step={100} min={1} value={c.run.iterations} onCommit={(v) => setRun({ iterations: Math.max(1, Math.round(v)) })} />
           </Row>
         )}
 
@@ -205,8 +195,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
           </select>
         </Row>
         <Row label="Non-ortho correctors">
-          <input type="number" min={0} max={5} className={num} value={c.methods.nNonOrthogonalCorrectors}
-            onChange={(e) => setMethods({ nNonOrthogonalCorrectors: Math.max(0, parseInt(e.target.value) || 0) })} />
+          <NumericInput min={0} max={5} value={c.methods.nNonOrthogonalCorrectors} onCommit={(v) => setMethods({ nNonOrthogonalCorrectors: Math.max(0, Math.round(v)) })} />
         </Row>
 
         <Head>Solution controls</Head>
@@ -221,14 +210,13 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
         <p className="text-[9px] text-[#8B95A1]">Under-relaxation {c.controls.preset === 'custom' ? '(custom)' : ''}</p>
         {(['p', 'U', 'k', 'omega'] as const).map((f) => (
           <Row key={f} label={`relax ${f}`}>
-            <input type="number" step={0.05} min={0.05} max={1} className={num}
-              value={c.controls.relax[f]}
-              onChange={(e) => setControls({ relax: { ...c.controls.relax, [f]: parseFloat(e.target.value) || c.controls.relax[f] } })} />
+            <NumericInput step={0.05} min={0.05} max={1} value={c.controls.relax[f]}
+              onCommit={(v) => setControls({ relax: { ...c.controls.relax, [f]: v } })} />
           </Row>
         ))}
         <Row label="Residual target">
-          <input type="text" inputMode="decimal" className={num} value={c.controls.residualTargets.U}
-            onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) setControls({ residualTargets: { p: v, U: v, turbulence: v } }); }} />
+          <NumericInput value={c.controls.residualTargets.U}
+            onCommit={(v) => setControls({ residualTargets: { p: v, U: v, turbulence: v } })} />
         </Row>
 
         <Head>Report definitions</Head>
@@ -246,12 +234,10 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
               </select>
             </Row>
             <Row label="Ref. area (m²)">
-              <input type="number" step={0.01} className={num} value={c.monitors.forces.refArea}
-                onChange={(e) => setForces({ refArea: parseFloat(e.target.value) || 0 })} placeholder="auto" />
+              <NumericInput step={0.01} value={c.monitors.forces.refArea} onCommit={(v) => setForces({ refArea: v })} placeholder="auto" />
             </Row>
             <Row label="Ref. length (m)">
-              <input type="number" step={0.01} className={num} value={c.monitors.forces.refLength}
-                onChange={(e) => setForces({ refLength: parseFloat(e.target.value) || 0 })} placeholder="auto" />
+              <NumericInput step={0.01} value={c.monitors.forces.refLength} onCommit={(v) => setForces({ refLength: v })} placeholder="auto" />
             </Row>
             <p className="text-[9px] text-[#8B95A1]">
               Lift / drag directions follow the {state.geometry.angleOfAttackDeg}° angle of attack.
@@ -270,24 +256,14 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
 
         <Head>Output</Head>
         <Row label="Write every">
-          <input type="number" step={50} min={1} className={num} value={c.run.writeInterval}
-            onChange={(e) => setRun({ writeInterval: parseInt(e.target.value) || 100 })} />
+          <NumericInput step={50} min={0} value={c.run.writeInterval} onCommit={(v) => setRun({ writeInterval: Math.max(0, Math.round(v)) })} placeholder="0 = auto" />
         </Row>
         <Row label="Parallel (procs)">
-          <input type="number" step={1} min={1} max={64} className={num} value={c.run.parallelProcs}
-            onChange={(e) => setRun({ parallelProcs: Math.max(1, parseInt(e.target.value) || 1) })} />
+          <NumericInput step={1} min={1} max={64} value={c.run.parallelProcs} onCommit={(v) => setRun({ parallelProcs: Math.max(1, Math.round(v)) })} />
         </Row>
       </div>
 
       <div className="shrink-0 px-4 pt-3 pb-3 border-t border-[#E1E4E8] bg-white space-y-2">
-        {convergence && (
-          <div className="flex items-center justify-between text-[10px] font-mono text-[#69717D]">
-            <span>it {convergence.iteration}</span>
-            <span>res {convergence.maxResidual.toExponential(1)}</span>
-            {convergence.cd != null && <span className="text-[#171A1F]">Cd {convergence.cd.toFixed(4)}</span>}
-            {convergence.cl != null && <span className="text-[#171A1F]">Cl {convergence.cl.toFixed(4)}</span>}
-          </div>
-        )}
         <button
           onClick={running ? onStop : onRun}
           className={`w-full py-2 font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors ${

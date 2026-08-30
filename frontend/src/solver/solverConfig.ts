@@ -32,7 +32,7 @@ export interface SolverControlsX {
 export interface ForceReport {
   enabled: boolean;
   bodyPatch: string;          // '' = auto (first wall)
-  refArea: number;            // 0 = auto (chord x 1)
+  refArea: number;            // 0 = auto (reference length x nominal 0.1 m span)
   refLength: number;          // 0 = auto (chord)
   liftDir: [number, number, number];
   dragDir: [number, number, number];
@@ -128,7 +128,7 @@ export function defaultSolverConfig(): SolverConfig {
       iterations: 1000,
       endTime: 1,
       deltaT: 1e-4,
-      writeInterval: 200,
+      writeInterval: 0,  // 0 = auto-compute (backend targets ~25 frames)
       init: 'uniform',
       parallelProcs: 1,
     },

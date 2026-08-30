@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { TopHeader } from './components/layout/TopHeader';
 import { WorkflowStrip, StageId } from './components/layout/WorkflowStrip';
 import { LeftStagePanel } from './components/layout/LeftStagePanel';
 import { CadWorkbench2D } from './components/cad/CadWorkbench2D';
+import { TransientPlaybackControls } from './components/viewport/TransientPlaybackControls';
 import { RightContextInspector } from './components/layout/RightContextInspector';
 import { BottomSolverDrawer } from './components/layout/BottomSolverDrawer';
 import { StatusBar } from './components/layout/StatusBar';
@@ -923,30 +924,244 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   }, [state.residuals]);
 
   const [resultsLoading, setResultsLoading] = useState(false);
-  const loadResults = async (fromRun = false) => {
-    if (!meshData?.nodes?.length) {
-      toast('Generate a mesh first.', 'error');
+  const [transientFrameIndex, setTransientFrameIndex] = useState(0);
+  const [transientPlaying, setTransientPlaying] = useState(false);
+  const [transientSpeed, setTransientSpeed] = useState<number>(1.0);
+
+  // Keep stable refs so interval callbacks never go stale
+  const transientTimesRef = useRef<number[]>([]);
+  const transientFrameIndexRef = useRef(0);
+  const transientPlayingRef = useRef(false);
+  const transientSpeedRef = useRef(1.0);
+  const meshDataRef = useRef<any>(null);
+  const projectIdRef = useRef<string | undefined>(undefined);
+
+  // Frame cache: key = frame index, value = fieldData object. LRU-limited to 50 frames.
+  const frameCacheRef = useRef<Map<number, any>>(new Map());
+  const CACHE_MAX = 50;
+
+  // In-flight AbortController for the current fetch (cancelled when a newer request starts)
+  const fetchAbortRef = useRef<AbortController | null>(null);
+
+  // Scrub debounce timer — delays actual fetch by 80ms so rapid slider movement
+  // doesn't fire multiple overlapping requests
+  const scrubDebounceRef = useRef<number | null>(null);
+
+  const transientTimes = useMemo(
+    () => (Array.isArray(fieldData?.availableTimes) ? fieldData.availableTimes.map(Number).filter(Number.isFinite).sort((a: number, b: number) => a - b) : []),
+    [fieldData?.availableTimes],
+  );
+
+  // Sync refs whenever state changes
+  useEffect(() => { transientTimesRef.current = transientTimes; }, [transientTimes]);
+  useEffect(() => { transientFrameIndexRef.current = transientFrameIndex; }, [transientFrameIndex]);
+  useEffect(() => { transientPlayingRef.current = transientPlaying; }, [transientPlaying]);
+  useEffect(() => { transientSpeedRef.current = transientSpeed; }, [transientSpeed]);
+  useEffect(() => { meshDataRef.current = meshData; }, [meshData]);
+  useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
+
+  // Core fetch — always cancels any previous in-flight request first.
+  // Returns true if data was loaded (not aborted/errored).
+  const fetchFrame = async (time: number, frameIdx: number, signal: AbortSignal): Promise<boolean> => {
+    const mesh = meshDataRef.current;
+    if (!mesh?.nodes?.length) return false;
+
+    // Cache hit — apply immediately, no network call
+    if (frameCacheRef.current.has(frameIdx)) {
+      const cached = frameCacheRef.current.get(frameIdx)!;
+      setFieldData(cached);
+      setTransientFrameIndex(frameIdx);
+      transientFrameIndexRef.current = frameIdx;
+      return true;
+    }
+
+    const { data, detail } = await fetchSolverResults(
+      { nodes: mesh.nodes, elements: mesh.elements },
+      projectIdRef.current,
+      time,
+      signal,
+    );
+
+    if (signal.aborted || detail === '__aborted__') return false;
+    if (!data) return false;
+
+    // Store in cache; evict oldest if over limit
+    frameCacheRef.current.set(frameIdx, data);
+    if (frameCacheRef.current.size > CACHE_MAX) {
+      const oldestKey = frameCacheRef.current.keys().next().value;
+      if (oldestKey !== undefined) frameCacheRef.current.delete(oldestKey);
+    }
+
+    // Update available times in ref from this response
+    const times = Array.isArray(data.availableTimes)
+      ? data.availableTimes.map(Number).filter(Number.isFinite).sort((a: number, b: number) => a - b)
+      : [];
+    if (times.length) transientTimesRef.current = times;
+
+    setFieldData(data);
+    setTransientFrameIndex(frameIdx);
+    transientFrameIndexRef.current = frameIdx;
+    return true;
+  };
+
+  const loadResults = async (fromRun = false, time?: number, silent = false, frameIdx?: number) => {
+    const mesh = meshDataRef.current;
+    if (!mesh?.nodes?.length) {
+      if (!silent) toast('Generate a mesh first.', 'error');
       return;
     }
+
+    // Cancel any in-flight request
+    if (fetchAbortRef.current) fetchAbortRef.current.abort();
+    const aborter = new AbortController();
+    fetchAbortRef.current = aborter;
+
     setResultsLoading(true);
     const { data, detail } = await fetchSolverResults(
-      { nodes: meshData.nodes, elements: meshData.elements },
-      projectId,
+      { nodes: mesh.nodes, elements: mesh.elements },
+      projectIdRef.current,
+      time,
+      aborter.signal,
     );
     setResultsLoading(false);
+
+    if (aborter.signal.aborted || detail === '__aborted__') return;
+
     if (data) {
+      const times = Array.isArray(data.availableTimes)
+        ? data.availableTimes.map(Number).filter(Number.isFinite).sort((a: number, b: number) => a - b)
+        : [];
+      transientTimesRef.current = times;
+
+      const frame = frameIdx !== undefined ? frameIdx : (time !== undefined ? times.indexOf(Number(data.time)) : -1);
+      if (frame >= 0) {
+        frameCacheRef.current.set(frame, data);
+        setTransientFrameIndex(frame);
+        transientFrameIndexRef.current = frame;
+      }
+
       setFieldData(data);
       setState((prev) => ({
         ...prev,
         terminalLogs: [...prev.terminalLogs, `[Results] Loaded fields from time ${data.time}.`],
       }));
-      toast('Results loaded - open the Results tab.', 'success');
+      if (!silent) toast('Results loaded - open the Results tab.', 'success');
     } else {
       const msg = detail || 'no solver output found';
       setState((prev) => ({ ...prev, terminalLogs: [...prev.terminalLogs, `[Results] ${msg}`] }));
-      if (!fromRun) toast(`Could not load results: ${msg}`, 'error', 6000);
+      if (!fromRun && !silent) toast(`Could not load results: ${msg}`, 'error', 6000);
     }
   };
+
+  // Prefetch adjacent frames in the background (non-blocking, won't abort active fetch)
+  const prefetchAdjacent = useCallback((frameIdx: number) => {
+    const times = transientTimesRef.current;
+    const mesh = meshDataRef.current;
+    if (!mesh?.nodes?.length || times.length < 2) return;
+    [-1, 1, -2, 2].forEach((delta) => {
+      const idx = frameIdx + delta;
+      if (idx < 0 || idx >= times.length) return;
+      if (frameCacheRef.current.has(idx)) return;
+      // Fire-and-forget background prefetch with its own abort controller
+      const pAborter = new AbortController();
+      void fetchSolverResults(
+        { nodes: mesh.nodes, elements: mesh.elements },
+        projectIdRef.current,
+        times[idx],
+        pAborter.signal,
+      ).then(({ data }) => {
+        if (!data || pAborter.signal.aborted) return;
+        frameCacheRef.current.set(idx, data);
+        if (frameCacheRef.current.size > CACHE_MAX) {
+          const oldest = frameCacheRef.current.keys().next().value;
+          if (oldest !== undefined) frameCacheRef.current.delete(oldest);
+        }
+      });
+    });
+  }, []);
+
+  const selectTransientFrame = useCallback((index: number) => {
+    const times = transientTimesRef.current;
+    const clamped = Math.max(0, Math.min(times.length - 1, index));
+    if (times[clamped] === undefined) return;
+
+    // Optimistic UI update — move slider immediately
+    setTransientFrameIndex(clamped);
+    transientFrameIndexRef.current = clamped;
+
+    // Cache hit → instant, no debounce needed
+    if (frameCacheRef.current.has(clamped)) {
+      const cached = frameCacheRef.current.get(clamped)!;
+      setFieldData(cached);
+      prefetchAdjacent(clamped);
+      return;
+    }
+
+    // Debounce actual network fetch by 80ms to absorb rapid slider drags
+    if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
+    scrubDebounceRef.current = window.setTimeout(() => {
+      scrubDebounceRef.current = null;
+      // Cancel previous request and start new one
+      if (fetchAbortRef.current) fetchAbortRef.current.abort();
+      const aborter = new AbortController();
+      fetchAbortRef.current = aborter;
+      setResultsLoading(true);
+      void fetchFrame(times[clamped], clamped, aborter.signal).then((ok) => {
+        setResultsLoading(false);
+        if (ok) prefetchAdjacent(clamped);
+      });
+    }, 80);
+  }, [prefetchAdjacent]);
+
+  // Single stable interval — reads everything from refs, never stale
+  const playIntervalRef = useRef<number | null>(null);
+  const stopPlayback = useCallback(() => {
+    if (playIntervalRef.current !== null) {
+      window.clearInterval(playIntervalRef.current);
+      playIntervalRef.current = null;
+    }
+    setTransientPlaying(false);
+    transientPlayingRef.current = false;
+  }, []);
+
+  const startPlayback = useCallback(() => {
+    if (playIntervalRef.current !== null) window.clearInterval(playIntervalRef.current);
+    setTransientPlaying(true);
+    transientPlayingRef.current = true;
+
+    const tick = () => {
+      if (!transientPlayingRef.current) { stopPlayback(); return; }
+      const times = transientTimesRef.current;
+      const current = transientFrameIndexRef.current;
+      if (times.length < 2 || current >= times.length - 1) { stopPlayback(); return; }
+
+      const next = current + 1;
+      transientFrameIndexRef.current = next;
+      setTransientFrameIndex(next);
+
+      // Cancel any user-initiated scrub fetch that may be in-flight
+      if (fetchAbortRef.current) fetchAbortRef.current.abort();
+      const aborter = new AbortController();
+      fetchAbortRef.current = aborter;
+      void fetchFrame(times[next], next, aborter.signal);
+    };
+
+    const intervalMs = Math.max(50, Math.round(500 / (transientSpeedRef.current || 1.0)));
+    playIntervalRef.current = window.setInterval(tick, intervalMs);
+  }, [stopPlayback]);
+
+  // When speed changes mid-playback, restart to apply new interval
+  useEffect(() => {
+    transientSpeedRef.current = transientSpeed;
+    if (transientPlayingRef.current) startPlayback();
+  }, [transientSpeed]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    if (playIntervalRef.current) window.clearInterval(playIntervalRef.current);
+    if (fetchAbortRef.current) fetchAbortRef.current.abort();
+    if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
+  }, []);
 
   const handleRunSolver = async () => {
     if (wsRef.current) wsRef.current.close();
@@ -963,7 +1178,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
 
     // regenerate the case dictionaries with the current solution config
     try {
-      await makeCaseFiles();
+      const dicts = await makeCaseFiles();
+      if (dicts && Object.keys(dicts).length > 0) {
+        setCaseFiles(dicts);
+      }
     } catch (e: any) {
       toast(`Could not write the case files: ${e?.message ?? e}`, 'error');
     }
@@ -1079,7 +1297,6 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         )}
         {/* Workbench stays mounted under the Case Setup overlay so CAD state is
             never lost when switching stages. */}
-        <>
         {/* Left Column: Stage Controls (280px) */}
         <LeftStagePanel
           activeStage={activeStage}
@@ -1115,6 +1332,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           meshStale={meshStale}
           onRunSolver={handleRunSolver}
           onStopSolver={handleStopSolver}
+          projectId={projectId}
           onReloadResults={() => loadResults(false)}
           resultsLoading={resultsLoading}
           fieldSource={fieldData?.source}
@@ -1189,84 +1407,86 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           geometryEntitiesCount={geometryEntitiesCount}
         />
 
-        {/* Center: one shared CAD canvas; mesh mode reuses its camera and viewport */}
-        <main className="flex-1 h-full min-w-0 relative bg-white overflow-hidden">
-          <div className="w-full h-full">
+        {/* Center Canvas + Floating Bottom Console Area */}
+        <div className="flex-1 min-w-0 h-full relative overflow-hidden bg-white">
+          {/* Center: one shared CAD canvas; fills entire workspace without getting squished */}
+          <main className="absolute inset-0 w-full h-full bg-white overflow-hidden">
+            <div className="w-full h-full">
               <CadWorkbench2D
-              displayOnly={activeStage !== 'geometry'}
-              meshData={meshData}
-              meshStale={meshStale}
-              blocking={blocking}
-              onUpdateBlocking={handleUpdateBlocking}
-              showBlocking={activeStage === 'mesh'}
-              domainBroken={domainState === 'broken'}
-              isMeshing={isMeshing}
-              showMesh={activeStage === 'mesh' || activeStage === 'solver' || activeStage === 'results'}
-              meshOnly={activeStage === 'solver' || activeStage === 'results'}
-              showField={activeStage === 'results'}
-              fieldData={fieldData}
-              activeField={state.postprocess.activeField}
-              colormap={state.postprocess.colormap}
-              initialEntities={cadEntities}
-              onApplySketchMesh={handleApplySketchMesh}
-              domainLength={state.geometry.domainLength}
-              domainHeight={state.geometry.domainHeight}
-              resolution={state.geometry.meshResolution}
-              firstLayerMm={state.geometry.firstLayerHeightMm}
-              pendingImportFile={pendingImportFile}
-              onClearPendingImport={() => setPendingImportFile(null)}
-              // ── 6-Step Workflow Props (Canvas Visuals & Edge Tagging) ──
-              currentStep={cadWorkflowStep}
-              flowType={flowType}
-              domainShape={domainShape}
-              upstreamChordFactor={upstreamChordFactor}
-              setUpstreamChordFactor={setUpstreamChordFactor}
-              downstreamChordFactor={downstreamChordFactor}
-              setDownstreamChordFactor={setDownstreamChordFactor}
-              lateralHeightFactor={lateralHeightFactor}
-              setLateralHeightFactor={setLateralHeightFactor}
-              geometryBBox={geometryBBox}
-              angleOfAttackDeg={angleOfAttackDeg}
-              setAngleOfAttackDeg={setAngleOfAttackDeg}
-              freestreamVelocity={freestreamVelocity}
-              activeTagTool={activeTagTool}
-              edgeTagMap={edgeTagMap}
-              onSetEdgeTagMap={setEdgeTagMap}
-              onEntitiesChange={setCadEntities}
-              onRequestGenerateDomainRef={requestGenerateDomainRef}
-              onRequestSetSelectedAsDomainRef={requestSetSelectedAsDomainRef}
-              onRequestSetSelectedAsGeometryRef={requestSetSelectedAsGeometryRef}
-              onRequestSelectAllGeometryRef={requestSelectAllGeometryRef}
-              onRequestClearGeometryRef={requestClearGeometryRef}
-              onRequestAutoSuggestTagsRef={requestAutoSuggestTagsRef}
-              onRequestMeshHandoffRef={requestMeshHandoffRef}
-              onRequestDownloadBlockMeshDictRef={requestDownloadBlockMeshDictRef}
-              cadName={state.geometry.name}
-              onCadNameChange={(name) => setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name } }))}
+                displayOnly={activeStage !== 'geometry'}
+                meshData={meshData}
+                meshStale={meshStale}
+                blocking={blocking}
+                onUpdateBlocking={handleUpdateBlocking}
+                showBlocking={activeStage === 'mesh'}
+                domainBroken={domainState === 'broken'}
+                isMeshing={isMeshing}
+                showMesh={activeStage === 'mesh' || activeStage === 'solver' || activeStage === 'results'}
+                meshOnly={activeStage === 'solver' || activeStage === 'results'}
+                showField={activeStage === 'results'}
+                fieldData={fieldData}
+                activeField={state.postprocess.activeField}
+                colormap={state.postprocess.colormap}
+                initialEntities={cadEntities}
+                onApplySketchMesh={handleApplySketchMesh}
+                domainLength={state.geometry.domainLength}
+                domainHeight={state.geometry.domainHeight}
+                resolution={state.geometry.meshResolution}
+                firstLayerMm={state.geometry.firstLayerHeightMm}
+                pendingImportFile={pendingImportFile}
+                onClearPendingImport={() => setPendingImportFile(null)}
+                // ── 6-Step Workflow Props (Canvas Visuals & Edge Tagging) ──
+                currentStep={cadWorkflowStep}
+                flowType={flowType}
+                domainShape={domainShape}
+                upstreamChordFactor={upstreamChordFactor}
+                setUpstreamChordFactor={setUpstreamChordFactor}
+                downstreamChordFactor={downstreamChordFactor}
+                setDownstreamChordFactor={setDownstreamChordFactor}
+                lateralHeightFactor={lateralHeightFactor}
+                setLateralHeightFactor={setLateralHeightFactor}
+                geometryBBox={geometryBBox}
+                angleOfAttackDeg={angleOfAttackDeg}
+                setAngleOfAttackDeg={setAngleOfAttackDeg}
+                freestreamVelocity={freestreamVelocity}
+                activeTagTool={activeTagTool}
+                edgeTagMap={edgeTagMap}
+                onSetEdgeTagMap={setEdgeTagMap}
+                onEntitiesChange={setCadEntities}
+                onRequestGenerateDomainRef={requestGenerateDomainRef}
+                onRequestSetSelectedAsDomainRef={requestSetSelectedAsDomainRef}
+                onRequestSetSelectedAsGeometryRef={requestSetSelectedAsGeometryRef}
+                onRequestSelectAllGeometryRef={requestSelectAllGeometryRef}
+                onRequestClearGeometryRef={requestClearGeometryRef}
+                onRequestAutoSuggestTagsRef={requestAutoSuggestTagsRef}
+                onRequestMeshHandoffRef={requestMeshHandoffRef}
+                onRequestDownloadBlockMeshDictRef={requestDownloadBlockMeshDictRef}
+                cadName={state.geometry.name}
+                onCadNameChange={(name) => setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name } }))}
+                isTransient={state.physics.timeFormulation === 'transient'}
+                transientTimes={transientTimes}
+                transientFrameIndex={transientFrameIndex}
+                transientPlaying={transientPlaying}
+                transientSpeed={transientSpeed}
+                onSelectTransientFrame={selectTransientFrame}
+                onToggleTransientPlay={() => transientPlaying ? stopPlayback() : startPlayback()}
+                onSelectTransientSpeed={setTransientSpeed}
+              />
+            </div>
+          </main>
+
+          {/* 4. COLLAPSIBLE BOTTOM DRAWER (Slides over canvas as overlay; never resizes/squishes canvas) */}
+          <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-auto shadow-lg">
+            <BottomSolverDrawer
+              residuals={state.residuals}
+              terminalLogs={state.terminalLogs}
+              caseFiles={caseFiles}
+              executionStatus={state.executionStatus}
+              onClearLogs={() => setState((prev) => ({ ...prev, terminalLogs: [] }))}
             />
           </div>
-        </main>
-        </>
-
-        {/* Right Column: Contextual Inspector (250px) */}
-        {activeStage !== 'caseSetup' && (
-        <RightContextInspector
-          selectedBoundary={selectedBoundary}
-          state={state}
-          updateBoundaries={(p) => setState((prev) => ({ ...prev, boundaries: { ...prev.boundaries, ...p } }))}
-          meshData={meshData}
-        />
-        )}
+        </div>
       </div>
-
-      {/* 4. COLLAPSIBLE BOTTOM DRAWER */}
-      <BottomSolverDrawer
-        residuals={state.residuals}
-        terminalLogs={state.terminalLogs}
-        caseFiles={caseFiles}
-        executionStatus={state.executionStatus}
-        onClearLogs={() => setState((prev) => ({ ...prev, terminalLogs: [] }))}
-      />
 
       {/* 5. BOTTOM STATUS BAR (24px) */}
       <StatusBar state={state} meshData={meshData} />

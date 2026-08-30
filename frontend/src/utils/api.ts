@@ -14,17 +14,21 @@ export async function setupStatus(): Promise<any> {
 export async function fetchSolverResults(
   mesh: any,
   projectId?: string,
+  time?: number | string,
+  signal?: AbortSignal,
 ): Promise<{ data: any | null; detail?: string }> {
   try {
     const res = await fetch(`${API_BASE}/api/solver/results`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId ?? null, mesh }),
+      body: JSON.stringify({ project_id: projectId ?? null, mesh, time: time ?? null }),
+      signal,
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) return { data: null, detail: j.detail || `HTTP ${res.status}` };
     return j.success ? { data: j.data } : { data: null, detail: j.detail || 'no results' };
   } catch (e: any) {
+    if (e?.name === 'AbortError') return { data: null, detail: '__aborted__' };
     return { data: null, detail: e?.message || 'request failed' };
   }
 }
@@ -484,5 +488,30 @@ export async function fetchFieldSolution(meshData: any, geometryType: string, ve
     return data.data;
   } catch {
     return generateFallbackFields(meshData, velocity);
+  }
+}
+
+export async function checkParaviewStatus(): Promise<{ available: boolean; path?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/solver/paraview/status`);
+    if (!res.ok) return { available: false };
+    const data = await res.json();
+    return { available: Boolean(data?.available), path: data?.path };
+  } catch {
+    return { available: false };
+  }
+}
+
+export async function launchParaview(projectId?: string): Promise<{ success: boolean; detail?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/solver/paraview/launch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_id: projectId ?? null }),
+    });
+    const data = await res.json();
+    return data;
+  } catch (err: any) {
+    return { success: false, detail: err?.message || 'Failed to connect to backend' };
   }
 }

@@ -21,6 +21,9 @@ from typing import Dict, List, Sequence, Tuple
 _TRI, _QUAD, _HEX, _PRISM = 2, 3, 5, 6
 _FRONT_BACK = "frontAndBack"
 _VOLUME = "internal"
+# Nominal span for OpenFOAM reduced-2D cases. The mesh still has exactly one
+# cell in this direction; this value also defines the unit used by force reports.
+OPENFOAM_2D_SPAN = 0.1
 
 
 def _edge_key(a: int, b: int) -> Tuple[int, int]:
@@ -55,7 +58,7 @@ def _name_edges(
     return out
 
 
-def write_foam_msh(mesh: Dict, path: str | Path, span: float = 1.0) -> Dict:
+def write_foam_msh(mesh: Dict, path: str | Path, span: float = OPENFOAM_2D_SPAN) -> Dict:
     """Extrude `mesh` by `span` in z and write an MSH 2.2 file at `path`.
 
     Returns a small summary {cells, patches, path}.

@@ -41,6 +41,12 @@ import {
   Box,
   Sliders,
   Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  ChevronFirst,
+  ChevronLast,
+  RotateCw,
   Download,
   FileCode,
   Check,
@@ -69,6 +75,7 @@ import {
   generateDefaultAirfoilPoints,
 } from '../../types/cadWorkflow';
 import { Blocking, blockPolygon } from '../../types/blocking';
+import { useWebGLField } from './useWebGLField';
 
 // ─── CAD Workbench Tool & State Types ─────────────────────────────────────────
 
@@ -534,6 +541,14 @@ interface CadWorkbenchProps {
   blocking?: Blocking | null;
   onUpdateBlocking?: (bk: Blocking | null) => void;
   showBlocking?: boolean;
+  isTransient?: boolean;
+  transientTimes?: number[];
+  transientFrameIndex?: number;
+  transientPlaying?: boolean;
+  transientSpeed?: number;
+  onSelectTransientFrame?: (index: number) => void;
+  onToggleTransientPlay?: () => void;
+  onSelectTransientSpeed?: (speed: number) => void;
 }
 
 export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
@@ -586,9 +601,23 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   blocking = null,
   onUpdateBlocking,
   showBlocking = false,
+  isTransient = false,
+  transientTimes = [],
+  transientFrameIndex = 0,
+  transientPlaying = false,
+  transientSpeed = 1.0,
+  onSelectTransientFrame,
+  onToggleTransientPlay,
+  onSelectTransientSpeed,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // ── WebGL field rendering ─────────────────────────────────────────────────
+  // A second canvas, overlaid on the main canvas, used exclusively for GPU-
+  // accelerated field visualization. Main Canvas 2D skips its field render loop
+  // when WebGL is active and haveField is true.
+  const { canvasRef: glCanvasRef, updateGeometry: glUpdateGeometry, render: glRender } = useWebGLField();
 
   // ── Domain Handle Dragging State ──
   const [hoveredDomainHandle, setHoveredDomainHandle] = useState<'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null>(null);
@@ -656,6 +685,15 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const panStart = useRef<Point2D>({ x: 0, y: 0 });
   const panOrigin = useRef<Point2D>({ x: 0, y: 0 });
   const lastMiddleClickRef = useRef(0);
+
+  // ── WebGL geometry upload: fires once per mesh change ────────────────────────
+  const [glReady, setGlReady] = useState(false);
+  useEffect(() => {
+    if (!meshData?.nodes?.length || !meshData?.elements?.length) { setGlReady(false); return; }
+    const ok = glUpdateGeometry(meshData.nodes as [number,number][], meshData.elements);
+    setGlReady(ok);
+  }, [meshData?.nodes, meshData?.elements, glUpdateGeometry]);
+
 
   // ── Camera Framing Helper ───────────────────────────────────────────────────
   const fitBoundingBox = useCallback((box: { minX: number; maxX: number; minY: number; maxY: number }, marginRatio = 0.70) => {
@@ -738,6 +776,31 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       setCanvasMode('mesh');
     }
   }, [showMesh, meshData, meshStale, meshOnly]);
+
+  // ── WebGL render: fires on any visual change (pan/zoom/field/colormap) ───────
+  useEffect(() => {
+    if (!glReady || !glCanvasRef.current) return;
+    const canvas = glCanvasRef.current;
+    const vals: number[] | undefined = showField && fieldData?.fields?.[activeField]
+      ? fieldData.fields[activeField] : undefined;
+    const haveField = Array.isArray(vals) && vals.length > 0;
+    const r = fieldData?.ranges?.[activeField];
+    let lo = 0, hi = 1;
+    if (haveField && Array.isArray(r) && r.length === 2 && r[0] !== r[1]) {
+      [lo, hi] = r;
+    } else if (haveField) {
+      lo = Math.min(...(vals as number[]));
+      hi = Math.max(...(vals as number[]));
+    }
+    glRender({
+      vals: haveField ? (vals as number[]) : [],
+      lo, hi, colormap,
+      pan, zoom,
+      canvasWidth: canvas.clientWidth || (containerRef.current?.clientWidth ?? 800),
+      canvasHeight: canvas.clientHeight || (containerRef.current?.clientHeight ?? 600),
+      visible: !!(displayOnly && showMesh && canvasMode === 'mesh' && haveField),
+    });
+  }, [glReady, pan, zoom, showField, fieldData, activeField, colormap, displayOnly, showMesh, canvasMode, glRender, glCanvasRef]);
 
   const handleAuxClick = useCallback((e: React.MouseEvent) => {
     if (e.button !== 1) return;
@@ -1242,9 +1305,15 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     const ws = (wx: number, wy: number) => ({ x: o.x + wx * zoom, y: o.y - wy * zoom });
     const SCALE = zoom;
 
+    const glHaveField = glReady && showField && Array.isArray(fieldData?.fields?.[activeField]);
+
     // Background
-    ctx.fillStyle = '#FAFAFA';
-    ctx.fillRect(0, 0, cw, ch);
+    if (glHaveField) {
+      ctx.clearRect(0, 0, cw, ch);
+    } else {
+      ctx.fillStyle = '#FAFAFA';
+      ctx.fillRect(0, 0, cw, ch);
+    }
 
     // ─── Adaptive Dynamic Grid (down to 0.2 mm) ──────────────────────────────
     // Mesh workflow views are intended for inspecting element topology; keep
@@ -1304,10 +1373,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         else edgeCounts.set(key, [a, b, 1]);
       };
 
-      // Field overlay (Results): colour each element by the mean of its nodes'
-      // scalar values, normalised to the field range.
-      const vals: number[] | undefined = showField ? fieldData?.fields?.[activeField] : undefined;
+      // Field overlay: when WebGL canvas is active, skip 2D per-element coloring
+      // (the WebGL overlay canvas handles it). Only compute haveField for wireframe style.
+      const vals: number[] | undefined = showField && !glReady ? fieldData?.fields?.[activeField] : undefined;
       const haveField = Array.isArray(vals) && vals.length === nodes.length;
+      const glHaveField = glReady && showField && Array.isArray(fieldData?.fields?.[activeField]);
       let lo = 0;
       let hi = 1;
       if (haveField) {
@@ -1320,16 +1390,24 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         }
       }
 
-      ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.12)' : '#CBD5E1';
-      ctx.lineWidth = haveField ? 0.4 : 0.65;
+      // Draw mesh cells — only wireframe when WebGL is rendering field colors
+      ctx.strokeStyle = (haveField || glHaveField) ? 'rgba(255,255,255,0.12)' : '#CBD5E1';
+      ctx.lineWidth = (haveField || glHaveField) ? 0.4 : 0.65;
+
       for (const element of elements) {
         if (element.length < 3) continue;
+        if (element.some((ni: number) => !nodes[ni])) continue; // guard: out-of-range node refs
         const points = element.map((nodeIndex: number) => ws(nodes[nodeIndex][0], nodes[nodeIndex][1]));
+
         if (haveField) {
+          // Canvas 2D fallback coloring (only when WebGL unavailable)
           let s = 0;
           for (const ni of element) s += (vals as number[])[ni] ?? 0;
           const t = (s / element.length - lo) / (hi - lo);
           ctx.fillStyle = colormapRGB(t, colormap);
+        } else if (glHaveField) {
+          // Transparent fill — WebGL overlay shows the colors
+          ctx.fillStyle = 'transparent';
         } else {
           ctx.fillStyle = '#FFFFFF';
         }
@@ -1339,25 +1417,29 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
           ctx.lineTo(points[index].x, points[index].y);
         }
         ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
+        if (!glHaveField) ctx.fill(); // Only fill when not using WebGL (WebGL handles color)
+        if (!glHaveField) ctx.stroke(); // Skip per-element stroke when WebGL is rendering
         for (let index = 0; index < element.length; index += 1) {
           addEdge(element[index], element[(index + 1) % element.length]);
         }
       }
 
-      // Exterior edges explicitly show both the airfoil hole and domain edge.
+      // Exterior edges — always draw regardless of WebGL state
       ctx.strokeStyle = '#111827';
-      ctx.lineWidth = 1.7;
-      for (const [a, b, count] of edgeCounts.values()) {
-        if (count !== 1) continue;
-        const p0 = ws(nodes[a][0], nodes[a][1]);
-        const p1 = ws(nodes[b][0], nodes[b][1]);
-        ctx.beginPath();
-        ctx.moveTo(p0.x, p0.y);
-        ctx.lineTo(p1.x, p1.y);
-        ctx.stroke();
+      ctx.lineWidth = glHaveField ? 0 : 1.7; // WebGL edge program handles boundary edges
+      if (!glHaveField) {
+        for (const [a, b, count] of edgeCounts.values()) {
+          if (count !== 1) continue;
+          if (!nodes[a] || !nodes[b]) continue; // guard: out-of-range node refs
+          const p0 = ws(nodes[a][0], nodes[a][1]);
+          const p1 = ws(nodes[b][0], nodes[b][1]);
+          ctx.beginPath();
+          ctx.moveTo(p0.x, p0.y);
+          ctx.lineTo(p1.x, p1.y);
+          ctx.stroke();
+        }
       }
+
       return;
     }
 
@@ -3359,8 +3441,13 @@ boundary
         )}
 
         <canvas
+          ref={glCanvasRef}
+          className="absolute inset-0 w-full h-full block pointer-events-none"
+        />
+
+        <canvas
           ref={canvasRef}
-          className="w-full h-full block outline-none focus:outline-none focus:ring-0 select-none"
+          className="relative z-10 w-full h-full block outline-none focus:outline-none focus:ring-0 select-none bg-transparent"
           onMouseMove={handleMouseMove}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
@@ -3376,27 +3463,133 @@ boundary
         {showField && Array.isArray(fieldData?.fields?.[activeField]) && (() => {
           const r = fieldData?.ranges?.[activeField] || [0, 1];
           const stops = Array.from({ length: 12 }, (_, i) => colormapRGB(1 - i / 11, colormap));
-          const label: Record<string, string> = {
-            U_mag: '|U|  m/s', p: 'p  m²/s²', k: 'k  m²/s²', omega: 'ω  1/s', vorticity: '∇×U',
+          const labels: Record<string, { name: string; unit: string }> = {
+            U_mag: { name: '[U]', unit: 'm/s' },
+            p: { name: '[p]', unit: 'Pa' },
+            k: { name: '[k]', unit: 'm²/s²' },
+            omega: { name: '[ω]', unit: '1/s' },
+            vorticity: { name: '[∇×U]', unit: '1/s' },
           };
+          const fieldLabel = labels[activeField] || { name: activeField, unit: '' };
           return (
-            <div className="absolute right-3 top-3 flex items-stretch gap-1.5 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1.5 text-[10px] font-mono text-[#69717D] pointer-events-none">
-              <div className="flex flex-col justify-between items-end py-0.5">
-                <span>{Number(r[1]).toPrecision(3)}</span>
-                <span className="text-[#171A1F]">{label[activeField] || activeField}</span>
-                <span>{Number(r[0]).toPrecision(3)}</span>
+            <div className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 0.75rem)' }}>
+              <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
+                {fieldLabel.name} {fieldLabel.unit}
               </div>
-              <div className="w-2.5 rounded-sm" style={{ background: `linear-gradient(to bottom, ${stops.join(',')})` }} />
+              <div className="flex items-stretch justify-end h-56">
+                <div className="flex flex-col justify-between items-end whitespace-nowrap"><span>{Number(r[1]).toPrecision(3)}</span><span>{Number((Number(r[0]) + Number(r[1])) / 2).toPrecision(3)}</span><span>{Number(r[0]).toPrecision(3)}</span></div>
+                <div className="ml-1 w-2.5 shrink-0 rounded-sm border border-[#DDE2E8]" style={{ background: `linear-gradient(to bottom, ${stops.join(',')})` }} />
+              </div>
             </div>
           );
         })()}
+
+        {/* ─── Transient Flow Simulation Player ─── */}
+        {showField && isTransient && (
+          <div
+            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white/95 backdrop-blur-sm border border-[#E1E4E8] rounded-xl shadow-lg px-4 py-2.5 flex items-center gap-3.5 select-none transition-all duration-150"
+            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 1rem)' }}
+          >
+            {/* 5 Playback Control Buttons: First, Prev, Play/Pause, Next, Last */}
+            <div className="flex items-center gap-1 shrink-0">
+              {/* First Frame */}
+              <button
+                onClick={() => onSelectTransientFrame?.(0)}
+                disabled={transientTimes.length === 0 || transientFrameIndex === 0}
+                title="First Frame"
+                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              >
+                <ChevronFirst className="w-4 h-4" />
+              </button>
+
+              {/* Previous Frame */}
+              <button
+                onClick={() => onSelectTransientFrame?.(transientFrameIndex - 1)}
+                disabled={transientTimes.length === 0 || transientFrameIndex === 0}
+                title="Previous Frame"
+                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              >
+                <SkipBack className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Play / Pause */}
+              <button
+                onClick={() => onToggleTransientPlay?.()}
+                disabled={transientTimes.length < 2}
+                title={transientPlaying ? 'Pause' : 'Play Simulation'}
+                className="p-2 rounded-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white shadow-sm disabled:opacity-40 disabled:pointer-events-none transition-transform active:scale-95 flex items-center justify-center mx-0.5"
+              >
+                {transientPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+              </button>
+
+              {/* Next Frame */}
+              <button
+                onClick={() => onSelectTransientFrame?.(transientFrameIndex + 1)}
+                disabled={transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1}
+                title="Next Frame"
+                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              >
+                <SkipForward className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Last Frame */}
+              <button
+                onClick={() => onSelectTransientFrame?.(transientTimes.length - 1)}
+                disabled={transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1}
+                title="Last Frame"
+                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              >
+                <ChevronLast className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Middle: Timeline Slider & Timestamp display */}
+            <div className="flex-1 flex flex-col justify-center min-w-0 px-1 gap-1">
+              <div className="flex items-center justify-between text-[10px] font-mono text-[#69717D]">
+                <span>
+                  Time: <strong className="text-[#171A1F]">{transientTimes[transientFrameIndex] !== undefined ? `${transientTimes[transientFrameIndex]}s` : '0.00s'}</strong>
+                </span>
+                <span>
+                  Frame <strong className="text-[#171A1F]">{transientTimes.length > 0 ? transientFrameIndex + 1 : 0}</strong> / {transientTimes.length || 1}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(0, transientTimes.length - 1)}
+                step={1}
+                value={transientFrameIndex}
+                onChange={(e) => onSelectTransientFrame?.(parseInt(e.target.value, 10))}
+                disabled={transientTimes.length < 2}
+                className="w-full h-1.5 bg-[#E1E4E8] rounded-lg appearance-none cursor-pointer accent-[#2563EB] disabled:cursor-not-allowed"
+              />
+            </div>
+
+            {/* Rightmost: Speed Controls (0.1x, 0.5x, 1x, 1.5x, 2x) */}
+            <div className="flex items-center gap-1 shrink-0 pl-2 border-l border-[#E1E4E8]">
+              {([0.1, 0.5, 1, 1.5, 2] as const).map((spd) => (
+                <button
+                  key={spd}
+                  onClick={() => onSelectTransientSpeed?.(spd)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium transition-colors ${
+                    transientSpeed === spd
+                      ? 'bg-[#2563EB] text-white font-semibold'
+                      : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
+                  }`}
+                >
+                  {spd}x
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {showField && meshData?.nodes?.length && (
           <div className={`absolute left-3 top-3 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1 text-[10px] pointer-events-none ${
             fieldData?.source === 'openfoam' ? 'text-[#16A34A]' : 'text-[#69717D]'
           }`}>
             {fieldData?.source === 'openfoam'
-              ? `Solver field${fieldData?.time ? ` · t=${fieldData.time}` : ''}`
+              ? `Solver field${fieldData?.time ? ` · t=${fieldData.time}s` : ''}`
               : 'No results yet - run the solver'}
           </div>
         )}

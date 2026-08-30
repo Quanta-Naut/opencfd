@@ -73,10 +73,27 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
     iters = int(run.get("iterations") or solver_controls.get("iterations", 1000))
     dt = float(run.get("deltaT") or solver_controls.get("timeStep", 1e-3))
     end = iters if steady else float(run.get("endTime", 1.0))
-    write_iv = int(run.get("writeInterval") or max(1, (iters if steady else int(end / max(dt, 1e-9))) // 5))
+    if run.get("writeInterval"):
+        write_iv = int(run.get("writeInterval"))
+    elif steady:
+        write_iv = max(1, iters // 5)
+    else:
+        # For transient: default to ~20 to 50 write frames (or every 0.02 - 0.05s)
+        target_frame_dt = max(dt, min(0.05, end / 25.0))
+        write_iv = max(1, int(round(target_frame_dt / dt)))
     nno = int(methods.get("nNonOrthogonalCorrectors", 1))
     nouter = int(methods.get("nOuterCorrectors", 1))
     ncorr = int(methods.get("nCorrectors", 2))
+
+    # For transient with adjustTimeStep, use runTime writeControl (seconds) so frame count
+    # is deterministic regardless of dt adaptation. writeInterval then means seconds per frame.
+    if not steady and controls.get('adjustableTimeStep', False):
+        write_control = 'runTime'
+        # write_iv is in steps, convert to seconds for runTime control
+        write_iv_time = round(write_iv * dt, 8)
+    else:
+        write_control = 'timeStep'
+        write_iv_time = None
 
     control = (
         f"solver          {module};\n"                      # Foundation 13
@@ -84,11 +101,11 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         "startFrom       " + ("latestTime" if run.get("init") == "continue" else "startTime") + ";\n"
         "startTime       0;\nstopAt          endTime;\n"
         f"endTime         {end};\ndeltaT          {1 if steady else dt};\n"
-        f"writeControl    timeStep;\nwriteInterval   {write_iv};\n"
-        "purgeWrite      2;\nwriteFormat     ascii;\nwritePrecision  8;\n"
+        f"writeControl    {write_control};\nwriteInterval   {write_iv_time if write_iv_time is not None else write_iv};\n"
+        f"purgeWrite      {0 if not steady else 2};\nwriteFormat     ascii;\nwritePrecision  8;\n"
         "writeCompression off;\ntimeFormat      general;\ntimePrecision   6;\nrunTimeModifiable true;\n"
         + ("" if steady else
-           f"adjustTimeStep  {'yes' if controls.get('adjustableTimeStep', True) else 'no'};\n"
+           f"adjustTimeStep  {'yes' if controls.get('adjustableTimeStep', False) else 'no'};\n"
            f"maxCo           {controls.get('maxCo', 5)};\n")
         + ("\n" + functions_block if functions_block else "")
     )

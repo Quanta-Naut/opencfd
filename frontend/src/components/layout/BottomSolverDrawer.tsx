@@ -22,6 +22,14 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   const [activeTab, setActiveTab] = useState<'residuals' | 'forces' | 'console' | 'dicts'>('residuals');
   const [selectedDict, setSelectedDict] = useState<string>('system/controlDict');
 
+  // Auto-select the first available dictionary if selectedDict isn't valid or when dicts update
+  const dictKeys = Object.keys(caseFiles);
+  useEffect(() => {
+    if (dictKeys.length > 0 && (!selectedDict || !caseFiles[selectedDict])) {
+      setSelectedDict(dictKeys[0]);
+    }
+  }, [dictKeys.length, selectedDict, caseFiles]);
+
   // Drag-resizable body height.
   const MIN_H = 120;
   const [bodyH, setBodyH] = useState<number>(() => {
@@ -52,13 +60,15 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
     document.body.style.userSelect = 'none';
   };
 
-  // When a run starts, open the drawer so its output is visible. On an error,
-  // jump to the console where the failure is spelled out.
+  // When a run starts, open the drawer so its output is visible and expand to the top.
+  // On an error, jump to the console where the failure is spelled out.
   const prevStatus = React.useRef(executionStatus);
   useEffect(() => {
     if (executionStatus === 'running' && prevStatus.current !== 'running') {
       setIsExpanded(true);
       setActiveTab('residuals');
+      const maxH = Math.max(MIN_H, window.innerHeight - 200);
+      setBodyH(maxH);
     }
     if (executionStatus === 'error') {
       setIsExpanded(true);
@@ -76,20 +86,38 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
     return () => { document.documentElement.style.removeProperty('--app-bottom-bar'); };
   }, [isExpanded, bodyH]);
 
+  // Downsample helper so Recharts rendering stays 60fps even with 5000+ points
+  const downsample = <T,>(arr: T[], maxPoints = 500): T[] => {
+    if (arr.length <= maxPoints) return arr;
+    const step = Math.ceil(arr.length / maxPoints);
+    const result: T[] = [];
+    for (let i = 0; i < arr.length - 1; i += step) {
+      result.push(arr[i]);
+    }
+    // Always include the absolute latest point
+    result.push(arr[arr.length - 1]);
+    return result;
+  };
+
   // Live ticker stats - real values from the last residual point the solver sent
   const last = residuals.length > 0 ? residuals[residuals.length - 1] : undefined;
   const lastIter = last?.iteration ?? 0;
   const cd = typeof last?.cd === 'number' ? last.cd : null;
   const cl = typeof last?.cl === 'number' ? last.cl : null;
   const fmtCoef = (v: number | null) => (v === null ? '-' : v.toFixed(4));
-  const forceSeries = React.useMemo(
+
+  const rawForceSeries = React.useMemo(
     () => residuals.filter((r) => typeof r.cd === 'number' || typeof r.cl === 'number'),
     [residuals],
+  );
+  const forceSeries = React.useMemo(
+    () => downsample(rawForceSeries, 400),
+    [rawForceSeries],
   );
 
   // Log-scale plots break on zero/negative values - clamp to a small floor.
   const FLOOR = 1e-10;
-  const resSeries = React.useMemo(
+  const rawResSeries = React.useMemo(
     () => residuals.map((r) => {
       const o: any = { iteration: r.iteration };
       for (const key of ['p', 'Ux', 'Uy', 'k', 'omega', 'epsilon'] as const) {
@@ -100,6 +128,11 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
     }),
     [residuals],
   );
+  const resSeries = React.useMemo(
+    () => downsample(rawResSeries, 400),
+    [rawResSeries],
+  );
+
   const resDomain = React.useMemo(() => {
     let lo = Infinity;
     let hi = -Infinity;

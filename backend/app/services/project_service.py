@@ -76,8 +76,14 @@ def _build_summary(session: Dict[str, Any]) -> Dict[str, Any]:
 
     preview: Optional[Dict[str, Any]] = None
     if geometry_entities:
-        pts = geometry_entities[0].get("pts") or []
-        coords = [[p.get("x", 0.0), p.get("y", 0.0)] for p in pts if isinstance(p, dict)]
+        # Build the thumbnail from all drawable geometry, not just the first
+        # entity. This keeps imported/multi-body CAD visible on the home card.
+        coords = [
+            [p.get("x", 0.0), p.get("y", 0.0)]
+            for entity in geometry_entities
+            for p in (entity.get("pts") or [])
+            if isinstance(p, dict)
+        ]
         if len(coords) > 64:
             step = len(coords) / 64.0
             coords = [coords[int(i * step)] for i in range(64)]
@@ -113,6 +119,12 @@ def list_projects() -> List[Dict[str, Any]]:
         if not meta:
             continue
         meta["id"] = pdir.name
+        # Refresh derived card data from the session. Older projects may have
+        # been saved before previews included all CAD entities, so relying only
+        # on project.json leaves a blank/stale thumbnail on the Home screen.
+        session = _read_json(_session_path(pdir), {})
+        if isinstance(session, dict) and session:
+            meta["summary"] = _build_summary(session)
         projects.append(meta)
     projects.sort(key=lambda m: m.get("modified", ""), reverse=True)
     return projects

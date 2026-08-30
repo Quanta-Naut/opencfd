@@ -239,7 +239,9 @@ class OpenFoamAdapter(SolverAdapter):
         else:
             solver_cmd = _classic_solver(physics)
         solver_bin = solver_cmd.split()[0]
-        span = float(config.get("span", 1.0)) or 1.0
+        # Reduced 2D cases use one uniform cell across a nominal 0.1 m span.
+        # Keep this aligned with foam/functions.py force-reference defaults.
+        span = float(config.get("span", 0.1)) or 0.1
 
         yield {"type": "log", "line": f"[OpenCFD] Case: {case}"}
         yield {"type": "log", "line": f"[OpenCFD] Solver: foamRun -solver {module}"}

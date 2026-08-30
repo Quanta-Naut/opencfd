@@ -235,6 +235,7 @@ async def solver_environment_endpoint():
 class SolverResultsRequest(BaseModel):
     project_id: str | None = None
     mesh: Dict[str, Any] = {}
+    time: Any = None
 
 
 @app.post("/api/solver/results")
@@ -242,7 +243,7 @@ async def solver_results_endpoint(req: SolverResultsRequest):
     from app.services.solver.results import ResultsUnavailable
     try:
         case_dir = str(resolve_case_dir(req.project_id))
-        data = read_field_results(case_dir, req.mesh)
+        data = read_field_results(case_dir, req.mesh, req.time)
         if data is None:
             return {"success": False, "detail": "no solver output found for this project"}
         return {"success": True, "data": data}
@@ -250,6 +251,36 @@ async def solver_results_endpoint(req: SolverResultsRequest):
         return {"success": False, "detail": str(e)}
     except Exception as e:
         return {"success": False, "detail": f"could not read results: {e}"}
+
+
+class ParaviewLaunchRequest(BaseModel):
+    project_id: str | None = None
+
+
+@app.get("/api/solver/paraview/status")
+async def paraview_status_endpoint():
+    import shutil
+    pv_path = shutil.which("paraview") or shutil.which("paraFoam")
+    return {"success": True, "available": bool(pv_path), "path": pv_path}
+
+
+@app.post("/api/solver/paraview/launch")
+async def paraview_launch_endpoint(req: ParaviewLaunchRequest):
+    import shutil
+    import subprocess
+    pv_path = shutil.which("paraview") or shutil.which("paraFoam")
+    if not pv_path:
+        return {"success": False, "detail": "ParaView is not installed or not in PATH"}
+    try:
+        case_dir = str(resolve_case_dir(req.project_id))
+        foam_file = os.path.join(case_dir, "case.foam")
+        if not os.path.exists(foam_file):
+            with open(foam_file, "w") as f:
+                f.write("")
+        subprocess.Popen([pv_path, foam_file], start_new_session=True)
+        return {"success": True, "detail": f"Launched ParaView for {foam_file}"}
+    except Exception as e:
+        return {"success": False, "detail": str(e)}
 
 
 @app.get("/api/setup/status")

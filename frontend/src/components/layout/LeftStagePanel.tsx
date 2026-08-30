@@ -124,6 +124,7 @@ interface LeftStagePanelProps {
   structuredHint?: 'hgrid' | 'ogrid' | 'cgrid';
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
+  projectId?: string;
 }
 
 /**
@@ -577,6 +578,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   structuredHint,
   structuredSmooth,
   setStructuredSmooth,
+  projectId,
 }) => {
   const fileInputAirfoilRef = useRef<HTMLInputElement | null>(null);
   const fileInputDxfRef = useRef<HTMLInputElement | null>(null);
@@ -1369,21 +1371,6 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
       {activeStage === 'results' && !stageStatus?.results?.locked && (
         <div className="p-4 space-y-4 text-xs text-[#171A1F]">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px]">
-              {fieldSource === 'openfoam'
-                ? <span className="text-[#16A34A]">Solver fields loaded{fieldTime ? ` (t=${fieldTime})` : ''}</span>
-                : <span className="text-[#69717D]">No results yet - run the solver</span>}
-            </span>
-            <button
-              onClick={onReloadResults}
-              disabled={resultsLoading}
-              className="px-2 py-1 rounded border border-[#E1E4E8] text-[11px] text-[#2563EB] hover:bg-[#F0F4FF] disabled:opacity-50"
-            >
-              {resultsLoading ? 'Loading...' : 'Load solver results'}
-            </button>
-          </div>
-
           <div>
             <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
               Scalar Field Variable
@@ -1391,7 +1378,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             <select
               value={state.postprocess.activeField}
               onChange={(e) => updatePostProcess({ activeField: e.target.value as any })}
-              className="w-full px-2.5 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md font-medium text-[#171A1F]"
+              className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-md font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
             >
               <option value="U_mag">Velocity Magnitude (|U|)</option>
               <option value="p">Static Pressure (p)</option>
@@ -1420,6 +1407,33 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* ─── ParaView Integration ─── */}
+          <div className="border-t border-[#E1E4E8] pt-3 space-y-2">
+            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+              Advanced Visualization
+            </span>
+            <button
+              onClick={async () => {
+                const { launchParaview, checkParaviewStatus } = await import('../../utils/api');
+                const status = await checkParaviewStatus();
+                if (!status.available) {
+                  alert('ParaView was not found on your system. Please install ParaView to use external 3D visualization.');
+                  return;
+                }
+                const res = await launchParaview(projectId);
+                if (!res.success) {
+                  alert(`Failed to launch ParaView: ${res.detail}`);
+                }
+              }}
+              className="w-full py-2 px-3 rounded-lg border border-[#2563EB] bg-blue-50 text-[#1D4ED8] hover:bg-blue-100 font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors"
+            >
+              <span>Open in ParaView</span>
+            </button>
+            <p className="text-[10px] text-[#69717D] leading-relaxed">
+              Launch full 3D post-processing, streamline slices, and vector arrows in ParaView.
+            </p>
           </div>
         </div>
       )}

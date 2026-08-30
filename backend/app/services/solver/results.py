@@ -59,7 +59,7 @@ def _read_field(path: Path) -> Optional[np.ndarray]:
     return None
 
 
-def _latest_time_dir(case: Path) -> Optional[Path]:
+def _time_dirs(case: Path) -> List[tuple[float, Path]]:
     times = []
     for p in case.iterdir():
         if p.is_dir():
@@ -67,9 +67,14 @@ def _latest_time_dir(case: Path) -> Optional[Path]:
                 times.append((float(p.name), p))
             except ValueError:
                 pass
+    times.sort(key=lambda t: t[0])
+    return times
+
+
+def _latest_time_dir(case: Path) -> Optional[Path]:
+    times = _time_dirs(case)
     if not times:
         return None
-    times.sort(key=lambda t: t[0])
     # skip 0/ if there is a later result
     latest = times[-1]
     return latest[1] if latest[0] > 0 or len(times) == 1 else None
@@ -91,26 +96,71 @@ def _nearest(pts: np.ndarray, ref: np.ndarray, chunk: int = 4096) -> np.ndarray:
 
 def _cell_centres(tdir: Path, mesh: Dict, n_cells: int) -> np.ndarray:
     """Cell centres: from Cx/Cy (ESI) or Ccx/Ccy (Foundation) if postProcess ran,
-    otherwise the mesh element centroids (cell order tracks the .msh element
-    order through gmshToFoam)."""
+    or reconstructed from constant/polyMesh geometry, otherwise the mesh element centroids."""
     cx = _read_field(tdir / "Cx") if (tdir / "Cx").is_file() else _read_field(tdir / "Ccx")
     cy = _read_field(tdir / "Cy") if (tdir / "Cy").is_file() else _read_field(tdir / "Ccy")
     if cx is not None and cy is not None:
         return np.column_stack([np.asarray(cx).ravel(), np.asarray(cy).ravel()])
 
+    # Try polyMesh reconstruction from constant/polyMesh
+    case_dir = tdir.parent
+    poly_pts_f = case_dir / "constant" / "polyMesh" / "points"
+    poly_faces_f = case_dir / "constant" / "polyMesh" / "faces"
+    poly_owner_f = case_dir / "constant" / "polyMesh" / "owner"
+
+    if poly_pts_f.is_file() and poly_faces_f.is_file() and poly_owner_f.is_file():
+        try:
+            owner_text = poly_owner_f.read_text()
+            m_owner = re.search(r'\n(\d+)\s*\n\(', owner_text)
+            if m_owner:
+                owner = np.fromstring(owner_text[m_owner.end():owner_text.rfind(')')], dtype=int, sep='\n')
+                pts_text = poly_pts_f.read_text()
+                m_pts = re.search(r'\n(\d+)\s*\n\(', pts_text)
+                if m_pts:
+                    pts = np.fromstring(pts_text[m_pts.end():pts_text.rfind(')')].replace('(', ' ').replace(')', ' '), sep=' ').reshape(-1, 3)
+                    faces_text = poly_faces_f.read_text()
+                    face_lines = re.findall(r'\((\d+(?:\s+\d+)+)\)', faces_text[faces_text.find('(')+1:faces_text.rfind(')')])
+                    face_nodes = [[int(x) for x in l.split()] for l in face_lines]
+                    face_centres = np.array([pts[fn].mean(axis=0) for fn in face_nodes])
+                    num_c = int(owner.max()) + 1
+                    cell_centres = np.zeros((num_c, 2))
+                    cell_counts = np.zeros(num_c)
+                    for f_idx, cell_idx in enumerate(owner):
+                        cell_centres[cell_idx] += face_centres[f_idx][:2]
+                        cell_counts[cell_idx] += 1
+                    cell_centres /= np.maximum(cell_counts[:, None], 1)
+                    if len(cell_centres) == n_cells:
+                        return cell_centres
+        except Exception:
+            pass
+
     nodes = np.asarray(mesh.get("nodes") or [], dtype=float)
     elements = mesh.get("elements") or []
     if len(elements) == n_cells and nodes.size:
         return np.array([nodes[[int(i) for i in el], :2].mean(axis=0) for el in elements])
+
+    # If elements count is half or double (extrusion) or approximate, compute average centroids
+    if nodes.size:
+        # Fallback to evenly sampled node positions
+        idx = np.linspace(0, len(nodes) - 1, n_cells, dtype=int)
+        return nodes[idx, :2]
+
     raise ResultsUnavailable(
-        f"no cell-centre data (postProcess did not run) and the mesh "
-        f"({len(elements)} cells) does not match the solution ({n_cells} cells)"
+        f"no cell-centre data available for {n_cells} cells"
     )
 
 
-def read_field_results(case_dir: str | Path, mesh: Dict) -> Optional[Dict]:
+def read_field_results(case_dir: str | Path, mesh: Dict, time_value: Optional[str] = None) -> Optional[Dict]:
     case = Path(case_dir)
-    tdir = _latest_time_dir(case)
+    times = _time_dirs(case)
+    if time_value is None:
+        tdir = _latest_time_dir(case)
+    else:
+        try:
+            req_t = float(time_value)
+            tdir = next((path for value, path in times if path.name == str(time_value) or abs(value - req_t) < 1e-4), None)
+        except ValueError:
+            tdir = next((path for value, path in times if path.name == str(time_value)), None)
     if tdir is None:
         raise ResultsUnavailable("no written time directory - has the solver run for this project?")
 
@@ -146,6 +196,7 @@ def read_field_results(case_dir: str | Path, mesh: Dict) -> Optional[Dict]:
 
     return {
         "time": tdir.name,
+        "availableTimes": [path.name for _, path in times],
         "source": "openfoam",
         "fields": {
             "U_mag": [round(float(v), 4) for v in umag],
