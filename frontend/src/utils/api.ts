@@ -11,18 +11,21 @@ export async function setupStatus(): Promise<any> {
   return (await res.json()).data;
 }
 
-export async function fetchSolverResults(mesh: any, projectId?: string): Promise<any | null> {
+export async function fetchSolverResults(
+  mesh: any,
+  projectId?: string,
+): Promise<{ data: any | null; detail?: string }> {
   try {
     const res = await fetch(`${API_BASE}/api/solver/results`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project_id: projectId ?? null, mesh }),
     });
-    if (!res.ok) return null;
-    const j = await res.json();
-    return j.success ? j.data : null;
-  } catch {
-    return null;
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return { data: null, detail: j.detail || `HTTP ${res.status}` };
+    return j.success ? { data: j.data } : { data: null, detail: j.detail || 'no results' };
+  } catch (e: any) {
+    return { data: null, detail: e?.message || 'request failed' };
   }
 }
 

@@ -3391,9 +3391,13 @@ boundary
           );
         })()}
 
-        {showField && fieldData?.source !== 'openfoam' && meshData?.nodes?.length && (
-          <div className="absolute left-3 top-3 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1 text-[10px] text-[#B45309] pointer-events-none">
-            Preview field - run the solver for real results
+        {showField && meshData?.nodes?.length && (
+          <div className={`absolute left-3 top-3 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1 text-[10px] pointer-events-none ${
+            fieldData?.source === 'openfoam' ? 'text-[#16A34A]' : 'text-[#B45309]'
+          }`}>
+            {fieldData?.source === 'openfoam'
+              ? `Solver field${fieldData?.time ? ` · t=${fieldData.time}` : ''}`
+              : 'Preview field'}
           </div>
         )}
 

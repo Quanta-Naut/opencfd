@@ -56,6 +56,10 @@ interface LeftStagePanelProps {
   meshStale?: boolean;
   onRunSolver: () => void;
   onStopSolver?: () => void;
+  onReloadResults?: () => void;
+  resultsLoading?: boolean;
+  fieldSource?: string;
+  fieldTime?: string;
   onSetSolution?: (patch: (c: import('../../solver/solverConfig').SolverConfig) => import('../../solver/solverConfig').SolverConfig) => void;
   onSetTimeFormulation?: (t: 'steady' | 'transient') => void;
   solverPatchNames?: string[];
@@ -511,6 +515,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   meshStale,
   onRunSolver,
   onStopSolver,
+  onReloadResults,
+  resultsLoading,
+  fieldSource,
+  fieldTime,
   onSetSolution,
   onSetTimeFormulation,
   solverPatchNames,
@@ -1361,6 +1369,21 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
       {activeStage === 'results' && !stageStatus?.results?.locked && (
         <div className="p-4 space-y-4 text-xs text-[#171A1F]">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px]">
+              {fieldSource === 'openfoam'
+                ? <span className="text-[#16A34A]">Solver fields loaded{fieldTime ? ` (t=${fieldTime})` : ''}</span>
+                : <span className="text-[#B45309]">Showing a preview field</span>}
+            </span>
+            <button
+              onClick={onReloadResults}
+              disabled={resultsLoading}
+              className="px-2 py-1 rounded border border-[#E1E4E8] text-[11px] text-[#2563EB] hover:bg-[#F0F4FF] disabled:opacity-50"
+            >
+              {resultsLoading ? 'Loading...' : 'Load solver results'}
+            </button>
+          </div>
+
           <div>
             <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
               Scalar Field Variable

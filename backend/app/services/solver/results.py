@@ -75,27 +75,48 @@ def _latest_time_dir(case: Path) -> Optional[Path]:
     return latest[1] if latest[0] > 0 or len(times) == 1 else None
 
 
+class ResultsUnavailable(Exception):
+    pass
+
+
+def _cell_centres(tdir: Path, mesh: Dict, n_cells: int) -> np.ndarray:
+    """Cell centres: from Cx/Cy (ESI) or Ccx/Ccy (Foundation) if postProcess ran,
+    otherwise the mesh element centroids (cell order tracks the .msh element
+    order through gmshToFoam)."""
+    cx = _read_field(tdir / "Cx") if (tdir / "Cx").is_file() else _read_field(tdir / "Ccx")
+    cy = _read_field(tdir / "Cy") if (tdir / "Cy").is_file() else _read_field(tdir / "Ccy")
+    if cx is not None and cy is not None:
+        return np.column_stack([np.asarray(cx).ravel(), np.asarray(cy).ravel()])
+
+    nodes = np.asarray(mesh.get("nodes") or [], dtype=float)
+    elements = mesh.get("elements") or []
+    if len(elements) == n_cells and nodes.size:
+        return np.array([nodes[[int(i) for i in el], :2].mean(axis=0) for el in elements])
+    raise ResultsUnavailable(
+        f"no cell-centre data (postProcess did not run) and the mesh "
+        f"({len(elements)} cells) does not match the solution ({n_cells} cells)"
+    )
+
+
 def read_field_results(case_dir: str | Path, mesh: Dict) -> Optional[Dict]:
     case = Path(case_dir)
     tdir = _latest_time_dir(case)
     if tdir is None:
-        return None
+        raise ResultsUnavailable("no written time directory - has the solver run for this project?")
 
-    # cell-centre component field: Cx/Cy on the ESI fork, Ccx/Ccy on Foundation 13
-    cx = _read_field(tdir / "Cx") if (tdir / "Cx").is_file() else _read_field(tdir / "Ccx")
-    cy = _read_field(tdir / "Cy") if (tdir / "Cy").is_file() else _read_field(tdir / "Ccy")
     U = _read_field(tdir / "U")
     p = _read_field(tdir / "p")
-    if cx is None or cy is None or U is None or p is None:
-        return None
+    if U is None or p is None:
+        raise ResultsUnavailable(f"no U/p fields in {tdir.name}/ - solver may have diverged or not written output")
 
-    centres = np.column_stack([np.asarray(cx).ravel(), np.asarray(cy).ravel()])
+    n_cells = len(np.atleast_2d(U))
+    centres = _cell_centres(tdir, mesh, n_cells)
     k = _read_field(tdir / "k")
     omega = _read_field(tdir / "omega")
 
     nodes = np.asarray(mesh.get("nodes") or [], dtype=float)
     if nodes.size == 0:
-        return None
+        raise ResultsUnavailable("no mesh nodes supplied")
 
     # nearest cell centre for each viewer node
     from scipy.spatial import cKDTree  # noqa: PLC0415

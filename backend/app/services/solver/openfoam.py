@@ -349,12 +349,13 @@ class OpenFoamAdapter(SolverAdapter):
         if rc == 0 or residuals.converged:
             # cell-centre coords for mapping fields back to the viewer mesh
             try:
-                async for _ in self._stream(
+                async for ev in self._stream(
                     "postProcess -func writeCellCentres -latestTime", "postProcess"
                 ):
-                    pass
-            except RuntimeError:
-                pass
+                    _ = ev
+            except RuntimeError as e:
+                yield {"type": "log",
+                       "line": f"[postProcess] {e} - results will use mesh centroids instead"}
             yield {"type": "status", "status": "completed", "iterations": residuals.iteration}
         else:
             yield {"type": "log", "line": "\n".join(tail[-20:])}

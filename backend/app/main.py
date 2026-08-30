@@ -239,14 +239,17 @@ class SolverResultsRequest(BaseModel):
 
 @app.post("/api/solver/results")
 async def solver_results_endpoint(req: SolverResultsRequest):
+    from app.services.solver.results import ResultsUnavailable
     try:
         case_dir = str(resolve_case_dir(req.project_id))
         data = read_field_results(case_dir, req.mesh)
         if data is None:
             return {"success": False, "detail": "no solver output found for this project"}
         return {"success": True, "data": data}
+    except ResultsUnavailable as e:
+        return {"success": False, "detail": str(e)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return {"success": False, "detail": f"could not read results: {e}"}
 
 
 @app.get("/api/setup/status")

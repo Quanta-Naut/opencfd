@@ -940,6 +940,32 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     return { iteration: r.iteration, maxResidual, cd: (r as any).cd, cl: (r as any).cl };
   }, [state.residuals]);
 
+  const [resultsLoading, setResultsLoading] = useState(false);
+  const loadResults = async (fromRun = false) => {
+    if (!meshData?.nodes?.length) {
+      toast('Generate a mesh first.', 'error');
+      return;
+    }
+    setResultsLoading(true);
+    const { data, detail } = await fetchSolverResults(
+      { nodes: meshData.nodes, elements: meshData.elements },
+      projectId,
+    );
+    setResultsLoading(false);
+    if (data) {
+      setFieldData(data);
+      setState((prev) => ({
+        ...prev,
+        terminalLogs: [...prev.terminalLogs, `[Results] Loaded fields from time ${data.time}.`],
+      }));
+      toast('Results loaded - open the Results tab.', 'success');
+    } else {
+      const msg = detail || 'no solver output found';
+      setState((prev) => ({ ...prev, terminalLogs: [...prev.terminalLogs, `[Results] ${msg}`] }));
+      if (!fromRun) toast(`Could not load results: ${msg}`, 'error', 6000);
+    }
+  };
+
   const handleRunSolver = async () => {
     if (wsRef.current) wsRef.current.close();
 
@@ -1012,21 +1038,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           terminalLogs: [...prev.terminalLogs, `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`],
         }));
         toast('Solver run finished.', 'success');
-        if (meshData) {
-          fetchSolverResults(
-            { nodes: meshData.nodes, elements: meshData.elements },
-            projectId,
-          ).then((fields) => {
-            if (fields) {
-              setFieldData(fields);
-              setState((prev) => ({
-                ...prev,
-                terminalLogs: [...prev.terminalLogs, `[Results] Loaded fields from time ${fields.time}.`],
-              }));
-              toast('Results loaded - open the Results tab.', 'success');
-            }
-          });
-        }
+        void loadResults(true);
       } else if (msg.type === 'error') {
         setState((prev) => ({
           ...prev,
@@ -1121,6 +1133,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           meshStale={meshStale}
           onRunSolver={handleRunSolver}
           onStopSolver={handleStopSolver}
+          onReloadResults={() => loadResults(false)}
+          resultsLoading={resultsLoading}
+          fieldSource={fieldData?.source}
+          fieldTime={fieldData?.time}
           onSetSolution={handleSetSolution}
           onSetTimeFormulation={(t) =>
             setState((prev) => ({ ...prev, physics: { ...prev.physics, timeFormulation: t } }))}
