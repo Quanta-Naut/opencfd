@@ -390,14 +390,21 @@ class WslOpenFoam(OpenFoamAdapter):
         return pre + ["--"]
 
     def _to_solver_path(self, host_path: str) -> str:
+        # Backslashes get eaten passing a Windows path through wsl.exe argv;
+        # wslpath accepts forward slashes for a drive path just fine.
+        win = str(host_path).replace("\\", "/")
         out = subprocess.run(
-            self._prefix() + ["wslpath", "-a", str(host_path)],
+            self._prefix() + ["wslpath", "-a", win],
             capture_output=True, text=True, timeout=20,
         )
         p = (out.stdout or "").strip()
-        if out.returncode != 0 or not p:
-            raise RuntimeError(f"wslpath failed: {(out.stderr or '').strip()}")
-        return p
+        if out.returncode == 0 and p:
+            return p
+        # fall back: translate C:/x/y -> /mnt/c/x/y ourselves
+        m = re.match(r"^([A-Za-z]):/(.*)$", win)
+        if m:
+            return f"/mnt/{m.group(1).lower()}/{m.group(2)}"
+        raise RuntimeError(f"wslpath failed for {win!r}: {(out.stderr or '').strip()}")
 
 
 # ---- WSL discovery (Windows) ---------------------------------------------

@@ -70,6 +70,8 @@ export interface StudioSession {
   meshData?: any;
   meshSig?: string | null;
   hasMesh?: boolean;
+  fieldData?: any;
+  caseFiles?: Record<string, string>;
 }
 
 interface AppProps {
@@ -387,18 +389,17 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       showVectors: false,
       ...(savedSession?.state?.postprocess || {}),
     },
-    executionStatus: 'idle',
-    residuals: [],
-    terminalLogs: [
-      'AEROFLOW CFD Studio ready.',
-      'Case initialized: cases/nozzle (simpleFoam RAS kOmegaSST).',
+    executionStatus: savedSession?.state?.executionStatus === 'completed' ? 'completed' : 'idle',
+    residuals: savedSession?.state?.residuals ?? [],
+    terminalLogs: savedSession?.state?.terminalLogs ?? [
+      'OpenCFD ready.',
     ],
   }));
 
   const [meshData, setMeshData] = useState<any>(() => savedSession?.meshData ?? null);
   const [meshError, setMeshError] = useState<string | null>(null);
-  const [fieldData, setFieldData] = useState<any>(null);
-  const [caseFiles, setCaseFiles] = useState<Record<string, string>>({});
+  const [fieldData, setFieldData] = useState<any>(() => savedSession?.fieldData ?? null);
+  const [caseFiles, setCaseFiles] = useState<Record<string, string>>(() => savedSession?.caseFiles ?? {});
   const [isMeshing, setIsMeshing] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -432,7 +433,13 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
 
   // ── Auto-save session to the project folder on disk (~/.OpenCFD/projects) ──
   const buildSession = (): StudioSession => ({
-    state,
+    // keep the persisted copy bounded - a long run can produce thousands of
+    // residual points / log lines
+    state: {
+      ...state,
+      residuals: state.residuals.length > 4000 ? state.residuals.slice(-4000) : state.residuals,
+      terminalLogs: state.terminalLogs.length > 800 ? state.terminalLogs.slice(-800) : state.terminalLogs,
+    },
     cadEntities,
     edgeTagMap,
     cadWorkflowStep,
@@ -449,12 +456,17 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     meshData,
     meshSig: meshSigRef.current,
     hasMesh: !!meshData?.num_elements,
+    fieldData,
+    caseFiles,
   });
   const sessionRef = useRef<StudioSession>(buildSession());
   sessionRef.current = buildSession();
 
   const saveWarned = useRef(false);
   useEffect(() => {
+    // during a solve the residual stream fires constantly - back the autosave
+    // off; the final state is saved when executionStatus leaves 'running'
+    const delay = state.executionStatus === 'running' ? 8000 : 400;
     const timer = setTimeout(() => {
       saveProjectSession(projectId, sessionRef.current)
         .then(() => { saveWarned.current = false; })
@@ -465,7 +477,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
             toast('Could not autosave - check the backend connection.', 'error', 6000);
           }
         });
-    }, 400);
+    }, delay);
     return () => clearTimeout(timer);
   }, [
     projectId,
@@ -484,6 +496,8 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     activeTagTool,
     blocking,
     meshData,
+    fieldData,
+    caseFiles,
   ]);
 
   const handleExitHome = async () => {

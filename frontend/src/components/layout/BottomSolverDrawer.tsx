@@ -114,6 +114,19 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   }, [resSeries]);
   const hasKey = (k: string) => resSeries.some((p) => typeof p[k] === 'number');
 
+  // Keep the console pinned to the newest line.
+  const consoleRef = React.useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = consoleRef.current;
+    if (el && activeTab === 'console') el.scrollTop = el.scrollHeight;
+  }, [activeTab, isExpanded]);  // jump to bottom when opening the tab
+  useEffect(() => {
+    const el = consoleRef.current;
+    if (!el || activeTab !== 'console') return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTop = el.scrollHeight;  // follow new lines
+  }, [terminalLogs, activeTab]);
+
   return (
     <div className="w-full bg-white border-t border-[#E1E4E8] flex flex-col select-none shrink-0 z-20">
       {/* 1. DRAWER HEADER TICKER */}
@@ -296,7 +309,7 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
 
           {/* TAB 3: LIVE CONSOLE LOGS */}
           {activeTab === 'console' && (
-            <div className="w-full h-full p-3 font-mono text-[11px] leading-relaxed text-[#171A1F] overflow-y-auto bg-[#F5F6F8]/60">
+            <div ref={consoleRef} className="w-full h-full p-3 font-mono text-[11px] leading-relaxed text-[#171A1F] overflow-y-auto bg-[#F5F6F8]/60">
               {terminalLogs.length === 0 && (
                 <span className="text-[#A5ACB5]">No output yet.</span>
               )}
