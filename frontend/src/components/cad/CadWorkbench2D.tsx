@@ -3393,11 +3393,11 @@ boundary
 
         {showField && meshData?.nodes?.length && (
           <div className={`absolute left-3 top-3 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1 text-[10px] pointer-events-none ${
-            fieldData?.source === 'openfoam' ? 'text-[#16A34A]' : 'text-[#B45309]'
+            fieldData?.source === 'openfoam' ? 'text-[#16A34A]' : 'text-[#69717D]'
           }`}>
             {fieldData?.source === 'openfoam'
               ? `Solver field${fieldData?.time ? ` · t=${fieldData.time}` : ''}`
-              : 'Preview field'}
+              : 'No results yet - run the solver'}
           </div>
         )}
 

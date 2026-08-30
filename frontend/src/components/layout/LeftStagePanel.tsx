@@ -1373,7 +1373,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             <span className="text-[11px]">
               {fieldSource === 'openfoam'
                 ? <span className="text-[#16A34A]">Solver fields loaded{fieldTime ? ` (t=${fieldTime})` : ''}</span>
-                : <span className="text-[#B45309]">Showing a preview field</span>}
+                : <span className="text-[#69717D]">No results yet - run the solver</span>}
             </span>
             <button
               onClick={onReloadResults}

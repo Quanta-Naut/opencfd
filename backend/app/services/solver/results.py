@@ -79,6 +79,16 @@ class ResultsUnavailable(Exception):
     pass
 
 
+def _nearest(pts: np.ndarray, ref: np.ndarray, chunk: int = 4096) -> np.ndarray:
+    """Index of the nearest row of `ref` for each row of `pts`."""
+    out = np.empty(len(pts), dtype=int)
+    for s in range(0, len(pts), chunk):
+        block = pts[s:s + chunk]
+        d = ((block[:, None, :] - ref[None, :, :]) ** 2).sum(axis=2)
+        out[s:s + chunk] = d.argmin(axis=1)
+    return out
+
+
 def _cell_centres(tdir: Path, mesh: Dict, n_cells: int) -> np.ndarray:
     """Cell centres: from Cx/Cy (ESI) or Ccx/Ccy (Foundation) if postProcess ran,
     otherwise the mesh element centroids (cell order tracks the .msh element
@@ -118,14 +128,9 @@ def read_field_results(case_dir: str | Path, mesh: Dict) -> Optional[Dict]:
     if nodes.size == 0:
         raise ResultsUnavailable("no mesh nodes supplied")
 
-    # nearest cell centre for each viewer node
-    from scipy.spatial import cKDTree  # noqa: PLC0415
-
-    try:
-        tree = cKDTree(centres)
-        _, nn = tree.query(nodes[:, :2], k=1)
-    except Exception:  # noqa: BLE001 - fallback without scipy
-        nn = np.array([int(np.argmin(np.sum((centres - node) ** 2, axis=1))) for node in nodes[:, :2]])
+    # nearest cell centre for each viewer node (numpy only, chunked so a large
+    # mesh does not allocate an N*M distance matrix at once)
+    nn = _nearest(nodes[:, :2], centres)
 
     umag_c = np.linalg.norm(np.atleast_2d(U)[:, :2], axis=1)
     umag = umag_c[nn]

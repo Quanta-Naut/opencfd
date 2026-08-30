@@ -26,7 +26,6 @@ import {
   generateMesh,
   generateStructuredMesh,
   generateCaseFiles,
-  fetchFieldSolution,
   fetchSolverResults,
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
@@ -686,19 +685,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       }));
 
       try {
-        const fields = await fetchFieldSolution(
-          mesh,
-          state.geometry.type,
-          state.boundaries.inletVelocity,
-          state.physics.regime
-        );
-        setFieldData(fields);
         const dicts = await makeCaseFiles();
         setCaseFiles(dicts);
-      } catch (postProcessError: any) {
+      } catch (caseErr: any) {
         setState((prev) => ({
           ...prev,
-          terminalLogs: [...prev.terminalLogs, `[Postprocess] ${postProcessError.message}`],
+          terminalLogs: [...prev.terminalLogs, `[Case] ${caseErr.message}`],
         }));
       }
     } catch (err: any) {
@@ -825,14 +817,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         ],
       }));
       try {
-        const fields = await fetchFieldSolution(mesh, state.geometry.type, state.boundaries.inletVelocity, state.physics.regime);
-        setFieldData(fields);
         const dicts = await makeCaseFiles();
         setCaseFiles(dicts);
-      } catch (postProcessError: any) {
+      } catch (caseErr: any) {
         setState((prev) => ({
           ...prev,
-          terminalLogs: [...prev.terminalLogs, `[Postprocess] ${postProcessError.message}`],
+          terminalLogs: [...prev.terminalLogs, `[Case] ${caseErr.message}`],
         }));
       }
     } catch (err: any) {
@@ -856,14 +846,6 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     setActiveStage('mesh'); // Advance to mesh/flow view
 
     try {
-      const fields = await fetchFieldSolution(
-        mesh,
-        'custom_cad',
-        state.boundaries.inletVelocity,
-        state.physics.regime
-      );
-      setFieldData(fields);
-
       const dicts = await makeCaseFiles();
       setCaseFiles(dicts);
 
