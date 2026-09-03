@@ -28,13 +28,13 @@ export const ColormapLegend: React.FC<ColormapLegendProps> = ({
   };
 
   return (
-    <div className="absolute bottom-4 right-4 bg-white/95 backdrop-blur border border-slate-200 shadow-sm rounded-lg p-3 w-64 pointer-events-auto">
+    <div className="absolute bottom-4 right-4 bg-white/95 backdrop-blur border border-slate-200 rounded-lg p-3 w-64 pointer-events-auto">
       <div className="flex justify-between items-center mb-1 text-xs font-semibold text-slate-700">
         <span>{fieldName}</span>
         <span className="text-slate-400 font-mono font-normal">[{unit}]</span>
       </div>
       <div
-        className="h-3 rounded-sm border border-slate-300 shadow-inner"
+        className="h-3 rounded-sm border border-slate-300 "
         style={{ background: getGradientStyle() }}
       />
       <div className="flex justify-between text-[11px] font-mono text-slate-500 mt-1">

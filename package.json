@@ -1,7 +1,7 @@
 {
   "name": "opencfd-studio",
-  "version": "0.1.8",
-  "description": "Modern CFD Studio pairing OpenFOAM, Gmsh, and PyVista in a VS Code style desktop UI",
+  "version": "0.1.9",
+  "description": "Modern CFD Studio pairing OpenFOAM and Gmsh in a VS Code style desktop UI",
   "scripts": {
     "dev": "python3 run.py",
     "tauri": "tauri",
@@ -14,7 +14,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4"
   },
-  "keywords": ["cfd", "openfoam", "gmsh", "pyvista", "tauri", "react"],
+  "keywords": ["cfd", "openfoam", "gmsh", "tauri", "react"],
   "author": "OpenCFD Team",
   "license": "MIT"
 }

@@ -15,6 +15,17 @@ _MODULE = {
     "compressible": "fluid",
 }
 
+# Regimes that need the density-based shock-capturing module instead of the
+# pressure-based `fluid` module.
+_SHOCK_REGIMES = {"supersonic", "hypersonic"}
+
+
+def is_shock_case(phys: Dict[str, Any]) -> bool:
+    return (
+        phys.get("compressibility") == "compressible"
+        and str(phys.get("speedRegime", "subsonic")) in _SHOCK_REGIMES
+    )
+
 _DIV = {
     "firstOrder": "Gauss upwind",
     "secondOrder": "Gauss linearUpwind limited",
@@ -31,6 +42,8 @@ _TIME = {
 
 def pick_solver(phys: Dict[str, Any]) -> str:
     """The foamRun solver module for this case (Foundation 13)."""
+    if is_shock_case(phys):
+        return "shockFluid"  # density-based, Kurganov flux, shock capturing
     comp = phys.get("compressibility", "incompressible")
     return _MODULE.get(comp, "incompressibleFluid")
 
@@ -56,11 +69,14 @@ def _div_scheme(order: str, steady: bool) -> str:
 
 def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
                  solution: Dict[str, Any] | None = None,
-                 functions_block: str = "") -> Dict[str, str]:
+                 functions_block: str = "", ref_length: float = 1.0) -> Dict[str, str]:
     sol = solution or {}
     methods = sol.get("methods", {})
     controls = sol.get("controls", {})
     run = sol.get("run", {})
+
+    if is_shock_case(phys):
+        return _write_shock_system(phys, run, functions_block, ref_length)
 
     module = pick_solver(phys)
     compressible = phys.get("compressibility") == "compressible"
@@ -76,7 +92,9 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
     if run.get("writeInterval"):
         write_iv = int(run.get("writeInterval"))
     elif steady:
-        write_iv = max(1, iters // 5)
+        # ~40 writes over the run so the live solver preview updates smoothly;
+        # purgeWrite (below) keeps the on-disk footprint bounded.
+        write_iv = max(5, iters // 40)
     else:
         # For transient: default to ~20 to 50 write frames (or every 0.02 - 0.05s)
         target_frame_dt = max(dt, min(0.05, end / 25.0))
@@ -102,7 +120,7 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         "startTime       0;\nstopAt          endTime;\n"
         f"endTime         {end};\ndeltaT          {1 if steady else dt};\n"
         f"writeControl    {write_control};\nwriteInterval   {write_iv_time if write_iv_time is not None else write_iv};\n"
-        f"purgeWrite      {0 if not steady else 2};\nwriteFormat     ascii;\nwritePrecision  8;\n"
+        f"purgeWrite      {0 if not steady else 6};\nwriteFormat     ascii;\nwritePrecision  8;\n"
         "writeCompression off;\ntimeFormat      general;\ntimePrecision   6;\nrunTimeModifiable true;\n"
         + ("" if steady else
            f"adjustTimeStep  {'yes' if controls.get('adjustableTimeStep', False) else 'no'};\n"
@@ -110,7 +128,9 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         + ("\n" + functions_block if functions_block else "")
     )
 
-    mom = methods.get("momentum", "secondOrder")
+    # Compressible cold-starts (esp. transonic) are far more stable on first-order
+    # momentum; the user can still force secondOrder explicitly.
+    mom = methods.get("momentum") or ("firstOrder" if compressible else "secondOrder")
     turb = methods.get("turbulence", "firstOrder")
     grad = {"gauss": "Gauss linear", "leastSquares": "leastSquares",
             "cellLimited": "cellLimited Gauss linear 1"}.get(methods.get("gradient", "cellLimited"),
@@ -119,9 +139,8 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
     if compressible:
         ener = methods.get("energy", "secondOrder")
         energy_div = (
-            f"    div(phi,e)      {_div_scheme(ener, steady)};\n"
+            f"    div(phi,h)      {_div_scheme(ener, steady)};\n"
             f"    div(phi,K)      {_div_scheme(ener, steady)};\n"
-            f"    div(phi,(p|rho)) {_div_scheme(ener, steady)};\n"
         )
 
     mom_div = _div_scheme(mom, steady)
@@ -153,14 +172,17 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         "wallDist\n{\n    method          meshWave;\n}\n"
     )
 
-    p_name = "p_rgh" if compressible else "p"
+    p_name = "p"  # `fluid` (compressible) solves the real p, no p_rgh
     res = controls.get("residualTargets", {"p": 1e-4, "U": 1e-4, "turbulence": 1e-4})
     p_rt = "0.05" if steady else "0.01"
     u_rt = "0.1" if steady else "0.01"
 
     solution_txt = (
         "solvers\n{\n"
-        f"    {p_name}\n    {{\n"
+        # Transient compressible `fluid` solves the density field explicitly.
+        + ('    "rho.*"\n    {\n        solver          diagonal;\n    }\n'
+           if compressible and not steady else "")
+        + f"    {p_name}\n    {{\n"
         "        solver          GAMG;\n        smoother        GaussSeidel;\n"
         f"        tolerance       1e-7;\n        relTol          {p_rt};\n    }}\n"
         f"    {p_name}Final\n    {{\n        ${p_name};\n        relTol          0;\n    }}\n"
@@ -171,9 +193,13 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         '    "(U|k|omega|epsilon|nuTilda|e|h)Final"\n    {\n        $U;\n        relTol          0;\n    }\n'
         "}\n\n"
         "PIMPLE\n{\n"
+        # Foundation `foamRun` reads PIMPLE for every mode; in steady mode it runs
+        # SIMPLE, and `consistent yes` there is SIMPLEC. Only for incompressible -
+        # compressible steady relies on heavy p/rho under-relaxation instead.
         + (f"    nNonOrthogonalCorrectors {nno};\n"
            "    pRefCell        0;\n    pRefValue       0;\n"
-           f'    residualControl\n    {{\n        p               {res["p"]};\n'
+           + ("    consistent      yes;\n" if not compressible else "")
+           + f'    residualControl\n    {{\n        p               {res["p"]};\n'
            f'        U               {res["U"]};\n        "(k|omega|epsilon)" {res["turbulence"]};\n    }}\n'
            if steady else
            f"    nOuterCorrectors {nouter};\n    nCorrectors     {ncorr};\n"
@@ -200,9 +226,89 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
     return out
 
 
+def _write_shock_system(phys: Dict[str, Any], run: Dict[str, Any], functions_block: str,
+                        ref_length: float = 1.0) -> Dict[str, str]:
+    """system/ for the density-based `shockFluid` module (supersonic / hypersonic).
+
+    Runs in **local-time-stepping** mode (`ddtSchemes localEuler`): each cell
+    marches at its own max-stable step, so a steady shock system converges in a
+    few thousand pseudo-iterations instead of the millions of global Courant
+    steps a fine boundary-layer mesh would otherwise force. Matches
+    tutorials/shockFluid/biconic25-55Run35.
+    """
+    V = max(float(phys.get("inletVelocity", 340.0)), 1.0)
+    L = ref_length if ref_length and ref_length > 0 else 1.0
+    # LTS: endTime / deltaT is a pseudo-iteration budget, not a physical time.
+    dt = 1e-4
+    iters = int(run.get("iterations") or 6000)
+    end = round(iters * dt, 6)
+    frame_dt = max(dt, round(end / 40.0, 6))
+    # Near Mach 1 the acoustic and convective speeds are close and the explicit
+    # density solve is stiff - a low Courant limit keeps a shock from over/under-
+    # shooting T into negative territory (-> sqrt FPE in fluxPredictor).
+    max_co = float(run.get("maxCo") or 0.25)
+
+    control = (
+        "solver          shockFluid;\n"
+        "application     rhoCentralFoam;\n"
+        "startFrom       startTime;\nstartTime       0;\nstopAt          endTime;\n"
+        f"endTime         {end};\ndeltaT          {dt};\n"
+        f"writeControl    runTime;\nwriteInterval   {frame_dt};\n"
+        "purgeWrite      0;\nwriteFormat     ascii;\nwritePrecision  8;\n"
+        "writeCompression off;\ntimeFormat      general;\ntimePrecision   6;\nrunTimeModifiable true;\n"
+        "adjustTimeStep  no;\n"
+        + ("\n" + functions_block if functions_block else "")
+    )
+    schemes = (
+        "fluxScheme      Kurganov;\n\n"
+        "ddtSchemes\n{\n    default         localEuler;\n}\n\n"
+        "gradSchemes\n{\n    default         Gauss linear;\n}\n\n"
+        "divSchemes\n{\n    default         none;\n"
+        "    div(tauMC)      Gauss linear;\n"
+        "    div(phi,k)      Gauss upwind;\n"
+        "    div(phi,omega)  Gauss upwind;\n}\n\n"
+        "laplacianSchemes\n{\n    default         Gauss linear corrected;\n}\n\n"
+        "interpolationSchemes\n{\n    default         linear;\n"
+        # Minmod is the most dissipative TVD limiter - the robust choice for a
+        # coarse mesh that cannot resolve the shock; vanLeer overshoots.
+        "    reconstruct(rho) Minmod;\n    reconstruct(U)  MinmodV;\n"
+        "    reconstruct(T)  Minmod;\n}\n\n"
+        "snGradSchemes\n{\n    default         corrected;\n}\n\n"
+        "wallDist\n{\n    method          meshWave;\n}\n"
+    )
+    solution_txt = (
+        "solvers\n{\n"
+        '    "rho.*"\n    {\n        solver          diagonal;\n    }\n'
+        '    "U.*"\n    {\n        solver          smoothSolver;\n        smoother        GaussSeidel;\n'
+        "        tolerance       1e-9;\n        relTol          0;\n    }\n"
+        '    "(e|h).*"\n    {\n        $U;\n        tolerance       1e-10;\n    }\n'
+        '    "(k|omega).*"\n    {\n        solver          smoothSolver;\n        smoother        symGaussSeidel;\n'
+        "        tolerance       1e-9;\n        relTol          0;\n    }\n"
+        "}\n\n"
+        # LTS reads maxCo / maxDeltaT / rDeltaTSmoothingCoeff from here.
+        "PIMPLE\n{\n"
+        f"    maxCo           {max_co};\n"
+        f"    maxDeltaT       {round(1.0 * L / V, 8)};\n"
+        "    rDeltaTSmoothingCoeff 0.5;\n"
+        "}\n"
+    )
+    return {
+        "system/controlDict": foam_file("dictionary", "controlDict", control, "system"),
+        "system/fvSchemes": foam_file("dictionary", "fvSchemes", schemes, "system"),
+        "system/fvSolution": foam_file("dictionary", "fvSolution", solution_txt, "system"),
+    }
+
+
 def _relaxation(controls: Dict[str, Any], steady: bool, compressible: bool) -> str:
     r = controls.get("relax", {})
-    if steady:
+    if steady and compressible:
+        # Density-coupled: pressure and rho need heavy under-relaxation, the
+        # transported quantities can take more (matches the Foundation aerofoil
+        # tutorial). Using the incompressible 0.7/0.3 split here diverges.
+        p = r.get("p", 0.3)
+        u = r.get("U", 0.7)
+        t = r.get("k", 0.7)
+    elif steady:
         p = r.get("p", 0.7)
         u = r.get("U", 0.3)
         t = r.get("k", 0.3)
@@ -213,13 +319,17 @@ def _relaxation(controls: Dict[str, Any], steady: bool, compressible: bool) -> s
     lines = [
         "relaxationFactors\n{",
         "    fields\n    {",
-        f"        {'rho' if compressible else 'p'}             {p};" if not compressible else f"        p_rgh           {p};",
+        f"        p               {p};",
+    ]
+    if compressible:
+        lines.append(f"        rho             {r.get('rho', 0.01)};")
+    lines += [
         "    }",
         "    equations\n    {",
         f"        U               {u};",
         f'        "(k|omega|epsilon|nuTilda)" {t};',
     ]
     if compressible:
-        lines.append(f"        e               {r.get('e', 0.5)};")
+        lines.append(f"        h               {r.get('h', r.get('e', 0.7))};")
     lines += ["    }", "}\n"]
     return "\n".join(lines)

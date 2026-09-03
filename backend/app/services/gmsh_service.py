@@ -559,7 +559,36 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("opencfd_2d_case")
 
-        def add_loop(loop: Dict[str, Any], point_size: float, reverse: bool = False
+        aoa_rad = math.radians(float(params.get("angleOfAttackDeg", 0.0) or 0.0))
+        flow_dir = (math.cos(aoa_rad), math.sin(aoa_rad))
+        internal_flow = str(params.get("flowType", "external")).lower() == "internal"
+        _supersonic = (
+            str(params.get("compressibility", "")).lower() == "compressible"
+            and str(params.get("speedRegime", "")).lower() in ("supersonic", "hypersonic")
+        )
+
+        def _auto_domain_patch(p0: Tuple[float, float], p1: Tuple[float, float]) -> str:
+            """Classify an untagged outer-domain edge by its outward normal so the
+            solver always gets a complete inlet/outlet/side patch set even when
+            the user forgot to tag an edge. Mirrors the frontend auto-suggest."""
+            dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+            length = math.hypot(dx, dy) or 1e-9
+            # outer loop is wound CCW here, so the outward normal is (dy, -dx).
+            nx, ny = dy / length, -dx / length
+            dot = nx * flow_dir[0] + ny * flow_dir[1]
+            if dot < -0.35:
+                return "inlet"
+            if dot > 0.35:
+                return "outlet"
+            if internal_flow:
+                return "wall"
+            # A `symmetry` plane reflects a shock straight back into the domain.
+            # For supersonic external flow the lateral boundary must be a
+            # non-reflecting far-field instead.
+            return "farfield" if _supersonic else "symmetry"
+
+        def add_loop(loop: Dict[str, Any], point_size: float, reverse: bool = False,
+                     outer_domain: bool = False
                      ) -> Tuple[int, List[int], List[int]]:
             entity_id = loop["entity"].get("id", "boundary")
             # A circle is one patch keyed at "<id>_0" (see the wall scan above).
@@ -583,13 +612,25 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 line_tags.append(line)
                 all_lines.append(line)
                 tag = circle_tag if circle_tag is not None else edge_tags.get(f"{entity_id}_{index}")
-                line_metadata.append((line, str(tag) if tag else entity_id))
+                if tag:
+                    name = str(tag)
+                elif outer_domain:
+                    name = _auto_domain_patch(
+                        points[index], points[(index + 1) % len(points)]
+                    )
+                else:
+                    name = entity_id
+                line_metadata.append((line, name))
             return gmsh.model.geo.addCurveLoop(line_tags), line_tags, point_tags
 
         # Plane surfaces require the outer loop to be CCW and holes to be CW.
         # Normalize both explicitly because imported CAD loops often share a
         # winding direction regardless of whether they are holes.
-        outer_loop, _, _ = add_loop(outer, far_size, reverse=_signed_area(outer["points"]) < 0)
+        outer_loop, _, _ = add_loop(
+            outer, far_size,
+            reverse=_signed_area(outer["points"]) < 0,
+            outer_domain=bool(domain_loops),
+        )
         hole_data = [
             add_loop(loop, feature_size, reverse=_signed_area(loop["points"]) > 0)
             for loop in holes

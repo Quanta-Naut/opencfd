@@ -36,31 +36,41 @@ export const AnalysisSection: React.FC<
         Steady state vs transient is chosen in the Solver tab.
       </p>
 
-      {compressible && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
-          <Field
-            label="Speed regime"
-            hint={`Mach ${flow.mach.toFixed(2)} from the reference conditions ${
-              flow.regimeHint !== physics.speedRegime ? `(suggests ${flow.regimeHint})` : ''
-            }`}
-          >
-            <Select value={physics.speedRegime} onChange={(v) => setPhysics({ speedRegime: v as SpeedRegime })}>
-              <option value="subsonic">Subsonic (M &lt; 0.8)</option>
-              <option value="transonic">Transonic (0.8 - 1.2)</option>
-              <option value="supersonic">Supersonic (1.2 - 5)</option>
-              <option value="hypersonic">Hypersonic (M &gt; 5)</option>
-            </Select>
-          </Field>
-          <div className="flex items-end">
-            <p className="text-[10px] text-[#69717D] leading-relaxed pb-2">
-              {physics.speedRegime === 'subsonic' && 'Density-based, no shocks expected. rhoSimpleFoam / rhoPimpleFoam.'}
-              {physics.speedRegime === 'transonic' && 'Shock capturing with limiters. rhoCentralFoam or a coupled solver.'}
-              {(physics.speedRegime === 'supersonic' || physics.speedRegime === 'hypersonic') &&
-                'Density-based flux scheme, wall-resolved mesh, real-gas effects grow with Mach.'}
-            </p>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+        <Field
+          label={
+            <span className="flex items-center gap-1.5">
+              Speed regime
+              <span className="text-[9px] font-semibold px-1 py-px rounded bg-[#EEF2FF] text-[#2563EB]">
+                AUTO
+              </span>
+            </span>
+          }
+          hint={`Mach ${flow.mach.toFixed(2)} (a = ${flow.speedOfSound.toFixed(0)} m/s at ${
+            physics.inletTemperature
+          } K). Tracks the inlet velocity; change it to override.`}
+        >
+          <Select value={physics.speedRegime} onChange={(v) => setPhysics({ speedRegime: v as SpeedRegime })}>
+            <option value="incompressible">Incompressible (M &lt; 0.3)</option>
+            <option value="subsonic">Subsonic (0.3 - 0.8)</option>
+            <option value="transonic">Transonic (0.8 - 1.2)</option>
+            <option value="supersonic">Supersonic (1.2 - 5)</option>
+            <option value="hypersonic">Hypersonic (M &gt; 5)</option>
+          </Select>
+        </Field>
+        <div className="flex items-end">
+          <p className="text-[10px] text-[#69717D] leading-relaxed pb-2">
+            {(physics.speedRegime === 'incompressible' || !compressible) &&
+              'Constant density, pressure-based (simpleFoam / pimpleFoam).'}
+            {compressible && physics.speedRegime === 'subsonic' &&
+              'Pressure-based compressible (foamRun -solver fluid). Steady or transient.'}
+            {compressible && physics.speedRegime === 'transonic' &&
+              'Pressure-based fluid module - marginal near M1 on a coarse mesh. If it diverges, mark it Supersonic to use the density-based solver.'}
+            {compressible && (physics.speedRegime === 'supersonic' || physics.speedRegime === 'hypersonic') &&
+              'Density-based shock capturing (foamRun -solver shockFluid): transient, Courant-limited, needs a wall-resolved mesh.'}
+          </p>
         </div>
-      )}
+      </div>
     </SectionCard>
   );
 };

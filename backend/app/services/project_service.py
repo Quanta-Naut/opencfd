@@ -66,37 +66,89 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2))
 
 
+def _entity_points(entity: Dict[str, Any]) -> List[List[float]]:
+    return [
+        [float(p.get("x", 0.0)), float(p.get("y", 0.0))]
+        for p in (entity.get("pts") or [])
+        if isinstance(p, dict)
+    ]
+
+
+def _preview_shape(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """One CAD entity -> a primitive the home-screen thumbnail can draw faithfully
+    (a circle stays a circle, an airfoil keeps its curve) instead of a single
+    polygon through every point of every entity."""
+    kind = entity.get("type")
+    pts = _entity_points(entity)
+    radius = entity.get("radius")
+
+    if kind == "circle" and radius and pts:
+        return {"kind": "circle", "c": pts[0], "r": abs(float(radius))}
+    if kind == "arc" and radius and pts:
+        return {
+            "kind": "arc", "c": pts[0], "r": abs(float(radius)),
+            "a0": float(entity.get("startAngle") or 0.0),
+            "a1": float(entity.get("endAngle") or 6.28318530718),
+        }
+    if len(pts) < 2:
+        return None
+    if len(pts) > 96:
+        step = len(pts) / 96.0
+        pts = [pts[int(i * step)] for i in range(96)]
+    return {
+        "kind": "path",
+        "pts": pts,
+        "closed": bool(entity.get("isClosed") or kind == "rectangle"),
+    }
+
+
+def _bbox_of(points: List[List[float]]) -> Optional[List[float]]:
+    if not points:
+        return None
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
 def _build_summary(session: Dict[str, Any]) -> Dict[str, Any]:
-    entities = session.get("cadEntities") or []
-    geometry_entities = [
+    entities = [e for e in (session.get("cadEntities") or []) if e.get("layer") != "construction"]
+    geometry_entities = [e for e in entities if e.get("role") != "domain_boundary"]
+    domain_entities = [
         e for e in entities
-        if e.get("layer") != "construction" and e.get("role") != "domain_boundary"
+        if e.get("role") == "domain_boundary" or e.get("autoDomain")
     ]
     geometry = (session.get("state") or {}).get("geometry") or {}
 
+    shapes = [s for s in (_preview_shape(e) for e in geometry_entities) if s]
+    geom_pts: List[List[float]] = []
+    for s in shapes:
+        if s["kind"] == "path":
+            geom_pts.extend(s["pts"])
+        else:  # circle / arc - contribute the enclosing box
+            cx, cy = s["c"]
+            r = s["r"]
+            geom_pts.extend([[cx - r, cy - r], [cx + r, cy + r]])
+
+    domain_box = _bbox_of([p for e in domain_entities for p in _entity_points(e)])
+    geom_box = _bbox_of(geom_pts)
+
     preview: Optional[Dict[str, Any]] = None
-    if geometry_entities:
-        # Build the thumbnail from all drawable geometry, not just the first
-        # entity. This keeps imported/multi-body CAD visible on the home card.
-        coords = [
-            [p.get("x", 0.0), p.get("y", 0.0)]
-            for entity in geometry_entities
-            for p in (entity.get("pts") or [])
-            if isinstance(p, dict)
-        ]
-        if len(coords) > 64:
-            step = len(coords) / 64.0
-            coords = [coords[int(i * step)] for i in range(64)]
-        if coords:
-            xs = [c[0] for c in coords]
-            ys = [c[1] for c in coords]
-            preview = {"points": coords, "bbox": [min(xs), min(ys), max(xs), max(ys)]}
+    if shapes or domain_box:
+        preview = {
+            "entities": shapes,
+            "domain": domain_box,
+            "domainShape": session.get("domainShape") or "rectangle",
+            "bbox": geom_box or domain_box or [0.0, 0.0, 1.0, 1.0],
+            "flow": session.get("flowType") or "external",
+            "aoa": float(session.get("angleOfAttackDeg") or 0.0),
+        }
 
     return {
         "geometryName": geometry.get("name") or "",
         "entityCount": len(geometry_entities),
         "hasMesh": bool(session.get("hasMesh")),
         "resolution": geometry.get("meshResolution") or "",
+        "flow": session.get("flowType") or "external",
         "preview": preview,
     }
 

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Save, MoreVertical, Database, Pencil, LayoutGrid, CircleHelp } from 'lucide-react';
+import { MoreVertical, Database, Pencil, LayoutGrid } from 'lucide-react';
 
 interface TopHeaderProps {
   projectName: string;
@@ -44,7 +44,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
             <span className="text-xs font-medium">Projects</span>
           </button>
         )}
-        <div className="w-7 h-7 bg-[#171A1F] rounded-md flex items-center justify-center text-white shadow-xs shrink-0">
+        <div className="w-7 h-7 bg-[#171A1F] rounded-md flex items-center justify-center text-white shrink-0">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 14c4-7 14-8 16-8-2 8-10 10-16 8z" />
             <path d="M7 14c3-3 8-4 12-5" />
@@ -78,25 +78,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         )}
       </div>
 
-      {/* Right: Project actions */}
+      {/* Right: Project actions. Everything autosaves to the project on disk, so
+          there is no manual Save; the how-to guide lives on the home screen. */}
       <div className="flex items-center gap-3">
-        <a
-          href="/tutorial"
-          className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded-md transition-colors"
-          title="How-to guide (your work autosaves)"
-        >
-          <CircleHelp className="w-4 h-4" />
-        </a>
-
-        <div className="w-px h-4 bg-[#E1E4E8]" />
-
-        <button
-          className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded-md transition-colors"
-          title="Save OpenFOAM Case"
-        >
-          <Save className="w-4 h-4" />
-        </button>
-
         <div className="relative">
           <button
             onClick={() => setShowMenu(!showMenu)}
@@ -107,7 +91,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           </button>
 
           {showMenu && (
-            <div className="absolute right-0 mt-1 w-48 bg-white border border-[#E1E4E8] rounded-lg shadow-lg py-1 z-50 text-xs text-[#171A1F]">
+            <div className="absolute right-0 mt-1 w-48 bg-white border border-[#E1E4E8] rounded-lg py-1 z-50 text-xs text-[#171A1F]">
               <button
                 onClick={() => setShowMenu(false)}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#F5F6F8] flex items-center gap-2"

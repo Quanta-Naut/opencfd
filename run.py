@@ -32,7 +32,7 @@ def main():
     args = parser.parse_args()
 
     print("==========================================================")
-    print("  🚀 OpenCFD Studio (Tauri + OpenFOAM + Gmsh + PyVista)   ")
+    print("  🚀 OpenCFD Studio (Tauri + OpenFOAM + Gmsh + NumPy)     ")
     print("==========================================================")
 
     env = os.environ.copy()

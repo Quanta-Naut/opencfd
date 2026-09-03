@@ -74,7 +74,7 @@ import {
   validateBoundaryTags,
   generateDefaultAirfoilPoints,
 } from '../../types/cadWorkflow';
-import { Blocking, blockPolygon } from '../../types/blocking';
+import { Blocking, blockPolygon, entityRing } from '../../types/blocking';
 import { useWebGLField } from './useWebGLField';
 
 // ─── CAD Workbench Tool & State Types ─────────────────────────────────────────
@@ -178,7 +178,34 @@ const _RAMPS: Record<string, [number, number, number][]> = {
   turbo: [[48, 18, 59], [58, 138, 253], [27, 229, 138], [223, 224, 40], [122, 4, 3]],
   jet: [[0, 0, 131], [0, 128, 255], [122, 255, 128], [255, 191, 0], [128, 0, 0]],
   rainbow: [[110, 64, 170], [76, 176, 202], [126, 219, 92], [251, 179, 61], [235, 74, 74]],
+  // Mesh-quality ramp: good cells green, borderline amber, bad cells red.
+  quality: [[22, 163, 74], [132, 204, 22], [250, 204, 21], [249, 115, 22], [220, 38, 38]],
 };
+
+/** Equiangle skewness (0 = ideal, 1 = degenerate) for a triangle or quad given
+ *  its ordered vertices - the same measure the Gmsh backend reports. */
+function cellSkewness(pts: [number, number][]): number {
+  const n = pts.length;
+  if (n < 3) return 1;
+  const ideal = n === 3 ? 60 : 90;
+  let mn = 180;
+  let mx = 0;
+  for (let i = 0; i < n; i += 1) {
+    const p0 = pts[(i - 1 + n) % n];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    const v1x = p0[0] - p1[0];
+    const v1y = p0[1] - p1[1];
+    const v2x = p2[0] - p1[0];
+    const v2y = p2[1] - p1[1];
+    const d = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y);
+    if (d < 1e-15) return 1;
+    const ang = (Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / d))) * 180) / Math.PI;
+    if (ang < mn) mn = ang;
+    if (ang > mx) mx = ang;
+  }
+  return Math.max(0, Math.min(1, Math.max((mx - ideal) / (180 - ideal), (ideal - mn) / ideal)));
+}
 
 function colormapRGB(t: number, name: string): string {
   const ramp = _RAMPS[name] || _RAMPS.coolwarm;
@@ -533,6 +560,12 @@ interface CadWorkbenchProps {
   meshOnly?: boolean;
   showField?: boolean;
   fieldData?: any;
+  /** cell-based field streamed live from the solver (Solver stage) */
+  livePreview?: {
+    time: string;
+    fields: Record<string, number[]>;
+    ranges: Record<string, [number, number]>;
+  } | null;
   activeField?: string;
   colormap?: string;
   meshStale?: boolean;
@@ -541,6 +574,7 @@ interface CadWorkbenchProps {
   blocking?: Blocking | null;
   onUpdateBlocking?: (bk: Blocking | null) => void;
   showBlocking?: boolean;
+  blocksBuiltTick?: number;
   isTransient?: boolean;
   transientTimes?: number[];
   transientFrameIndex?: number;
@@ -593,6 +627,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   meshOnly = false,
   showField = false,
   fieldData,
+  livePreview = null,
   activeField = 'U_mag',
   colormap = 'coolwarm',
   meshStale = false,
@@ -601,6 +636,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   blocking = null,
   onUpdateBlocking,
   showBlocking = false,
+  blocksBuiltTick = 0,
   isTransient = false,
   transientTimes = [],
   transientFrameIndex = 0,
@@ -633,6 +669,14 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   // ── Undo/Redo stack ─────────────────────────────────────────────────────────
   const historyRef = useRef<CadState[]>([]);
   const historyIdxRef = useRef<number>(-1);
+  // Structured block-vertex drag state + blocking undo history (declared here so
+  // the fit logic and the CAD-history effect can both see them).
+  const blockDrag = useRef<{ vid: string; origin: Point2D; recorded?: boolean } | null>(null);
+  const blockSnapGuides = useRef<{ a: Point2D; b: Point2D }[]>([]);
+  const blockUndoRef = useRef<(Blocking | null)[]>([]);
+  const blockRedoRef = useRef<(Blocking | null)[]>([]);
+  const prevBlockingRef = useRef<Blocking | null>(blocking);
+  const lastEditRef = useRef<'cad' | 'blocks'>('cad');
 
   const [cadState, dispatch] = useReducer(cadReducer, {
     entities: initialEntities && initialEntities.length > 0 ? initialEntities : [],
@@ -657,6 +701,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       h.splice(idx + 1);
       h.push({ entities: cadState.entities.map(e => ({ ...e })) });
       historyIdxRef.current = h.length - 1;
+      if (h.length > 1) lastEditRef.current = 'cad'; // a real CAD edit (not the first seed)
     }
     onEntitiesChange?.(cadState.entities);
   }, [cadState.entities, onEntitiesChange]);
@@ -681,7 +726,50 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   // ── Camera ──────────────────────────────────────────────────────────────────
   const [zoom, setZoom] = useState(INITIAL_ZOOM);
   const [pan, setPan] = useState<Point2D>({ x: 0, y: 0 });
+  // Live canvas size - watched so a layout change (the solver monitor rail
+  // pushing the canvas, a window resize) re-renders and re-frames the view.
+  const [viewport, setViewport] = useState({ w: 0, h: 0 });
+  // 'cad' shows CAD entities / structured blocks, 'mesh' shows the generated mesh.
+  // Declared early - the fit / render logic reads it.
+  const [canvasMode, setCanvasMode] = useState<'cad' | 'mesh'>('cad');
   const panning = useRef(false);
+
+  // ── Undo/redo: routed to whichever - CAD entities or the blocking - was last edited.
+  //    Refs are declared up by the CAD history stack; the recording effect lives here
+  //    (after blockDrag) so it can coalesce a drag into one undo entry. ─────────────
+  useEffect(() => {
+    const prev = prevBlockingRef.current;
+    prevBlockingRef.current = blocking;
+    if (prev === blocking) return;
+    lastEditRef.current = 'blocks';
+    if (blockDrag.current) {
+      if (!blockDrag.current.recorded) {
+        blockDrag.current.recorded = true;
+        blockUndoRef.current.push(prev);
+        blockRedoRef.current = [];
+      }
+      return;
+    }
+    blockUndoRef.current.push(prev);
+    blockRedoRef.current = [];
+    if (blockUndoRef.current.length > 80) blockUndoRef.current.shift();
+  }, [blocking]);
+  const undoBlocking = useCallback((): boolean => {
+    if (!blockUndoRef.current.length || !onUpdateBlocking) return false;
+    const target = blockUndoRef.current.pop()!;
+    blockRedoRef.current.push(prevBlockingRef.current);
+    prevBlockingRef.current = target; // pre-set so the effect above no-ops
+    onUpdateBlocking(target);
+    return true;
+  }, [onUpdateBlocking]);
+  const redoBlocking = useCallback((): boolean => {
+    if (!blockRedoRef.current.length || !onUpdateBlocking) return false;
+    const target = blockRedoRef.current.pop()!;
+    blockUndoRef.current.push(prevBlockingRef.current);
+    prevBlockingRef.current = target;
+    onUpdateBlocking(target);
+    return true;
+  }, [onUpdateBlocking]);
   const panStart = useRef<Point2D>({ x: 0, y: 0 });
   const panOrigin = useRef<Point2D>({ x: 0, y: 0 });
   const lastMiddleClickRef = useRef(0);
@@ -734,36 +822,74 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     setPan(newPan);
   }, []);
 
-  // Frame the loaded geometry / mesh whenever meshData is loaded or when entering Results/Solver
-  const lastFittedMeshKey = useRef<string>('');
+  // Watch the canvas box; re-render + re-frame when the layout changes.
   useEffect(() => {
-    const meshNodes: number[][] | undefined = showMesh && !meshStale ? meshData?.nodes : undefined;
-    const ents = cadState.entities.filter(e => e.layer !== 'construction');
-    if (!meshNodes?.length && ents.length === 0) return;
-
-    const currentKey = meshNodes?.length ? `mesh:${meshNodes.length}:${meshOnly ? 'results' : 'cad'}` : `cad:${ents.length}`;
-    if (lastFittedMeshKey.current === currentKey) return;
-
-    const id = requestAnimationFrame(() => {
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      if (meshNodes?.length) {
-        for (const n of meshNodes) {
-          minX = Math.min(minX, n[0]); maxX = Math.max(maxX, n[0]);
-          minY = Math.min(minY, n[1]); maxY = Math.max(maxY, n[1]);
-        }
-      } else {
-        for (const e of ents) for (const p of e.pts) {
-          minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-          minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-        }
-      }
-      if (minX !== Infinity) {
-        fitBoundingBox({ minX, maxX, minY, maxY }, 0.75);
-        lastFittedMeshKey.current = currentKey;
-      }
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const cr = entries[0].contentRect;
+      setViewport((prev) =>
+        Math.abs(prev.w - cr.width) > 1 || Math.abs(prev.h - cr.height) > 1
+          ? { w: cr.width, h: cr.height }
+          : prev,
+      );
     });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const fitCurrentContent = useCallback(() => {
+    if (blockDrag.current || panning.current) return;
+    const useMesh = (canvasMode === 'mesh' || meshOnly) && meshData?.nodes?.length;
+    const ents = cadState.entities.filter((e) => e.layer !== 'construction');
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    if (useMesh) {
+      for (const n of meshData.nodes as number[][]) {
+        minX = Math.min(minX, n[0]); maxX = Math.max(maxX, n[0]);
+        minY = Math.min(minY, n[1]); maxY = Math.max(maxY, n[1]);
+      }
+    } else {
+      for (const e of ents) for (const p of e.pts) {
+        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+      }
+    }
+    if (minX !== Infinity) fitBoundingBox({ minX, maxX, minY, maxY }, 0.75);
+  }, [cadState.entities, meshData, canvasMode, meshOnly, fitBoundingBox]);
+
+  // Keep the latest fit fn in a ref so the framing effects can call it without
+  // taking it as a dependency (which would re-fire on every entity edit).
+  const fitRef = useRef(fitCurrentContent);
+  fitRef.current = fitCurrentContent;
+
+  // Re-frame ONLY when the view/stage switches or the mesh first appears - never
+  // on an entity edit. Dragging a domain slider must not recentre the canvas, or
+  // the handle chases the moving frame and the domain runs away. Explicit
+  // reframes ("Generate domain", double middle-click, fit button) still work.
+  const fitKey = useMemo(() => {
+    const hasMesh = (meshData?.nodes?.length ?? 0) > 0 ? 1 : 0;
+    const hasEnts = cadState.entities.some((e) => e.layer !== 'construction') ? 1 : 0;
+    const view = meshOnly ? (showField ? 'results' : 'solver') : canvasMode;
+    return `${hasMesh}:${hasEnts}:${view}`;
+  }, [meshData, cadState.entities, meshOnly, showField, canvasMode]);
+  useEffect(() => {
+    if (isDrawing || draggingDomainHandleRef.current) return;
+    const id = requestAnimationFrame(() => fitRef.current());
     return () => cancelAnimationFrame(id);
-  }, [cadState.entities, meshData, showMesh, meshStale, meshOnly, fitBoundingBox]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitKey]);
+
+  // Re-frame when a big layout change (rail push/collapse) resizes the canvas.
+  const prevVpW = useRef(0);
+  useEffect(() => {
+    if (viewport.w === 0) { prevVpW.current = viewport.w; return; }
+    const bigChange = Math.abs(viewport.w - prevVpW.current) > 48;
+    prevVpW.current = viewport.w;
+    if (!bigChange || panning.current || isDrawing || draggingDomainHandleRef.current) return;
+    const id = requestAnimationFrame(() => fitRef.current());
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewport.w, viewport.h, isDrawing]);
 
   // When switching between steps (e.g. to Step 2, Step 3), reset to 'select' tool by default
   useEffect(() => {
@@ -780,19 +906,39 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const [gridSnapEnabled, setGridSnapEnabled] = useState(true);
   const [ortho, setOrtho] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
-  const [canvasMode, setCanvasMode] = useState<'cad' | 'mesh'>('cad');
 
+  // Pick a sensible canvas mode when the STAGE changes; after that the user
+  // drives it with the Blocks / Mesh / Quality toggle (a stale mesh no longer
+  // yanks the view around while you edit blocks).
+  const lastViewStageRef = useRef('');
   useEffect(() => {
-    // Solver / Results: only ever the mesh.
-    if (meshOnly) { setCanvasMode('mesh'); return; }
-    // Show the mesh only when it is current. If the geometry changed since the
-    // mesh was generated, drop back to CAD mode so the user sees their edits.
-    if (!showMesh || meshStale) {
-      setCanvasMode('cad');
-    } else if (meshData?.nodes?.length && meshData?.elements?.length) {
-      setCanvasMode('mesh');
-    }
-  }, [showMesh, meshData, meshStale, meshOnly]);
+    const st = meshOnly
+      ? 'meshOnly'
+      : !showMesh
+        ? 'cad'
+        : showBlocking
+          ? 'blocks'
+          : 'unstructured';
+    if (st === lastViewStageRef.current) return;
+    lastViewStageRef.current = st;
+    if (st === 'meshOnly' || st === 'unstructured') setCanvasMode('mesh');
+    else if (st === 'cad') setCanvasMode('cad');
+    else setCanvasMode(meshData?.nodes?.length && meshData?.elements?.length ? 'mesh' : 'cad');
+  }, [meshOnly, showMesh, showBlocking, meshData]);
+
+  // Building / rebuilding blocks jumps to the Blocks view.
+  useEffect(() => {
+    if (blocksBuiltTick > 0 && showBlocking && !meshOnly) setCanvasMode('cad');
+  }, [blocksBuiltTick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When a mesh is freshly generated, jump to the mesh view to show it.
+  const prevMeshCountRef = useRef(0);
+  useEffect(() => {
+    const c = meshData?.nodes?.length ?? 0;
+    const wasEmpty = prevMeshCountRef.current === 0;
+    prevMeshCountRef.current = c;
+    if (c > 0 && wasEmpty && !meshOnly && showMesh) setCanvasMode('mesh');
+  }, [meshData, meshOnly, showMesh]);
 
   // ── WebGL render: fires on any visual change (pan/zoom/field/colormap) ───────
   useEffect(() => {
@@ -817,7 +963,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       canvasHeight: canvas.clientHeight || (containerRef.current?.clientHeight ?? 600),
       visible: !!(displayOnly && showMesh && canvasMode === 'mesh' && haveField),
     });
-  }, [glReady, pan, zoom, showField, fieldData, activeField, colormap, displayOnly, showMesh, canvasMode, glRender, glCanvasRef]);
+  }, [glReady, pan, zoom, showField, fieldData, activeField, colormap, displayOnly, showMesh, canvasMode, glRender, glCanvasRef, viewport.w, viewport.h]);
 
   const handleAuxClick = useCallback((e: React.MouseEvent) => {
     if (e.button !== 1) return;
@@ -851,7 +997,39 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const [showConstruction, setShowConstruction] = useState(true);
   const [constructionMode, setConstructionMode] = useState(false); // draw to construction layer
   const [showMeshWireframe, setShowMeshWireframe] = useState(false); // toggle mesh overlay in Results
-  const [showResultsStreamlines, setShowResultsStreamlines] = useState(false); // toggle streamlines overlay in Results
+  const [showResultsStreamlines, setShowResultsStreamlines] = useState(true); // toggle streamlines overlay in Results
+  const [showMeshQuality, setShowMeshQuality] = useState(false); // colour cells by skewness in the Mesh tab
+  const [liveField, setLiveField] = useState<'mesh' | 'U_mag' | 'p' | 'k'>('U_mag'); // solver live preview
+
+  const liveVals =
+    meshOnly && !showField && livePreview && liveField !== 'mesh' && Array.isArray(livePreview.fields[liveField])
+      ? livePreview.fields[liveField]
+      : null;
+  const liveRange = livePreview?.ranges?.[liveField as string] ?? [0, 1];
+
+  // Per-cell skewness, computed once per mesh (parallel to meshData.elements).
+  const meshSkew = useMemo<number[] | null>(() => {
+    const nodes: number[][] | undefined = meshData?.nodes;
+    const els: number[][] | undefined = meshData?.elements;
+    if (!Array.isArray(nodes) || !Array.isArray(els) || els.length === 0) return null;
+    return els.map((el) =>
+      el.length >= 3 && el.every((i) => nodes[i])
+        ? cellSkewness(el.map((i) => [nodes[i][0], nodes[i][1]] as [number, number]))
+        : 0,
+    );
+  }, [meshData?.nodes, meshData?.elements]);
+
+  const meshSkewStats = useMemo(() => {
+    if (!meshSkew || meshSkew.length === 0) return null;
+    const sorted = [...meshSkew].sort((a, b) => a - b);
+    const poor = meshSkew.filter((s) => s > 0.8).length;
+    return {
+      max: sorted[sorted.length - 1],
+      median: sorted[Math.floor(sorted.length * 0.5)],
+      poor,
+      poorPct: (100 * poor) / meshSkew.length,
+    };
+  }, [meshSkew]);
 
   // ── Op parameters ───────────────────────────────────────────────────────────
   const [filletR, setFilletR] = useState(0.05);
@@ -905,9 +1083,103 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const [editDragActive, setEditDragActive] = useState(false);
 
   // ── Structured block-vertex dragging (mesh stage, showBlocking) ────────────
-  const blockDrag = useRef<{ vid: string } | null>(null);
+  // blockDrag / blockSnapGuides are declared earlier (fit logic reads them).
   const [hoveredBlockVtx, setHoveredBlockVtx] = useState<string | null>(null);
   const [hoveredBlockIdx, setHoveredBlockIdx] = useState<number | null>(null);
+
+  const domainRing = useMemo<Point2D[]>(() => {
+    const dom = cadState.entities.find((e) => e.role === 'domain_boundary');
+    if (!dom) return [];
+    return dom.type === 'circle' ? entityRing(dom) : dom.pts.map((p) => ({ ...p }));
+  }, [cadState.entities]);
+
+  /** Snap a dragged block vertex: exact snap to a geometry/domain corner or a
+   *  sibling block vertex, else axis-align with a sibling (with a guide line),
+   *  else grid; finally clamp inside the fluid domain so a vertex can never be
+   *  dragged out of the mesh region. */
+  const snapBlockVertex = useCallback(
+    (raw: Point2D, draggedVid: string): { pt: Point2D; guides: { a: Point2D; b: Point2D }[] } => {
+      const R = SNAP_RADIUS_PX / zoom;
+      const guides: { a: Point2D; b: Point2D }[] = [];
+      const siblings = blocking?.vertices.filter((v) => v.id !== draggedVid).map((v) => v.pt) ?? [];
+      const corners: Point2D[] = [];
+      for (const e of cadState.entities) {
+        if (e.layer === 'construction') continue;
+        for (const q of e.type === 'circle' ? entityRing(e) : e.pts) corners.push(q);
+      }
+
+      // 1. exact snap to a corner or sibling vertex
+      let hit: Point2D | null = null;
+      let hd = R;
+      for (const c of [...siblings, ...corners]) {
+        const d = Math.hypot(c.x - raw.x, c.y - raw.y);
+        if (d < hd) {
+          hd = d;
+          hit = c;
+        }
+      }
+      if (hit) return { pt: { x: hit.x, y: hit.y }, guides: [] };
+
+      // 2. axis alignment with a sibling vertex
+      const pt = { x: raw.x, y: raw.y };
+      let ax: number | null = null;
+      let ay: number | null = null;
+      let axd = R;
+      let ayd = R;
+      for (const c of siblings) {
+        if (Math.abs(c.x - raw.x) < axd) {
+          axd = Math.abs(c.x - raw.x);
+          ax = c.x;
+        }
+        if (Math.abs(c.y - raw.y) < ayd) {
+          ayd = Math.abs(c.y - raw.y);
+          ay = c.y;
+        }
+      }
+      if (ax !== null) pt.x = ax;
+      if (ay !== null) pt.y = ay;
+
+      // 3. grid snap when not otherwise constrained
+      if (gridSnapEnabled && ax === null && ay === null) {
+        const raw40 = 40 / Math.max(zoom, 1e-6);
+        const mag = Math.pow(10, Math.floor(Math.log10(raw40)));
+        const n = raw40 / mag;
+        let g = n >= 5 ? 5 * mag : n >= 2 ? 2 * mag : mag;
+        g = Math.max(0.0002, g);
+        pt.x = Math.round(pt.x / g) * g;
+        pt.y = Math.round(pt.y / g) * g;
+      }
+
+      // 4. clamp inside the fluid domain
+      if (domainRing.length >= 3 && !pointInPolygon(pt, domainRing)) {
+        let best = domainRing[0];
+        let bd = Infinity;
+        for (let i = 0; i < domainRing.length; i += 1) {
+          const a = domainRing[i];
+          const b = domainRing[(i + 1) % domainRing.length];
+          const abx = b.x - a.x;
+          const aby = b.y - a.y;
+          const len2 = abx * abx + aby * aby || 1;
+          const t = Math.max(0, Math.min(1, ((pt.x - a.x) * abx + (pt.y - a.y) * aby) / len2));
+          const q = { x: a.x + t * abx, y: a.y + t * aby };
+          const d = Math.hypot(pt.x - q.x, pt.y - q.y);
+          if (d < bd) {
+            bd = d;
+            best = q;
+          }
+        }
+        pt.x = best.x;
+        pt.y = best.y;
+        ax = ay = null;
+      }
+
+      const BIG = 1e6;
+      if (ax !== null) guides.push({ a: { x: ax, y: pt.y - BIG }, b: { x: ax, y: pt.y + BIG } });
+      if (ay !== null) guides.push({ a: { x: pt.x - BIG, y: ay }, b: { x: pt.x + BIG, y: ay } });
+      return { pt, guides };
+    },
+    [zoom, cadState.entities, blocking, gridSnapEnabled, domainRing],
+  );
 
   // ── Dynamic Dimension Input (Onshape / Fusion 360 style) ───────────────────
   const [dimPrompt, setDimPrompt] = useState<DynamicDimPrompt | null>(null);
@@ -1410,15 +1682,48 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
       // In Results mode (showField is true), only stroke internal mesh cell edges if showMeshWireframe is enabled.
       const shouldDrawWireframe = !showField || showMeshWireframe;
+      // Mesh-quality colouring is a Mesh-stage tool only - never on the solver
+      // or results canvas (meshOnly), where the plain mesh / live field belongs.
+      const qualityMode = !showField && !meshOnly && showMeshQuality && !!meshSkew;
+      const liveMode = !!liveVals && liveVals.length === elements.length && !qualityMode;
+      const liveLo = Number(liveRange[0]);
+      const liveSpan = (Number(liveRange[1]) - liveLo) || 1;
       ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.18)' : '#CBD5E1';
       ctx.lineWidth = haveField ? 0.45 : 0.65;
 
-      for (const element of elements) {
-        if (element.length < 3) continue;
-        if (element.some((ni: number) => !nodes[ni])) continue; // guard: out-of-range node refs
+      elements.forEach((element: number[], elIdx: number) => {
+        if (element.length < 3) return;
+        if (element.some((ni: number) => !nodes[ni])) return; // guard: out-of-range node refs
         const points = element.map((nodeIndex: number) => ws(nodes[nodeIndex][0], nodes[nodeIndex][1]));
 
-        if (glHaveField) {
+        if (liveMode) {
+          // flat per-cell fill, mesh wireframe kept on
+          const t = (liveVals![elIdx] - liveLo) / liveSpan;
+          ctx.fillStyle = colormapRGB(t, colormap);
+          ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+          ctx.lineWidth = 0.35;
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let index = 1; index < points.length; index += 1) {
+            ctx.lineTo(points[index].x, points[index].y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else if (qualityMode) {
+          const sk = meshSkew![elIdx] ?? 0;
+          ctx.fillStyle = colormapRGB(sk, 'quality');
+          ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+          ctx.lineWidth = 0.4;
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let index = 1; index < points.length; index += 1) {
+            ctx.lineTo(points[index].x, points[index].y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else if (glHaveField) {
           // Smooth continuous field is always rendered underneath by GPU.
           // When "Mesh" is toggled ON, overlay the crisp white wireframe grid lines directly on top of the smooth flow!
           if (showMeshWireframe) {
@@ -1465,7 +1770,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         for (let index = 0; index < element.length; index += 1) {
           addEdge(element[index], element[(index + 1) % element.length]);
         }
-      }
+      });
 
       // Exterior edges explicitly show both the airfoil hole and domain edge.
       ctx.strokeStyle = '#111827';
@@ -1571,35 +1876,30 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         }
         ctx.stroke();
 
-        // Endpoint grips. Square + orange on a selected entity (drag to reshape);
-        // small hollow squares on every other entity while the Select tool is
-        // active so the user can see that any vertex is draggable.
+        // Endpoint grips: a small bold dot, a little fatter than the line - never
+        // a big white box. On a selected entity each grip also gets a hollow
+        // square so it is obvious which vertex a drag will grab.
         if (!isConst || showConstruction) {
           const editable = tool === 'select' && !displayOnly && !isConst && e.role !== 'domain_boundary';
           for (const pt of e.pts) {
             const ps = ws(pt.x, pt.y);
             if (isSel && editable) {
-              const h = 11;
-              ctx.fillStyle = '#FFFFFF';
+              ctx.beginPath();
+              ctx.arc(ps.x, ps.y, 3.2, 0, Math.PI * 2);
+              ctx.fillStyle = '#E05A00';
+              ctx.fill();
               ctx.strokeStyle = '#E05A00';
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.rect(ps.x - h / 2, ps.y - h / 2, h, h);
-              ctx.fill();
-              ctx.stroke();
+              ctx.lineWidth = 1.25;
+              ctx.strokeRect(ps.x - 6.5, ps.y - 6.5, 13, 13);
             } else if (editable) {
-              const h = 8.5;
-              ctx.fillStyle = '#FFFFFF';
-              ctx.strokeStyle = '#7A8699';
-              ctx.lineWidth = 1.5;
               ctx.beginPath();
-              ctx.rect(ps.x - h / 2, ps.y - h / 2, h, h);
+              ctx.arc(ps.x, ps.y, 2.6, 0, Math.PI * 2);
+              ctx.fillStyle = '#5B6472';
               ctx.fill();
-              ctx.stroke();
             } else {
               ctx.fillStyle = isConst ? '#4A90D9' : '#888';
               ctx.beginPath();
-              ctx.arc(ps.x, ps.y, 2.5, 0, Math.PI * 2);
+              ctx.arc(ps.x, ps.y, 2.2, 0, Math.PI * 2);
               ctx.fill();
             }
           }
@@ -2069,23 +2369,42 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
           ctx.fill();
         }
       }
-      // corner handles
+      // corner handles: a small bold dot (a touch fatter than the 2.5px edge),
+      // NOT a big box. Hovering draws a hollow square around it so it reads as
+      // "this is the vertex you are about to grab".
       for (const v of blocking.vertices) {
         const s = ws(v.pt.x, v.pt.y);
         const hot = hoveredBlockVtx === v.id;
-        ctx.fillStyle = '#FFFFFF';
-        ctx.strokeStyle = hot ? '#E05A00' : '#7C3AED';
-        ctx.lineWidth = 2;
-        const r = hot ? 7 : 5.5;
         ctx.beginPath();
-        ctx.rect(s.x - r, s.y - r, r * 2, r * 2);
+        ctx.arc(s.x, s.y, hot ? 3.6 : 2.6, 0, Math.PI * 2);
+        ctx.fillStyle = hot ? '#E05A00' : '#7C3AED';
         ctx.fill();
-        ctx.stroke();
+        if (hot) {
+          ctx.strokeStyle = '#E05A00';
+          ctx.lineWidth = 1.25;
+          ctx.strokeRect(s.x - 7, s.y - 7, 14, 14);
+        }
+      }
+
+      // alignment guides while dragging a block corner
+      if (blockDrag.current && blockSnapGuides.current.length) {
+        ctx.strokeStyle = 'rgba(224, 90, 0, 0.7)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 4]);
+        for (const g of blockSnapGuides.current) {
+          const a = ws(g.a.x, g.a.y);
+          const b = ws(g.b.x, g.b.y);
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
       }
       ctx.restore();
     }
 
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines]);
+  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines, showMeshQuality, meshSkew, viewport.w, viewport.h, livePreview, liveField]);
 
 
 
@@ -2125,9 +2444,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     if (showBlocking && blocking) {
       if (blockDrag.current && onUpdateBlocking) {
         const vid = blockDrag.current.vid;
+        const { pt, guides } = snapBlockVertex(raw, vid);
+        blockSnapGuides.current = guides;
         onUpdateBlocking({
           ...blocking,
-          vertices: blocking.vertices.map((v) => (v.id === vid ? { ...v, pt: { x: raw.x, y: raw.y } } : v)),
+          vertices: blocking.vertices.map((v) => (v.id === vid ? { ...v, pt } : v)),
         });
         return;
       }
@@ -2290,7 +2611,9 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         if (d < bd) { bd = d; best = v.id; }
       }
       if (best) {
-        blockDrag.current = { vid: best };
+        const bv = blocking.vertices.find((v) => v.id === best)!;
+        blockDrag.current = { vid: best, origin: { ...bv.pt }, recorded: false };
+        blockSnapGuides.current = [];
         e.preventDefault();
         return;
       }
@@ -2363,6 +2686,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
     if (blockDrag.current) {
       blockDrag.current = null;
+      blockSnapGuides.current = [];
       setCmdText('Block corner moved.');
       return;
     }
@@ -2949,8 +3273,18 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         setCmdText('LINE: Done. Pick start point.');
       }
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) { e.preventDefault(); redo(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      if (lastEditRef.current === 'blocks' && blockUndoRef.current.length) {
+        if (!undoBlocking()) undo();
+      } else undo();
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+      e.preventDefault();
+      if (lastEditRef.current === 'blocks' && blockRedoRef.current.length) {
+        if (!redoBlocking()) redo();
+      } else redo();
+    }
     if (e.key === 'Delete' || e.key === 'Backspace') { dispatch({ type: 'DELETE_SELECTED' }); }
     if (e.key === 'F8') setOrtho(o => !o);
     if (e.key === 'F3') setSnapEnabled(s => !s);
@@ -2962,7 +3296,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     if (e.key === 'a' || e.key === 'A') { setTool('arc_center'); setIsDrawing(false); setTempPts([]); }
     if (e.key === 's' || e.key === 'S') { setTool('select'); setIsDrawing(false); setTempPts([]); }
     if (e.key === 't' || e.key === 'T') { setTool('trim'); setIsDrawing(false); setTempPts([]); }
-  }, [tool, isDrawing, tempPts, constructionMode, undo, redo]);
+  }, [tool, isDrawing, tempPts, constructionMode, undo, redo, undoBlocking, redoBlocking]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -3308,7 +3642,7 @@ boundary
       onClick={() => { setTool(t); setIsDrawing(false); setTempPts([]); setCmdText(`${label}: ${prompt_for(t)}`); }}
       className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors min-w-[42px] ${
         tool === t
-          ? 'bg-[#2563EB] text-white shadow-sm'
+          ? 'bg-[#2563EB] text-white '
           : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'
       }`}
     >
@@ -3484,25 +3818,66 @@ boundary
             : 'crosshair',
         }}
       >
-        {/* Top Controls Bar */}
-        {displayOnly && (
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-lg px-2 py-1 shadow-sm text-xs select-none">
+        {/* Top Controls Bar — only when it actually has controls (blocks/mesh
+            toggle in CAD/mesh stages, overlay toggles in Results). The solver
+            stage has neither, so no empty pill. */}
+        {displayOnly && (!meshOnly || showField || !!livePreview) && (
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-lg px-2 py-1 text-xs select-none">
             {!meshOnly ? (
               <>
-                <button
-                  onClick={() => setCanvasMode('cad')}
-                  className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'cad' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F]'}`}
-                >
-                  {canvasMode === 'cad' ? '◉' : '○'} Blocks
-                </button>
-                <button
-                  onClick={() => meshData && !meshStale && setCanvasMode('mesh')}
-                  disabled={!meshData || meshStale}
-                  title={meshStale ? 'Geometry changed - regenerate the mesh' : undefined}
-                  className={`px-2 py-0.5 rounded text-[11px] font-medium ${canvasMode === 'mesh' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed'}`}
-                >
-                  {canvasMode === 'mesh' ? '◉' : '○'} Mesh
-                </button>
+                {(
+                  [
+                    // "Blocks" only exists for structured meshing (showBlocking).
+                    ...(showBlocking
+                      ? [
+                          {
+                            id: 'blocks',
+                            label: 'Blocks',
+                            active: canvasMode === 'cad',
+                            disabled: false,
+                            title: undefined as string | undefined,
+                            onClick: () => setCanvasMode('cad'),
+                          },
+                        ]
+                      : []),
+                    {
+                      id: 'mesh',
+                      label: 'Mesh',
+                      active: canvasMode === 'mesh' && !showMeshQuality,
+                      disabled: !meshData || meshStale,
+                      title: undefined as string | undefined,
+                      onClick: () => {
+                        setCanvasMode('mesh');
+                        setShowMeshQuality(false);
+                      },
+                    },
+                    {
+                      id: 'quality',
+                      label: 'Quality',
+                      active: canvasMode === 'mesh' && showMeshQuality,
+                      disabled: !meshData || meshStale,
+                      title: 'Colour each cell by skewness - spot bad cells before solving',
+                      onClick: () => {
+                        setCanvasMode('mesh');
+                        setShowMeshQuality(true);
+                      },
+                    },
+                  ]
+                ).map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => !m.disabled && m.onClick()}
+                    disabled={m.disabled}
+                    title={m.title || (m.disabled ? 'Generate a mesh first' : undefined)}
+                    className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+                      m.active
+                        ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
+                        : 'text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
                 {meshStale && showMesh && (
                   <span className="ml-1 text-[10px] text-[#D97706] font-medium">stale - regenerate</span>
                 )}
@@ -3515,7 +3890,7 @@ boundary
                   title="Toggle Mesh Cells Wireframe Overlay"
                   className={`px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors ${
                     showMeshWireframe
-                      ? 'bg-[#2563EB] text-white font-semibold shadow-xs'
+                      ? 'bg-[#2563EB] text-white font-semibold '
                       : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
                   }`}
                 >
@@ -3528,12 +3903,35 @@ boundary
                   title="Toggle Flow Streamlines Overlay"
                   className={`px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors ${
                     showResultsStreamlines
-                      ? 'bg-[#2563EB] text-white font-semibold shadow-xs'
+                      ? 'bg-[#2563EB] text-white font-semibold '
                       : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
                   }`}
                 >
                   <span>Streamlines</span>
                 </button>
+              </div>
+            ) : livePreview ? (
+              /* Solver stage: live cell-based field preview */
+              <div className="flex items-center gap-1.5">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-[#DC2626] bg-[#FEE2E2]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#DC2626] animate-pulse" />
+                  Live
+                </span>
+                {(['mesh', 'U_mag', 'p', 'k'] as const)
+                  .filter((f) => f === 'mesh' || Array.isArray(livePreview.fields[f]))
+                  .map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setLiveField(f)}
+                      className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+                        liveField === f
+                          ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
+                          : 'text-[#69717D] hover:text-[#171A1F]'
+                      }`}
+                    >
+                      {f === 'U_mag' ? '|U|' : f === 'mesh' ? 'Mesh' : f}
+                    </button>
+                  ))}
               </div>
             ) : null}
           </div>
@@ -3583,10 +3981,68 @@ boundary
           );
         })()}
 
+        {/* ─── Mesh-quality legend (Mesh tab only) ─── */}
+        {!showField && !meshOnly && canvasMode === 'mesh' && showMeshQuality && meshSkew && meshSkewStats && (
+          <div
+            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+          >
+            <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">Cell skewness</div>
+            <div className="flex items-stretch justify-end h-56">
+              <div className="flex flex-col justify-between items-end whitespace-nowrap pr-1">
+                <span className="text-[#DC2626] font-semibold">1.0 · degenerate</span>
+                <span>0.80 · poor</span>
+                <span>0.50 · fair</span>
+                <span>0.25 · good</span>
+                <span className="text-[#16A34A] font-semibold">0.0 · ideal</span>
+              </div>
+              <div
+                className="w-3 shrink-0 rounded-sm border border-[#DDE2E8]"
+                style={{
+                  background: `linear-gradient(to bottom, ${Array.from({ length: 16 }, (_, i) => colormapRGB(1 - i / 15, 'quality')).join(',')})`,
+                }}
+              />
+            </div>
+            <div className="mt-2 pt-2 border-t border-[#EDEFF3] text-right leading-relaxed">
+              <div>max <span className="text-[#171A1F] font-semibold">{meshSkewStats.max.toFixed(2)}</span></div>
+              <div>median <span className="text-[#171A1F] font-semibold">{meshSkewStats.median.toFixed(2)}</span></div>
+              <div className={meshSkewStats.poorPct > 2 ? 'text-[#DC2626] font-semibold' : ''}>
+                {meshSkewStats.poor} cells &gt; 0.8 ({meshSkewStats.poorPct.toFixed(1)}%)
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Live solver preview legend (Solver tab) ─── */}
+        {liveVals && (
+          <div
+            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+          >
+            <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
+              {liveField === 'U_mag' ? '|U| m/s' : liveField === 'p' ? 'p Pa' : 'k m²/s²'}
+              {livePreview?.time ? ` · t=${livePreview.time}` : ''}
+            </div>
+            <div className="flex items-stretch justify-end h-44">
+              <div className="flex flex-col justify-between items-end whitespace-nowrap pr-1">
+                <span>{Number(liveRange[1]).toPrecision(3)}</span>
+                <span>{((Number(liveRange[0]) + Number(liveRange[1])) / 2).toPrecision(3)}</span>
+                <span>{Number(liveRange[0]).toPrecision(3)}</span>
+              </div>
+              <div
+                className="w-3 shrink-0 rounded-sm border border-[#DDE2E8]"
+                style={{
+                  background: `linear-gradient(to bottom, ${Array.from({ length: 14 }, (_, i) => colormapRGB(1 - i / 13, colormap)).join(',')})`,
+                }}
+              />
+            </div>
+          </div>
+        )}
+
         {/* ─── Transient Flow Simulation Player ─── */}
         {showField && isTransient && (
           <div
-            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white/95 backdrop-blur-sm border border-[#E1E4E8] rounded-xl shadow-lg px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
+            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white/95 backdrop-blur-sm border border-[#E1E4E8] rounded-xl px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
             {/* 5 Playback Control Buttons: First, Prev, Play/Pause, Next, Last */}
@@ -3616,7 +4072,7 @@ boundary
                 onClick={() => onToggleTransientPlay?.()}
                 disabled={transientTimes.length < 2}
                 title={transientPlaying ? 'Pause' : 'Play Simulation'}
-                className="p-2 rounded-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white shadow-sm disabled:opacity-40 disabled:pointer-events-none transition-transform active:scale-95 flex items-center justify-center mx-0.5"
+                className="p-2 rounded-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white disabled:opacity-40 disabled:pointer-events-none transition-transform active:scale-95 flex items-center justify-center mx-0.5"
               >
                 {transientPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
               </button>
@@ -3703,7 +4159,7 @@ boundary
 
           return (
             <div
-              className="absolute z-30 flex items-center gap-2 bg-white/95 backdrop-blur-xs text-[#171A1F] px-2.5 py-1.5 rounded-md shadow-lg border border-[#E1E4E8] text-xs font-mono select-none transition-all duration-75"
+              className="absolute z-30 flex items-center gap-2 bg-white/95 backdrop-blur-xs text-[#171A1F] px-2.5 py-1.5 rounded-md border border-[#E1E4E8] text-xs font-mono select-none transition-all duration-75"
               style={{ left: `${posX}px`, top: `${posY}px` }}
               onClick={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
@@ -3818,7 +4274,7 @@ boundary
       </div>
 
       {meshToastVisible && (
-        <div className="absolute right-4 bottom-10 z-40 w-72 rounded-lg border border-[#D9E2F2] bg-white/95 backdrop-blur shadow-lg px-3.5 py-3 pointer-events-none">
+        <div className="absolute right-4 bottom-10 z-40 w-72 rounded-lg border border-[#D9E2F2] bg-white/95 backdrop-blur px-3.5 py-3 pointer-events-none">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-[#171A1F]">{meshProgress >= 100 ? 'Mesh complete' : 'Generating mesh'}</span>
             <span className="text-xs font-mono font-semibold text-[#2563EB]">{Math.round(meshProgress)}%</span>

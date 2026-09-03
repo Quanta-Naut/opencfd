@@ -434,6 +434,33 @@ export async function solverEnvironment(): Promise<any> {
   }
 }
 
+/** Ask the backend for a zip of the OpenFOAM case and hand it to the browser to
+ * save. Prefers the real case on disk; falls back to the dict contents we hold. */
+export async function exportCaseZip(
+  projectId: string | undefined,
+  name: string,
+  files: Record<string, string>,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/solver/case-files/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ project_id: projectId ?? null, name, files }),
+  });
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.detail || `Export failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name || 'openfoam-case'}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 export async function generateCaseFiles(
   physics: any,
   boundaries: any,

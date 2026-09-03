@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { CircleHelp, Gauge, Wind, Layers3, Thermometer, Droplets, LockKeyhole, Zap } from 'lucide-react';
 import { CFDProjectState, CaseSetupConfig, PhysicsConfig, BoundaryConditions } from '../../types/cfd';
 import { FlowType } from '../../types/cadWorkflow';
@@ -90,6 +90,26 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
   }));
   const setPatchBC = (name: string, bc: PatchEntry['bc']) =>
     setCaseSetup({ patches: { ...caseSetup.patches, [name]: bc } });
+
+  // Keep the speed regime honest with the Mach number. Compressible: the regime
+  // Select tracks the computed hint (it stays editable - it re-syncs on the next
+  // flow-condition change). Incompressible at/above Mach 0.3: flip the whole
+  // model to compressible so the physics match the flow the user typed.
+  useEffect(() => {
+    if (compressible) {
+      if (physics.speedRegime !== flow.regimeHint && flow.regimeHint !== 'incompressible') {
+        setPhysics({ speedRegime: flow.regimeHint });
+      }
+    } else if (flow.mach >= 0.3) {
+      setPhysics({
+        compressibility: 'compressible',
+        equationOfState: 'perfectGas',
+        energyModel: 'enabled',
+        speedRegime: flow.regimeHint === 'incompressible' ? 'subsonic' : flow.regimeHint,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compressible, flow.regimeHint, flow.mach]);
 
   const model = turbulenceModel(physics.turbulenceModelId as any);
   const section: SectionProps = { state, setPhysics, setCaseSetup, setBoundaries, refLength, flow };

@@ -238,7 +238,7 @@ export const ViewportHero: React.FC<ViewportHeroProps> = ({
   return (
     <div className="relative w-full h-full bg-white select-none overflow-hidden flex flex-col">
       {/* View mode */}
-      <div className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-white/95 backdrop-blur border border-[#E1E4E8] rounded-md px-1.5 py-1 shadow-xs text-xs">
+      <div className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-white/95 backdrop-blur border border-[#E1E4E8] rounded-md px-1.5 py-1 text-xs">
         <button
           onClick={() => setRenderMode('cad')}
           className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
@@ -271,7 +271,7 @@ export const ViewportHero: React.FC<ViewportHeroProps> = ({
 
       {/* 4. BOTTOM-RIGHT FLOATING SCALAR COLORMAP BAR (VIRIDIS DEFAULT) */}
       {fieldValues.length > 0 && renderMode === 'mesh' && (
-        <div className="absolute bottom-3 right-3 z-20 bg-white/95 backdrop-blur border border-[#E1E4E8] rounded-md p-2.5 shadow-xs w-48 text-xs select-none">
+        <div className="absolute bottom-3 right-3 z-20 bg-white/95 backdrop-blur border border-[#E1E4E8] rounded-md p-2.5 w-48 text-xs select-none">
           <div className="flex justify-between items-center mb-1">
             <select
               value={activeField}

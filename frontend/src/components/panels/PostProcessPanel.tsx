@@ -47,7 +47,7 @@ export const PostProcessPanel: React.FC<PostProcessPanelProps> = ({
               onClick={() => onChange({ colormap: map })}
               className={`py-1.5 px-2 rounded-md font-medium border text-center capitalize transition-colors ${
                 config.colormap === map
-                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                  ? 'bg-blue-600 text-white border-blue-600 '
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
               }`}
             >

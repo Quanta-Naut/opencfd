@@ -21,9 +21,17 @@ export interface FlowDerived {
 }
 
 export function deriveFlow(f: FlowInputs): FlowDerived {
-  const a = Math.sqrt(Math.max(f.gamma * f.gasConstant * f.temperature, 1e-9));
-  const mach = f.velocity / a;
-  const reynolds = (f.velocity * f.refLength) / Math.max(f.kinematicViscosity, 1e-12);
+  // Sanitise: a stray unit (R in kJ/kgK, T in degC, gamma left blank) otherwise
+  // throws the speed of sound - and therefore the Mach number and the regime -
+  // off by an order of magnitude. Air-like fallbacks keep the panel honest.
+  const gamma = f.gamma >= 1.05 && f.gamma <= 2 ? f.gamma : 1.4;
+  const R = f.gasConstant >= 50 && f.gasConstant <= 5000 ? f.gasConstant : 287.05;
+  const T = f.temperature >= 50 && f.temperature <= 6000 ? f.temperature : 288.15;
+  const V = Number.isFinite(f.velocity) ? Math.abs(f.velocity) : 0;
+
+  const a = Math.sqrt(gamma * R * T);
+  const mach = a > 0 ? V / a : 0;
+  const reynolds = (V * f.refLength) / Math.max(f.kinematicViscosity, 1e-12);
   const regimeHint =
     mach < 0.3 ? 'incompressible'
       : mach < 0.8 ? 'subsonic'
@@ -34,7 +42,7 @@ export function deriveFlow(f: FlowInputs): FlowDerived {
     reynolds,
     mach,
     speedOfSound: a,
-    dynamicPressure: 0.5 * f.density * f.velocity * f.velocity,
+    dynamicPressure: 0.5 * (f.density > 0 ? f.density : 1.225) * V * V,
     regimeHint,
   };
 }

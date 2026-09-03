@@ -19,6 +19,10 @@ _MODEL_FOAM = {
 def write_constants(phys: Dict[str, Any], regime: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
     compressible = phys.get("compressibility") == "compressible"
+    # `shockFluid` integrates internal energy; the pressure-based `fluid` module
+    # uses enthalpy. Picking the wrong one makes foamRun reject the thermo dict.
+    shock = compressible and str(phys.get("speedRegime", "subsonic")) in ("supersonic", "hypersonic")
+    energy = "sensibleInternalEnergy" if shock else "sensibleEnthalpy"
     model = _MODEL_FOAM.get(str(phys.get("turbulenceModelId", "kOmegaSST")), "kOmegaSST")
     turb_on = regime == "turbulent"
 
@@ -58,6 +62,9 @@ def write_constants(phys: Dict[str, Any], regime: str) -> Dict[str, str]:
             if sutherland else
             f"        mu              {mu};\n        Pr              {Pr};\n"
         )
+        # `fluid` module, non-buoyant external aero: solve the real `p`, energy as
+        # sensible enthalpy (matches the Foundation aerofoil tutorials). No
+        # constant/g - there is no p_rgh so gravity never enters.
         out["constant/physicalProperties"] = foam_file(
             "dictionary", "physicalProperties", location="constant",
             body=(
@@ -65,10 +72,10 @@ def write_constants(phys: Dict[str, Any], regime: str) -> Dict[str, str]:
                 "    type            hePsiThermo;\n    mixture         pureMixture;\n"
                 f"    transport       {'sutherland' if sutherland else 'const'};\n"
                 "    thermo          hConst;\n    equationOfState perfectGas;\n"
-                "    specie          specie;\n    energy          sensibleInternalEnergy;\n}\n\n"
+                f"    specie          specie;\n    energy          {energy};\n}}\n\n"
                 "mixture\n{\n"
                 f"    specie\n    {{\n        molWeight       {8314.0 / R:.4f};\n    }}\n"
-                f"    thermodynamics\n    {{\n        Cp              {Cp:.2f};\n        Hf              0;\n    }}\n"
+                f"    thermodynamics\n    {{\n        Cp              {Cp:.2f};\n        hf              0;\n    }}\n"
                 f"    transport\n    {{\n{transport}    }}\n}}\n"
             ),
         )

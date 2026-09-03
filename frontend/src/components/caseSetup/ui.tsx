@@ -26,7 +26,7 @@ export const SectionCard: React.FC<{
   </section>
 );
 
-export const Field: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({
+export const Field: React.FC<{ label: React.ReactNode; hint?: string; children: React.ReactNode }> = ({
   label,
   hint,
   children,

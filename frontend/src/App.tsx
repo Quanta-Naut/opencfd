@@ -6,6 +6,8 @@ import { CadWorkbench2D } from './components/cad/CadWorkbench2D';
 import { TransientPlaybackControls } from './components/viewport/TransientPlaybackControls';
 import { RightContextInspector } from './components/layout/RightContextInspector';
 import { BottomSolverDrawer } from './components/layout/BottomSolverDrawer';
+import { SolverMonitorRail } from './components/solver/SolverMonitorRail';
+import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { StatusBar } from './components/layout/StatusBar';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
 import { wallResolution } from './caseSetup/flowCalc';
@@ -48,7 +50,20 @@ import {
   validateBoundaryTags,
   geometryFormsLoop,
 } from './types/cadWorkflow';
-import { Blocking, autoBlockingFromOutline, propagateNodeCounts, toStructuredRequest, wrapBodyOgrid, bodiesForOgrid, entityRing, cGridFromAirfoil, airfoilsForCGrid, outlineRing, applyTargetCellSize, autoCellSize } from './types/blocking';
+import {
+  Blocking,
+  autoBlockingFromOutline,
+  propagateNodeCounts,
+  toStructuredRequest,
+  wrapBodyOgrid,
+  bodiesForOgrid,
+  entityRing,
+  cGridFromAirfoil,
+  airfoilsForCGrid,
+  outlineRing,
+  applyTargetCellSize,
+  autoCellSize,
+} from './types/blocking';
 
 export const SESSION_STORAGE_KEY = 'opencfd_studio_session_v1';
 
@@ -67,6 +82,7 @@ export interface StudioSession {
   freestreamVelocity: number;
   activeTagTool: BoundaryTag | null;
   blocking?: Blocking | null;
+  meshTopology?: 'unstructured' | 'structured';
   meshData?: any;
   meshSig?: string | null;
   hasMesh?: boolean;
@@ -82,7 +98,13 @@ interface AppProps {
   onProjectRenamed: (name: string) => void;
 }
 
-export function App({ projectId, projectName, initialSession, onExitHome, onProjectRenamed }: AppProps) {
+export function App({
+  projectId,
+  projectName,
+  initialSession,
+  onExitHome,
+  onProjectRenamed,
+}: AppProps) {
   const savedSession = initialSession;
 
   // Active workflow stage
@@ -95,20 +117,57 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   >(null);
 
   // ── 6-Step CFD Pre-Processing Workflow State (Left Sidebar Controlled) ──
-  const [cadWorkflowStep, setCadWorkflowStep] = useState<CadWorkflowStep>(() => savedSession?.cadWorkflowStep || 1);
+  const [cadWorkflowStep, setCadWorkflowStep] = useState<CadWorkflowStep>(
+    () => savedSession?.cadWorkflowStep || 1,
+  );
   const [flowType, setFlowType] = useState<FlowType>(() => savedSession?.flowType || 'external');
-  const [domainShape, setDomainShape] = useState<DomainShapeType>(() => savedSession?.domainShape || 'rectangle');
-  const [domainPreset, setDomainPreset] = useState<DomainPreset>(() => savedSession?.domainPreset || 'standard');
-  const [upstreamChordFactor, setUpstreamChordFactor] = useState(() => savedSession?.upstreamChordFactor ?? 10);
-  const [downstreamChordFactor, setDownstreamChordFactor] = useState(() => savedSession?.downstreamChordFactor ?? 20);
-  const [lateralHeightFactor, setLateralHeightFactor] = useState(() => savedSession?.lateralHeightFactor ?? 10);
-  const [angleOfAttackDeg, setAngleOfAttackDeg] = useState(() => savedSession?.angleOfAttackDeg ?? 0.0);
-  const [freestreamVelocity, setFreestreamVelocity] = useState(() => savedSession?.freestreamVelocity ?? 35.0);
-  const [activeTagTool, setActiveTagTool] = useState<BoundaryTag | null>(() => savedSession?.activeTagTool ?? null);
-  const [edgeTagMap, setEdgeTagMap] = useState<Record<string, BoundaryTag>>(() => savedSession?.edgeTagMap || {});
-  const [cadEntities, setCadEntities] = useState<CadEntity[]>(() => savedSession?.cadEntities || []);
+  const [domainShape, setDomainShape] = useState<DomainShapeType>(
+    () => savedSession?.domainShape || 'rectangle',
+  );
+  const [domainPreset, setDomainPreset] = useState<DomainPreset>(
+    () => savedSession?.domainPreset || 'standard',
+  );
+  const [upstreamChordFactor, setUpstreamChordFactor] = useState(
+    () => savedSession?.upstreamChordFactor ?? 10,
+  );
+  const [downstreamChordFactor, setDownstreamChordFactor] = useState(
+    () => savedSession?.downstreamChordFactor ?? 20,
+  );
+  const [lateralHeightFactor, setLateralHeightFactor] = useState(
+    () => savedSession?.lateralHeightFactor ?? 10,
+  );
+  const [angleOfAttackDeg, setAngleOfAttackDeg] = useState(
+    () => savedSession?.angleOfAttackDeg ?? 0.0,
+  );
+  const [freestreamVelocity, setFreestreamVelocity] = useState(
+    () => savedSession?.freestreamVelocity ?? 35.0,
+  );
+  const [activeTagTool, setActiveTagTool] = useState<BoundaryTag | null>(
+    () => savedSession?.activeTagTool ?? null,
+  );
+  const [edgeTagMap, setEdgeTagMap] = useState<Record<string, BoundaryTag>>(
+    () => savedSession?.edgeTagMap || {},
+  );
+  const [cadEntities, setCadEntities] = useState<CadEntity[]>(
+    () => savedSession?.cadEntities || [],
+  );
   const [blocking, setBlocking] = useState<Blocking | null>(() => savedSession?.blocking ?? null);
   const [structuredSmooth, setStructuredSmooth] = useState<boolean>(true);
+  const [meshTopology, setMeshTopology] = useState<'unstructured' | 'structured'>(
+    () => savedSession?.meshTopology ?? 'unstructured',
+  );
+  // Blocks belong to structured meshing only - drop them the moment we leave it.
+  const changeMeshTopology = (t: 'unstructured' | 'structured') => {
+    setMeshTopology(t);
+    if (t !== 'structured') setBlocking(null);
+  };
+  // Bumped whenever blocks are (re)built - the canvas switches to the Blocks view.
+  const [blocksBuiltTick, setBlocksBuiltTick] = useState(0);
+  // Drag-resizable left panel, shared across every stage.
+  const [sidebarW, setSidebarW] = useState<number>(() => {
+    const s = Number(typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_sidebar_w'));
+    return s >= 220 && s <= 620 ? s : 280;
+  });
 
   // Action refs triggered from LeftStagePanel to CadWorkbench2D
   const requestGenerateDomainRef = useRef<(() => void) | null>(null);
@@ -121,8 +180,9 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   const requestDownloadBlockMeshDictRef = useRef<(() => void) | null>(null);
 
   const geometryEntitiesCount = useMemo(
-    () => cadEntities.filter(e => e.layer !== 'construction' && e.role !== 'domain_boundary').length,
-    [cadEntities]
+    () =>
+      cadEntities.filter((e) => e.layer !== 'construction' && e.role !== 'domain_boundary').length,
+    [cadEntities],
   );
 
   const geometryBBox = useMemo(() => getGeometryBBox(cadEntities), [cadEntities]);
@@ -131,14 +191,19 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   // outer boundary). Ansys-style: define it once; if an edit breaks the loop the
   // app asks you to redefine it, boundary tags are untouched.
   const domainEntities = useMemo(
-    () => cadEntities.filter(e => e.role === 'domain_boundary'),
-    [cadEntities]
+    () => cadEntities.filter((e) => e.role === 'domain_boundary'),
+    [cadEntities],
   );
-  const autoDomainEntity = useMemo(() => domainEntities.find(e => e.autoDomain) || null, [domainEntities]);
-  const domainSegs = useMemo(() => domainEntities.filter(e => !e.autoDomain), [domainEntities]);
+  const autoDomainEntity = useMemo(
+    () => domainEntities.find((e) => e.autoDomain) || null,
+    [domainEntities],
+  );
+  const domainSegs = useMemo(() => domainEntities.filter((e) => !e.autoDomain), [domainEntities]);
   const closedDomainEntity = useMemo(
-    () => domainEntities.find(e => (e.isClosed || e.type === 'rectangle') && e.pts.length >= 3) || null,
-    [domainEntities]
+    () =>
+      domainEntities.find((e) => (e.isClosed || e.type === 'rectangle') && e.pts.length >= 3) ||
+      null,
+    [domainEntities],
   );
 
   // 'auto' = generated far-field box | 'ok' = user loop still closes |
@@ -152,33 +217,30 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   const domainKind: 'none' | 'auto' | 'custom' =
     domainState === 'auto' ? 'auto' : domainState === 'ok' ? 'custom' : 'none';
 
-
   const domainValidation = useMemo(() => {
     if (flowType !== 'external') return { valid: true, reason: 'Internal flow' };
     if (domainState === 'broken')
-      return { valid: false, reason: 'Domain boundary is broken - an edge was deleted or replaced. Reselect the whole outline and redefine it.' };
+      return {
+        valid: false,
+        reason:
+          'Domain boundary is broken - an edge was deleted or replaced. Reselect the whole outline and redefine it.',
+      };
     if (domainState === 'none')
-      return { valid: false, reason: 'Define the fluid domain: select your closed outline, then click "Define selected loop as the domain".' };
+      return {
+        valid: false,
+        reason:
+          'Define the fluid domain: select your closed outline, then click"Define selected loop as the domain".',
+      };
     if (closedDomainEntity) return validateDomainContainment(closedDomainEntity, cadEntities);
     return { valid: true };
   }, [flowType, domainState, closedDomainEntity, cadEntities]);
 
   const boundaryEdges = useMemo(
     () => extractBoundaryEdges(cadEntities, flowType, edgeTagMap),
-    [cadEntities, flowType, edgeTagMap]
+    [cadEntities, flowType, edgeTagMap],
   );
 
-  // Distinct tagged patches (name == tag), for the Case Setup boundary table.
-  const patchRoles = useMemo(() => {
-    const seen = new Map<string, BoundaryTag>();
-    for (const e of boundaryEdges) if (e.explicit) seen.set(e.tag, e.tag);
-    const order: BoundaryTag[] = ['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic'];
-    return [...seen.keys()]
-      .sort((a, b) => order.indexOf(a as BoundaryTag) - order.indexOf(b as BoundaryTag))
-      .map((t) => ({ name: t, role: t as any }));
-  }, [boundaryEdges]);
-
-  // Self-healing edge tags (Ansys "Named Selection" behaviour): every tag's
+  // Self-healing edge tags (Ansys"Named Selection" behaviour): every tag's
   // location is remembered for the whole session. When an edge is redrawn (new
   // entity id) close to where a tag used to be, it gets that tag back - even if
   // you deleted it and redrew it several edits later.
@@ -208,9 +270,9 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     }
 
     if (Object.keys(remap).length) {
-      setEdgeTagMap(prev => ({ ...prev, ...remap }));
+      setEdgeTagMap((prev) => ({ ...prev, ...remap }));
       for (const [k, tag] of Object.entries(remap)) {
-        const e = edges.find(x => x.key === k)!;
+        const e = edges.find((x) => x.key === k)!;
         tagMemoryRef.current.set(k, { mx: e.midpoint.x, my: e.midpoint.y, tag });
       }
     }
@@ -226,21 +288,37 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
 
   const boundaryValidation = useMemo(
     () => validateBoundaryTags(boundaryEdges, flowType),
-    [boundaryEdges, flowType]
+    [boundaryEdges, flowType],
   );
 
   // Signature of everything that would change the mesh - used to tell when the
   // last-generated mesh is stale (geometry / tags / flow changed since).
-  const geomSignature = useMemo(
+  // Core = geometry/tags/flow. A change here is a real "your mesh is out of date"
+  // event worth telling the user about.
+  const geomSigCore = useMemo(
     () =>
       JSON.stringify(
-        cadEntities.map(e => ({ t: e.type, p: e.pts, c: e.isClosed, r: e.role, rad: e.radius }))
-      ) + '|' + JSON.stringify(edgeTagMap) + '|' + flowType +
-      '|' + JSON.stringify(blocking?.vertices?.map(v => v.pt) ?? null) +
-      '|' + JSON.stringify(blocking?.edges?.map(e => [e.nodes, e.law, e.ratio]) ?? null),
-    [cadEntities, edgeTagMap, flowType, blocking]
+        cadEntities.map((e) => ({ t: e.type, p: e.pts, c: e.isClosed, r: e.role, rad: e.radius })),
+      ) +
+      '|' +
+      JSON.stringify(edgeTagMap) +
+      '|' +
+      flowType,
+    [cadEntities, edgeTagMap, flowType],
+  );
+  // Full signature also folds in the blocking - block edits mark the mesh stale
+  // (badge on the toggle) but do NOT raise a toast (that is just normal editing).
+  const geomSignature = useMemo(
+    () =>
+      geomSigCore +
+      '|' +
+      JSON.stringify(blocking?.vertices?.map((v) => v.pt) ?? null) +
+      '|' +
+      JSON.stringify(blocking?.edges?.map((e) => [e.nodes, e.law, e.ratio]) ?? null),
+    [geomSigCore, blocking],
   );
   const meshSigRef = useRef<string | null>(savedSession?.meshSig ?? null);
+  const meshCoreSigRef = useRef<string | null>(null);
 
   // Master CFD Project State
 
@@ -391,17 +469,59 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     },
     executionStatus: savedSession?.state?.executionStatus === 'completed' ? 'completed' : 'idle',
     residuals: savedSession?.state?.residuals ?? [],
-    terminalLogs: savedSession?.state?.terminalLogs ?? [
-      'OpenCFD ready.',
-    ],
+    terminalLogs: savedSession?.state?.terminalLogs ?? ['OpenCFD ready.'],
   }));
 
   const [meshData, setMeshData] = useState<any>(() => savedSession?.meshData ?? null);
   const [meshError, setMeshError] = useState<string | null>(null);
   const [fieldData, setFieldData] = useState<any>(() => savedSession?.fieldData ?? null);
-  const [caseFiles, setCaseFiles] = useState<Record<string, string>>(() => savedSession?.caseFiles ?? {});
+  const [caseFiles, setCaseFiles] = useState<Record<string, string>>(
+    () => savedSession?.caseFiles ?? {},
+  );
   const [isMeshing, setIsMeshing] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Distinct solver patches + their roles, for the Case Setup boundary table and
+  // the case generator. Once a mesh exists its boundary names are the ground
+  // truth for which patches the solver will see: the backend auto-classifies any
+  // domain edge the user left untagged (inlet / outlet / symmetry), so a patch
+  // can appear here with no explicit tag - infer its role from the name so it
+  // still gets a real BC and the solver never hits a missing-patchField error.
+  const patchRoles = useMemo(() => {
+    const order: BoundaryTag[] = ['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic'];
+    const roleFromName = (n: string): BoundaryTag => {
+      const k = n.toLowerCase();
+      return (order.find((t) => k === t || k.startsWith(t)) as BoundaryTag) || 'wall';
+    };
+    // Supersonic external flow: a `symmetry` plane mirrors the shock straight
+    // back into the domain, so treat any lateral symmetry patch as a
+    // non-reflecting far-field instead (unless the flow is genuinely a half-model
+    // on the centreline, which the box domains never are).
+    const ss =
+      state.physics.compressibility === 'compressible' &&
+      (state.physics.speedRegime === 'supersonic' || state.physics.speedRegime === 'hypersonic') &&
+      flowType === 'external';
+    const fix = (r: BoundaryTag): BoundaryTag => (ss && r === 'symmetry' ? 'farfield' : r);
+
+    const meshNames = Object.keys(meshData?.boundaries || {}).filter(
+      (n) => n !== 'frontAndBack' && n !== 'defaultFaces',
+    );
+    if (meshNames.length) {
+      const explicit = new Map<string, BoundaryTag>();
+      for (const e of boundaryEdges) if (e.explicit) explicit.set(e.tag, e.tag);
+      return meshNames
+        .map((name) => ({
+          name,
+          role: fix(explicit.get(name as BoundaryTag) || roleFromName(name)) as any,
+        }))
+        .sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
+    }
+    const seen = new Map<BoundaryTag, BoundaryTag>();
+    for (const e of boundaryEdges) if (e.explicit) seen.set(e.tag, e.tag);
+    return [...seen.keys()]
+      .sort((a, b) => order.indexOf(a) - order.indexOf(b))
+      .map((t) => ({ name: t, role: fix(t) as any }));
+  }, [boundaryEdges, meshData?.boundaries, state.physics.compressibility, state.physics.speedRegime, flowType]);
 
   // Full patch BC spec (roles + per-patch overrides) sent to the case generator.
   const patchSpec = useMemo(
@@ -409,7 +529,8 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       patchRoles.map(({ name, role }) => ({
         name,
         role,
-        bc: state.caseSetup.patches[name] ?? defaultPatchBC(role as any, state.physics.inletVelocity),
+        bc:
+          state.caseSetup.patches[name] ?? defaultPatchBC(role as any, state.physics.inletVelocity),
       })),
     [patchRoles, state.caseSetup.patches, state.physics.inletVelocity],
   );
@@ -417,7 +538,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     const cs = state.caseSetup;
     if (cs.refLengthOverride && cs.refLengthOverride > 0) return cs.refLengthOverride;
     return (flowType === 'internal' ? state.geometry.domainHeight : state.geometry.chord) || 1;
-  }, [state.caseSetup.refLengthOverride, flowType, state.geometry.domainHeight, state.geometry.chord]);
+  }, [
+    state.caseSetup.refLengthOverride,
+    flowType,
+    state.geometry.domainHeight,
+    state.geometry.chord,
+  ]);
   const makeCaseFiles = () => {
     // fold the angle-of-attack into the force directions before sending
     const dirs = directionsForAoA(state.geometry.angleOfAttackDeg || 0);
@@ -428,7 +554,15 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         forces: { ...state.solution.monitors.forces, ...dirs },
       },
     };
-    return generateCaseFiles(state.physics, state.boundaries, state.solver, patchSpec, caseRefLength, sol, projectId);
+    return generateCaseFiles(
+      state.physics,
+      state.boundaries,
+      state.solver,
+      patchSpec,
+      caseRefLength,
+      sol,
+      projectId,
+    );
   };
 
   // ── Auto-save session to the project folder on disk (~/.OpenCFD/projects) ──
@@ -438,7 +572,8 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     state: {
       ...state,
       residuals: state.residuals.length > 4000 ? state.residuals.slice(-4000) : state.residuals,
-      terminalLogs: state.terminalLogs.length > 800 ? state.terminalLogs.slice(-800) : state.terminalLogs,
+      terminalLogs:
+        state.terminalLogs.length > 800 ? state.terminalLogs.slice(-800) : state.terminalLogs,
     },
     cadEntities,
     edgeTagMap,
@@ -453,6 +588,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     freestreamVelocity,
     activeTagTool,
     blocking,
+    meshTopology,
     meshData,
     meshSig: meshSigRef.current,
     hasMesh: !!meshData?.num_elements,
@@ -469,7 +605,9 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     const delay = state.executionStatus === 'running' ? 8000 : 400;
     const timer = setTimeout(() => {
       saveProjectSession(projectId, sessionRef.current)
-        .then(() => { saveWarned.current = false; })
+        .then(() => {
+          saveWarned.current = false;
+        })
         .catch((err) => {
           console.warn('Project autosave note:', err);
           if (!saveWarned.current) {
@@ -495,6 +633,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     freestreamVelocity,
     activeTagTool,
     blocking,
+    meshTopology,
     meshData,
     fieldData,
     caseFiles,
@@ -574,7 +713,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   // an inlet + an outlet tag.
   const meshGate = useMemo(() => {
     const missing: string[] = [];
-    const drawn = cadEntities.filter(e => e.layer !== 'construction');
+    const drawn = cadEntities.filter((e) => e.layer !== 'construction');
     if (drawn.length === 0) missing.push('Draw or import a geometry');
     if (flowType === 'external' && !domainValidation.valid)
       missing.push(domainValidation.reason || 'Define the fluid domain');
@@ -585,27 +724,41 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
 
   const meshReady = !!meshData?.num_elements;
   // The mesh no longer matches the geometry if anything mesh-relevant changed.
-  const meshStale = !!meshData && meshSigRef.current !== null && meshSigRef.current !== geomSignature;
+  const meshStale =
+    !!meshData && meshSigRef.current !== null && meshSigRef.current !== geomSignature;
 
-  // One combined notice for "you edited the geometry": if the edit also broke
+  // One combined notice for"you edited the geometry": if the edit also broke
   // the domain, say so in the same toast instead of firing two.
   const lastEditNoticeRef = useRef<string>('');
   useEffect(() => {
     const broken = domainState === 'broken';
-    const notice = broken && meshStale ? 'both' : broken ? 'domain' : meshStale ? 'mesh' : '';
+    // only the geometry going stale (not block edits) is worth a toast
+    const geomStale =
+      !!meshData && meshCoreSigRef.current !== null && meshCoreSigRef.current !== geomSigCore;
+    const notice = broken && geomStale ? 'both' : broken ? 'domain' : geomStale ? 'mesh' : '';
     if (notice && notice !== lastEditNoticeRef.current) {
       lastEditNoticeRef.current = notice;
       if (notice === 'both')
-        toast('Domain boundary broke and the mesh is now out of date. Reselect the outline in the Domain step, then regenerate the mesh.', 'error', 8000);
+        toast(
+          'Domain boundary broke and the mesh is now out of date. Reselect the outline in the Domain step, then regenerate the mesh.',
+          'error',
+          8000,
+        );
       else if (notice === 'domain')
-        toast('Domain boundary broke - an edge changed. Reselect the outline in the Domain step and redefine it.', 'error', 8000);
+        toast(
+          'Domain boundary broke - an edge changed. Reselect the outline in the Domain step and redefine it.',
+          'error',
+          8000,
+        );
       else
         toast('Geometry changed since the mesh was made - regenerate to update it.', 'info', 5000);
     }
     if (!notice) lastEditNoticeRef.current = '';
-  }, [domainState, meshStale]);
+  }, [domainState, meshData, geomSigCore]);
 
-  const stageStatus: Partial<Record<StageId, { locked: boolean; reason?: string; missing?: string[] }>> = {
+  const stageStatus: Partial<
+    Record<StageId, { locked: boolean; reason?: string; missing?: string[] }>
+  > = {
     geometry: { locked: false },
     caseSetup: { locked: false },
     mesh: {
@@ -632,7 +785,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     // A failed regeneration must not leave an old or placeholder mesh visible.
     setMeshData(null);
     setMeshError(null);
-    setFieldData(null);
+    clearResultsCache();
     setState((prev) => ({
       ...prev,
       executionStatus: 'meshing',
@@ -663,16 +816,24 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         cadEntities,
         edgeTagMap,
         flowType,
+        // Supersonic: an untagged lateral boundary must become a non-reflecting
+        // far-field, not a `symmetry` plane (a symmetry plane mirrors the shock
+        // straight back into the domain).
+        speedRegime: state.physics.speedRegime,
+        compressibility: state.physics.compressibility,
       });
 
       setMeshData(mesh);
       meshSigRef.current = geomSignature;
+      meshCoreSigRef.current = geomSigCore;
 
       toast(`Mesh ready: ${mesh.num_nodes} nodes, ${mesh.num_elements} cells.`, 'success');
       // Only surface warnings the user can act on. Routine internal fallbacks
       // (boundary layer dropped, MeshAdapt fallback, prism-to-graded) are noise.
       (mesh.warnings || [])
-        .filter((w: string) => /coarsen|too aggressive|cell sizes|closed loop|inlet|outlet/i.test(w))
+        .filter((w: string) =>
+          /coarsen|too aggressive|cell sizes|closed loop|inlet|outlet/i.test(w),
+        )
         .forEach((w: string) => toast(w, 'info', 7000));
 
       // Mesh generation succeeded independently of optional post-processing.
@@ -718,13 +879,16 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     const af = airfoilsForCGrid(cadEntities);
     if (af.some((a) => a.aspect >= 2.2)) return 'cgrid';
     const body = cadEntities.some(
-      (e) => e.layer !== 'construction' && e.role !== 'domain_boundary'
-        && (e.isClosed || e.type === 'circle' || e.type === 'rectangle'),
+      (e) =>
+        e.layer !== 'construction' &&
+        e.role !== 'domain_boundary' &&
+        (e.isClosed || e.type === 'circle' || e.type === 'rectangle'),
     );
     return body ? 'ogrid' : 'hgrid';
   }, [cadEntities]);
 
   const handleBuildBlocks = (kind: 'hgrid' | 'ogrid' | 'cgrid') => {
+    setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
     if (kind === 'cgrid') {
       const af = airfoilsForCGrid(cadEntities)[0];
       const domain = outlineRing(cadEntities.filter((e) => e.role === 'domain_boundary'));
@@ -735,7 +899,11 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       const ent = cadEntities[af.index];
       const raw = cGridFromAirfoil(entityRing(ent), domain, bodyPatchFor(ent.id));
       if (!raw) {
-        toast('Could not build a C-grid. Give the airfoil more room downstream of the trailing edge.', 'error', 7000);
+        toast(
+          'Could not build a C-grid. Give the airfoil more room downstream of the trailing edge.',
+          'error',
+          7000,
+        );
         return;
       }
       const bk = applyTargetCellSize(raw, autoCellSize(raw));
@@ -754,15 +922,25 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       for (const b of bodiesForOgrid(cadEntities, bk)) {
         const ent = cadEntities[b.index];
         const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id));
-        if (next) { bk = next; wrapped += 1; }
+        if (next) {
+          bk = next;
+          wrapped += 1;
+        }
       }
     }
     bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
     setBlocking(bk);
     if (kind === 'ogrid' && wrapped === 0) {
-      toast('Built blocks, but no body could be wrapped - it must sit clear of the domain edges.', 'info', 7000);
+      toast(
+        'Built blocks, but no body could be wrapped - it must sit clear of the domain edges.',
+        'info',
+        7000,
+      );
     } else if (wrapped > 0) {
-      toast(`Built ${bk.blocks.length} blocks with an O-grid around ${wrapped} bod${wrapped > 1 ? 'ies' : 'y'}.`, 'success');
+      toast(
+        `Built ${bk.blocks.length} blocks with an O-grid around ${wrapped} bod${wrapped > 1 ? 'ies' : 'y'}.`,
+        'success',
+      );
     } else {
       toast(`Built ${bk.blocks.length} block${bk.blocks.length > 1 ? 's' : ''}.`, 'success');
     }
@@ -779,11 +957,18 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     if (!ent) return;
     const next = wrapBodyOgrid(blocking, entityRing(ent), bodyPatchFor(ent.id));
     if (!next) {
-      toast('Could not wrap that body. Make sure it sits well inside the domain, clear of the edges.', 'error', 7000);
+      toast(
+        'Could not wrap that body. Make sure it sits well inside the domain, clear of the edges.',
+        'error',
+        7000,
+      );
       return;
     }
     setBlocking(propagateNodeCounts(next));
-    toast('O-grid ring built around the body. Set the ring and wall-normal counts below.', 'success');
+    toast(
+      'O-grid ring built around the body. Set the ring and wall-normal counts below.',
+      'success',
+    );
   };
 
   const handleGenerateStructuredMesh = async () => {
@@ -794,7 +979,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     setIsMeshing(true);
     setMeshData(null);
     setMeshError(null);
-    setFieldData(null);
+    clearResultsCache();
     setState((prev) => ({
       ...prev,
       executionStatus: 'meshing',
@@ -805,6 +990,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       const mesh = await generateStructuredMesh(req, { smooth: structuredSmooth });
       setMeshData(mesh);
       meshSigRef.current = geomSignature;
+      meshCoreSigRef.current = geomSigCore;
       toast(`Structured mesh: ${mesh.num_nodes} nodes, ${mesh.num_elements} quads.`, 'success');
       (mesh.warnings || [])
         .filter((w: string) => /coarsen|too aggressive|cell sizes|tris|non-quad/i.test(w))
@@ -855,7 +1041,7 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
         geometry: { ...prev.geometry, name },
         terminalLogs: [
           ...prev.terminalLogs,
-          `[2D CAD] Converted sketch "${name}" to CFD mesh: ${mesh.num_nodes} nodes, ${mesh.num_elements} elements.`,
+          `[2D CAD] Converted sketch"${name}" to CFD mesh: ${mesh.num_nodes} nodes, ${mesh.num_elements} elements.`,
         ],
       }));
     } catch (err: any) {
@@ -884,18 +1070,27 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   useEffect(() => {
     const cs = state.caseSetup;
     if (!cs.linkFirstCellToMesh) return;
-    const refLen = cs.refLengthOverride && cs.refLengthOverride > 0
-      ? cs.refLengthOverride
-      : (flowType === 'internal' ? state.geometry.domainHeight : state.geometry.chord) || 1;
+    const refLen =
+      cs.refLengthOverride && cs.refLengthOverride > 0
+        ? cs.refLengthOverride
+        : (flowType === 'internal' ? state.geometry.domainHeight : state.geometry.chord) || 1;
     const wr = wallResolution(
-      { velocity: state.physics.inletVelocity, density: state.physics.density,
-        kinematicViscosity: state.physics.kinematicViscosity, refLength: refLen },
-      cs.targetYPlus, cs.growthRate,
+      {
+        velocity: state.physics.inletVelocity,
+        density: state.physics.density,
+        kinematicViscosity: state.physics.kinematicViscosity,
+        refLength: refLen,
+      },
+      cs.targetYPlus,
+      cs.growthRate,
     );
     const mm = Number(wr.firstCellHeightMm.toPrecision(4));
     setState((prev) => {
-      if (Math.abs(prev.geometry.firstLayerHeightMm - mm) < mm * 1e-3
-          && prev.geometry.numPrismLayers === wr.layerCount) return prev;
+      if (
+        Math.abs(prev.geometry.firstLayerHeightMm - mm) < mm * 1e-3 &&
+        prev.geometry.numPrismLayers === wr.layerCount
+      )
+        return prev;
       return {
         ...prev,
         geometry: {
@@ -908,13 +1103,23 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       };
     });
   }, [
-    state.caseSetup.linkFirstCellToMesh, state.caseSetup.targetYPlus, state.caseSetup.growthRate,
-    state.caseSetup.refLengthOverride, state.physics.inletVelocity, state.physics.density,
-    state.physics.kinematicViscosity, flowType, state.geometry.chord, state.geometry.domainHeight,
+    state.caseSetup.linkFirstCellToMesh,
+    state.caseSetup.targetYPlus,
+    state.caseSetup.growthRate,
+    state.caseSetup.refLengthOverride,
+    state.physics.inletVelocity,
+    state.physics.density,
+    state.physics.kinematicViscosity,
+    flowType,
+    state.geometry.chord,
+    state.geometry.domainHeight,
   ]);
 
-  const handleSetSolution = (patch: (c: import('./solver/solverConfig').SolverConfig) => import('./solver/solverConfig').SolverConfig) =>
-    setState((prev) => ({ ...prev, solution: patch(prev.solution) }));
+  const handleSetSolution = (
+    patch: (
+      c: import('./solver/solverConfig').SolverConfig,
+    ) => import('./solver/solverConfig').SolverConfig,
+  ) => setState((prev) => ({ ...prev, solution: patch(prev.solution) }));
 
   const solverConvergence = useMemo(() => {
     const r = state.residuals[state.residuals.length - 1];
@@ -924,6 +1129,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   }, [state.residuals]);
 
   const [resultsLoading, setResultsLoading] = useState(false);
+  const [monitorOpen, setMonitorOpen] = useState(false); // right-hand residuals/forces rail
+  const [caseFilesOpen, setCaseFilesOpen] = useState(false); // OpenFOAM dicts modal
+  // Live cell-based field streamed from the solver while it runs (Solver stage).
+  const [livePreview, setLivePreview] = useState<
+    { time: string; fields: Record<string, number[]>; ranges: Record<string, [number, number]> } | null
+  >(null);
   const [transientFrameIndex, setTransientFrameIndex] = useState(0);
   const [transientPlaying, setTransientPlaying] = useState(false);
   const [transientSpeed, setTransientSpeed] = useState<number>(1.0);
@@ -940,6 +1151,17 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   const frameCacheRef = useRef<Map<number, any>>(new Map());
   const CACHE_MAX = 50;
 
+  // Wipe every cached results frame + transient bookkeeping. Must run whenever the
+  // mesh changes or a new solve starts, or the Results tab / player will keep
+  // serving the previous run's (or previous mesh's) solution.
+  const clearResultsCache = () => {
+    frameCacheRef.current.clear();
+    transientTimesRef.current = [];
+    transientFrameIndexRef.current = 0;
+    setTransientFrameIndex(0);
+    setFieldData(null);
+  };
+
   // In-flight AbortController for the current fetch (cancelled when a newer request starts)
   const fetchAbortRef = useRef<AbortController | null>(null);
 
@@ -948,21 +1170,43 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   const scrubDebounceRef = useRef<number | null>(null);
 
   const transientTimes = useMemo(
-    () => (Array.isArray(fieldData?.availableTimes) ? fieldData.availableTimes.map(Number).filter(Number.isFinite).sort((a: number, b: number) => a - b) : []),
+    () =>
+      Array.isArray(fieldData?.availableTimes)
+        ? fieldData.availableTimes
+            .map(Number)
+            .filter(Number.isFinite)
+            .sort((a: number, b: number) => a - b)
+        : [],
     [fieldData?.availableTimes],
   );
 
   // Sync refs whenever state changes
-  useEffect(() => { transientTimesRef.current = transientTimes; }, [transientTimes]);
-  useEffect(() => { transientFrameIndexRef.current = transientFrameIndex; }, [transientFrameIndex]);
-  useEffect(() => { transientPlayingRef.current = transientPlaying; }, [transientPlaying]);
-  useEffect(() => { transientSpeedRef.current = transientSpeed; }, [transientSpeed]);
-  useEffect(() => { meshDataRef.current = meshData; }, [meshData]);
-  useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
+  useEffect(() => {
+    transientTimesRef.current = transientTimes;
+  }, [transientTimes]);
+  useEffect(() => {
+    transientFrameIndexRef.current = transientFrameIndex;
+  }, [transientFrameIndex]);
+  useEffect(() => {
+    transientPlayingRef.current = transientPlaying;
+  }, [transientPlaying]);
+  useEffect(() => {
+    transientSpeedRef.current = transientSpeed;
+  }, [transientSpeed]);
+  useEffect(() => {
+    meshDataRef.current = meshData;
+  }, [meshData]);
+  useEffect(() => {
+    projectIdRef.current = projectId;
+  }, [projectId]);
 
   // Core fetch — always cancels any previous in-flight request first.
   // Returns true if data was loaded (not aborted/errored).
-  const fetchFrame = async (time: number, frameIdx: number, signal: AbortSignal): Promise<boolean> => {
+  const fetchFrame = async (
+    time: number,
+    frameIdx: number,
+    signal: AbortSignal,
+  ): Promise<boolean> => {
     const mesh = meshDataRef.current;
     if (!mesh?.nodes?.length) return false;
 
@@ -994,7 +1238,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
 
     // Update available times in ref from this response
     const times = Array.isArray(data.availableTimes)
-      ? data.availableTimes.map(Number).filter(Number.isFinite).sort((a: number, b: number) => a - b)
+      ? data.availableTimes
+          .map(Number)
+          .filter(Number.isFinite)
+          .sort((a: number, b: number) => a - b)
       : [];
     if (times.length) transientTimesRef.current = times;
 
@@ -1029,11 +1276,24 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
 
     if (data) {
       const times = Array.isArray(data.availableTimes)
-        ? data.availableTimes.map(Number).filter(Number.isFinite).sort((a: number, b: number) => a - b)
+        ? data.availableTimes
+            .map(Number)
+            .filter(Number.isFinite)
+            .sort((a: number, b: number) => a - b)
         : [];
       transientTimesRef.current = times;
 
-      const frame = frameIdx !== undefined ? frameIdx : (time !== undefined ? times.indexOf(Number(data.time)) : -1);
+      // When invoked right after a run (no explicit time/frame), point the player
+      // at the LAST written frame - that is what `data` holds, and it is the
+      // result the user just computed.
+      const frame =
+        frameIdx !== undefined
+          ? frameIdx
+          : time !== undefined
+            ? times.indexOf(Number(data.time))
+            : fromRun && times.length
+              ? Math.max(0, times.indexOf(Number(data.time)))
+              : -1;
       if (frame >= 0) {
         frameCacheRef.current.set(frame, data);
         setTransientFrameIndex(frame);
@@ -1080,32 +1340,35 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
     });
   }, []);
 
-  const selectTransientFrame = useCallback((index: number) => {
-    const times = transientTimesRef.current;
-    const clamped = Math.max(0, Math.min(times.length - 1, index));
-    if (times[clamped] === undefined) return;
+  const selectTransientFrame = useCallback(
+    (index: number) => {
+      const times = transientTimesRef.current;
+      const clamped = Math.max(0, Math.min(times.length - 1, index));
+      if (times[clamped] === undefined) return;
 
-    // 1. Instant optimistic UI update for 60fps realtime scrubbing
-    setTransientFrameIndex(clamped);
-    transientFrameIndexRef.current = clamped;
+      // 1. Instant optimistic UI update for 60fps realtime scrubbing
+      setTransientFrameIndex(clamped);
+      transientFrameIndexRef.current = clamped;
 
-    // 2. Cache hit → instant GPU field update
-    if (frameCacheRef.current.has(clamped)) {
-      const cached = frameCacheRef.current.get(clamped)!;
-      setFieldData(cached);
-      prefetchAdjacent(clamped);
-      return;
-    }
+      // 2. Cache hit → instant GPU field update
+      if (frameCacheRef.current.has(clamped)) {
+        const cached = frameCacheRef.current.get(clamped)!;
+        setFieldData(cached);
+        prefetchAdjacent(clamped);
+        return;
+      }
 
-    // 3. Realtime network fetch with immediate in-flight abort
-    if (fetchAbortRef.current) fetchAbortRef.current.abort();
-    const aborter = new AbortController();
-    fetchAbortRef.current = aborter;
+      // 3. Realtime network fetch with immediate in-flight abort
+      if (fetchAbortRef.current) fetchAbortRef.current.abort();
+      const aborter = new AbortController();
+      fetchAbortRef.current = aborter;
 
-    void fetchFrame(times[clamped], clamped, aborter.signal).then((ok) => {
-      if (ok) prefetchAdjacent(clamped);
-    });
-  }, [prefetchAdjacent]);
+      void fetchFrame(times[clamped], clamped, aborter.signal).then((ok) => {
+        if (ok) prefetchAdjacent(clamped);
+      });
+    },
+    [prefetchAdjacent],
+  );
 
   // Single stable interval/timeout loop — calibrated to actual physical simulation time
   const playTimeoutRef = useRef<number | null>(null);
@@ -1172,14 +1435,20 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
   }, [transientSpeed, scheduleNextFrame]);
 
   // Cleanup on unmount
-  useEffect(() => () => {
-    if (playTimeoutRef.current) window.clearTimeout(playTimeoutRef.current);
-    if (fetchAbortRef.current) fetchAbortRef.current.abort();
-    if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (playTimeoutRef.current) window.clearTimeout(playTimeoutRef.current);
+      if (fetchAbortRef.current) fetchAbortRef.current.abort();
+      if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
+    },
+    [],
+  );
 
   const handleRunSolver = async () => {
     if (wsRef.current) wsRef.current.close();
+    setMonitorOpen(true); // reveal the residuals / forces rail for the run
+    setLivePreview(null); // start the live field preview fresh
+    clearResultsCache(); // the previous run's frames must not survive a new solve
 
     setState((prev) => ({
       ...prev,
@@ -1211,7 +1480,11 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           project_id: projectId,
           physics: state.physics,
           mesh: meshData
-            ? { nodes: meshData.nodes, elements: meshData.elements, boundaries: meshData.boundaries }
+            ? {
+                nodes: meshData.nodes,
+                elements: meshData.elements,
+                boundaries: meshData.boundaries,
+              }
             : null,
           wallPatches: patchRoles.filter((p) => p.role === 'wall').map((p) => p.name),
           patchTypes: Object.fromEntries(
@@ -1223,14 +1496,16 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           iterations: state.solution.run.iterations,
           regime: state.physics.regime,
           velocity: state.physics.inletVelocity,
-          reynolds: (state.physics.inletVelocity * caseRefLength) / Math.max(state.physics.kinematicViscosity, 1e-12),
+          reynolds:
+            (state.physics.inletVelocity * caseRefLength) /
+            Math.max(state.physics.kinematicViscosity, 1e-12),
           cells: meshData?.num_elements ?? 20000,
           relax: state.solution.controls.relax,
           momentumOrder: state.solution.methods.momentum,
           turbulenceModel: state.physics.turbulenceModelId,
           forces: state.solution.monitors.forces.enabled,
           init: state.solution.run.init,
-        })
+        }),
       );
     };
 
@@ -1246,11 +1521,16 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           ...prev,
           residuals: [...prev.residuals, msg.data],
         }));
+      } else if (msg.type === 'field') {
+        setLivePreview(msg.data);
       } else if (msg.type === 'status' && msg.status === 'completed') {
         setState((prev) => ({
           ...prev,
           executionStatus: 'completed',
-          terminalLogs: [...prev.terminalLogs, `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`],
+          terminalLogs: [
+            ...prev.terminalLogs,
+            `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`,
+          ],
         }));
         toast('Solver run finished.', 'success');
         void loadResults(true);
@@ -1261,6 +1541,12 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           terminalLogs: [...prev.terminalLogs, `[Error] ${msg.message}`],
         }));
         toast(msg.message, 'error');
+        // A diverged / stopped run still wrote partial fields - refresh the
+        // Results tab from them instead of leaving the previous run's data.
+        if (msg.results_available) {
+          void loadResults(true);
+          toast('Loaded the partial fields from the last written step.', 'info', 6000);
+        }
       }
     };
 
@@ -1268,7 +1554,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       setState((prev) => ({
         ...prev,
         executionStatus: 'error',
-        terminalLogs: [...prev.terminalLogs, '[Error] Could not reach the solver stream (backend down?).'],
+        terminalLogs: [
+          ...prev.terminalLogs,
+          '[Error] Could not reach the solver stream (backend down?).',
+        ],
       }));
       toast('Could not reach the solver stream.', 'error');
     };
@@ -1295,7 +1584,13 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
       />
 
       {/* 2. WORKFLOW NAVIGATION STRIP (36px) */}
-      <WorkflowStrip activeStage={activeStage} onSelectStage={setActiveStage} stageStatus={stageStatus} />
+      <WorkflowStrip
+        activeStage={activeStage}
+        onSelectStage={setActiveStage}
+        stageStatus={stageStatus}
+        onOpenCaseFiles={() => setCaseFilesOpen(true)}
+        caseFilesCount={Object.keys(caseFiles).length}
+      />
 
       {/* 3. THREE-COLUMN HERO WORKSPACE */}
       <div className="flex-1 flex min-h-0 relative">
@@ -1311,26 +1606,34 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           </div>
         )}
         {/* Workbench stays mounted under the Case Setup overlay so CAD state is
-            never lost when switching stages. */}
+ never lost when switching stages. */}
         {/* Left Column: Stage Controls (280px) */}
         <LeftStagePanel
           activeStage={activeStage}
           onSelectStage={setActiveStage}
           stageStatus={stageStatus}
           state={state}
-          updateGeometry={(p) => setState((prev) => ({ ...prev, geometry: { ...prev.geometry, ...p } }))}
-          updatePhysics={(p) => setState((prev) => ({
-            ...prev,
-            physics: { ...prev.physics, ...p },
-            boundaries: {
-              ...prev.boundaries,
-              ...(p.inletVelocity !== undefined ? { inletVelocity: p.inletVelocity } : {}),
-            },
-          }))}
-          updateBoundaries={(p) => setState((prev) => ({ ...prev, boundaries: { ...prev.boundaries, ...p } }))}
+          updateGeometry={(p) =>
+            setState((prev) => ({ ...prev, geometry: { ...prev.geometry, ...p } }))
+          }
+          updatePhysics={(p) =>
+            setState((prev) => ({
+              ...prev,
+              physics: { ...prev.physics, ...p },
+              boundaries: {
+                ...prev.boundaries,
+                ...(p.inletVelocity !== undefined ? { inletVelocity: p.inletVelocity } : {}),
+              },
+            }))
+          }
+          updateBoundaries={(p) =>
+            setState((prev) => ({ ...prev, boundaries: { ...prev.boundaries, ...p } }))
+          }
           updateYPlus={(p) => setState((prev) => ({ ...prev, yplus: { ...prev.yplus, ...p } }))}
           updateSolver={(p) => setState((prev) => ({ ...prev, solver: { ...prev.solver, ...p } }))}
-          updatePostProcess={(p) => setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...p } }))}
+          updatePostProcess={(p) =>
+            setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...p } }))
+          }
           onGenerateMesh={handleGenerateMesh}
           blocking={blocking}
           onBuildBlocks={handleBuildBlocks}
@@ -1341,6 +1644,13 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           structuredHint={structuredHint}
           structuredSmooth={structuredSmooth}
           setStructuredSmooth={setStructuredSmooth}
+          meshTopology={meshTopology}
+          onMeshTopologyChange={changeMeshTopology}
+          width={sidebarW}
+          onWidthChange={(w) => {
+            setSidebarW(w);
+            try { localStorage.setItem('opencfd_sidebar_w', String(Math.round(w))); } catch { /* ignore */ }
+          }}
           onApplyYPlusToMesh={handleApplyYPlusToMesh}
           meshData={meshData}
           meshError={meshError}
@@ -1348,13 +1658,17 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
           onRunSolver={handleRunSolver}
           onStopSolver={handleStopSolver}
           projectId={projectId}
-          onReloadResults={() => loadResults(false)}
+          onReloadResults={() => {
+            clearResultsCache();
+            void loadResults(true);
+          }}
           resultsLoading={resultsLoading}
           fieldSource={fieldData?.source}
           fieldTime={fieldData?.time}
           onSetSolution={handleSetSolution}
           onSetTimeFormulation={(t) =>
-            setState((prev) => ({ ...prev, physics: { ...prev.physics, timeFormulation: t } }))}
+            setState((prev) => ({ ...prev, physics: { ...prev.physics, timeFormulation: t } }))
+          }
           solverPatchNames={patchRoles.map((p) => p.name)}
           solverWallPatches={patchRoles.filter((p) => p.role === 'wall').map((p) => p.name)}
           solverConvergence={solverConvergence}
@@ -1366,7 +1680,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
             try {
               const res = await uploadAndParseAirfoil(file);
               const pts: Point2D[] = res.points.map(([x, y]: number[]) => ({ x, y }));
-              setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name: res.name || file.name } }));
+              setState((prev) => ({
+                ...prev,
+                geometry: { ...prev.geometry, name: res.name || file.name },
+              }));
               setPendingImportFile({ type: 'parsed', name: res.name || file.name, points: pts });
             } catch {
               setPendingImportFile({ type: 'airfoil', file });
@@ -1376,7 +1693,10 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
             setActiveStage('geometry');
             const res = await fetchAndParseAirfoilFromUrl(url);
             const pts: Point2D[] = res.points.map(([x, y]: number[]) => ({ x, y }));
-            setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name: res.name || 'Airfoil' } }));
+            setState((prev) => ({
+              ...prev,
+              geometry: { ...prev.geometry, name: res.name || 'Airfoil' },
+            }));
             setPendingImportFile({ type: 'parsed', name: res.name || 'Airfoil', points: pts });
           }}
           onUploadDxfFile={(file) => {
@@ -1432,13 +1752,17 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
                 meshData={meshData}
                 meshStale={meshStale}
                 blocking={blocking}
+                blocksBuiltTick={blocksBuiltTick}
                 onUpdateBlocking={handleUpdateBlocking}
-                showBlocking={activeStage === 'mesh'}
+                showBlocking={activeStage === 'mesh' && meshTopology === 'structured'}
                 domainBroken={domainState === 'broken'}
                 isMeshing={isMeshing}
-                showMesh={activeStage === 'mesh' || activeStage === 'solver' || activeStage === 'results'}
+                showMesh={
+                  activeStage === 'mesh' || activeStage === 'solver' || activeStage === 'results'
+                }
                 meshOnly={activeStage === 'solver' || activeStage === 'results'}
                 showField={activeStage === 'results'}
+                livePreview={activeStage === 'solver' ? livePreview : null}
                 fieldData={fieldData}
                 activeField={state.postprocess.activeField}
                 colormap={state.postprocess.colormap}
@@ -1477,34 +1801,53 @@ export function App({ projectId, projectName, initialSession, onExitHome, onProj
                 onRequestMeshHandoffRef={requestMeshHandoffRef}
                 onRequestDownloadBlockMeshDictRef={requestDownloadBlockMeshDictRef}
                 cadName={state.geometry.name}
-                onCadNameChange={(name) => setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name } }))}
+                onCadNameChange={(name) =>
+                  setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name } }))
+                }
                 isTransient={state.physics.timeFormulation === 'transient'}
                 transientTimes={transientTimes}
                 transientFrameIndex={transientFrameIndex}
                 transientPlaying={transientPlaying}
                 transientSpeed={transientSpeed}
                 onSelectTransientFrame={selectTransientFrame}
-                onToggleTransientPlay={() => transientPlaying ? stopPlayback() : startPlayback()}
+                onToggleTransientPlay={() => (transientPlaying ? stopPlayback() : startPlayback())}
                 onSelectTransientSpeed={setTransientSpeed}
               />
             </div>
           </main>
 
-          {/* 4. COLLAPSIBLE BOTTOM DRAWER (Slides over canvas as overlay; never resizes/squishes canvas) */}
-          <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-auto shadow-lg">
+          {/* 4. COLLAPSIBLE BOTTOM DRAWER — console only (Slides over canvas as overlay) */}
+          <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-auto">
             <BottomSolverDrawer
-              residuals={state.residuals}
               terminalLogs={state.terminalLogs}
-              caseFiles={caseFiles}
               executionStatus={state.executionStatus}
               onClearLogs={() => setState((prev) => ({ ...prev, terminalLogs: [] }))}
             />
           </div>
         </div>
+
+        {/* Right rail: live residuals + force coefficients. A real flex child, so
+            expanding/collapsing it pushes the canvas instead of covering it. */}
+        {activeStage === 'solver' && (
+          <SolverMonitorRail
+            residuals={state.residuals}
+            executionStatus={state.executionStatus}
+            open={monitorOpen}
+            onOpenChange={setMonitorOpen}
+          />
+        )}
       </div>
 
       {/* 5. BOTTOM STATUS BAR (24px) */}
       <StatusBar state={state} meshData={meshData} />
+
+      <CaseFilesModal
+        open={caseFilesOpen}
+        onClose={() => setCaseFilesOpen(false)}
+        caseFiles={caseFiles}
+        projectId={projectId}
+        projectName={projectName}
+      />
     </div>
   );
 }

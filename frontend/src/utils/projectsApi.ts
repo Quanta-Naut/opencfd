@@ -1,8 +1,17 @@
 import { API_BASE } from './backend';
 
+export type PreviewShape =
+  | { kind: 'circle'; c: [number, number]; r: number }
+  | { kind: 'arc'; c: [number, number]; r: number; a0: number; a1: number }
+  | { kind: 'path'; pts: number[][]; closed: boolean };
+
 export interface ProjectPreview {
-  points: number[][];
+  entities: PreviewShape[];
+  domain: [number, number, number, number] | null;
+  domainShape?: string;
   bbox: [number, number, number, number];
+  flow: 'external' | 'internal' | string;
+  aoa: number;
 }
 
 export interface ProjectSummary {
@@ -10,6 +19,7 @@ export interface ProjectSummary {
   entityCount: number;
   hasMesh: boolean;
   resolution: string;
+  flow?: 'external' | 'internal' | string;
   preview: ProjectPreview | null;
 }
 

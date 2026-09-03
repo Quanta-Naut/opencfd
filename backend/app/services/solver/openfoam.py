@@ -12,10 +12,12 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.services.foam.system import pick_solver
+from app.services.solver.results import read_field_preview
 from .base import SolverAdapter
 
 
@@ -209,12 +211,16 @@ class OpenFoamAdapter(SolverAdapter):
             if not want:
                 return m.group(0)
             inner = re.sub(r"type\s+\w+;", f"type            {want};", inner, count=1)
+            # An inGroups whose name equals the patch name makes OpenFOAM warn
+            # "Removing patchGroup '<x>' which clashes with patch ... of the same
+            # name" - so only add the group when it differs from the patch name.
+            add_group = want if want != name else None
             if want in self._CONSTRAINT:
                 # constraint patches carry no physicalType and want inGroups set
                 inner = re.sub(r"\s*physicalType\s+\w+;", "", inner)
-                if "inGroups" not in inner:
-                    inner = inner.rstrip() + f"\n        inGroups        1({want});\n    "
-            elif want == "wall" and "inGroups" not in inner:
+                if add_group and "inGroups" not in inner:
+                    inner = inner.rstrip() + f"\n        inGroups        1({add_group});\n    "
+            elif want == "wall" and add_group and "inGroups" not in inner:
                 inner = inner.rstrip() + "\n        inGroups        1(wall);\n    "
             return f"{name}\n    {{{inner}}}"
 
@@ -303,8 +309,12 @@ class OpenFoamAdapter(SolverAdapter):
         except RuntimeError:
             pass
 
-        # 5. optional potential-flow initialisation
-        if config.get("init") == "potentialFlow":
+        # 5. optional potential-flow initialisation. potentialFoam is
+        #    incompressible (it writes a volumetric phi), so never run it for a
+        #    compressible case - the `fluid` module would then mix flux units and
+        #    abort in momentumPredictor. Compressible starts from the freestream
+        #    internalField instead (see foam/fields.py).
+        if config.get("init") == "potentialFlow" and physics.get("compressibility") != "compressible":
             try:
                 async for ev in self._stream("potentialFoam -initialiseUBCs || true", "potentialFoam"):
                     yield ev
@@ -322,6 +332,12 @@ class OpenFoamAdapter(SolverAdapter):
         residuals = ResidualStream()
         forces = bool(config.get("forces", True))
         tail: List[str] = []
+        # live cell-based field preview: poll the newest written time dir every
+        # few seconds and push it to the viewer while the solve runs.
+        preview_mesh = config.get("mesh") if config.get("mesh", {}).get("nodes") else None
+        loop = asyncio.get_event_loop()
+        last_preview_time = ""
+        next_preview_at = time.monotonic() + 4.0
         try:
             async for raw in proc.stdout:
                 line = raw.decode(errors="replace").rstrip()
@@ -343,25 +359,39 @@ class OpenFoamAdapter(SolverAdapter):
                                        f"{rp:.3e}" if isinstance(rp, float) else line}
                 elif line.startswith(("Time = ", "ExecutionTime", "SIMPLE", "PIMPLE", "Courant")):
                     yield {"type": "log", "line": f"[{solver_bin}] {line}"}
+
+                if preview_mesh and time.monotonic() >= next_preview_at:
+                    next_preview_at = time.monotonic() + 3.0
+                    fp = await loop.run_in_executor(
+                        None, read_field_preview, str(case), preview_mesh, None
+                    )
+                    if fp and fp.get("time") != last_preview_time:
+                        last_preview_time = fp["time"]
+                        yield {"type": "field", "data": fp}
             rc = await proc.wait()
         except asyncio.CancelledError:
             proc.kill()
             raise
 
+        # Always try to make the latest written time usable for the Results tab -
+        # even a diverged run leaves partial fields the user will want to inspect.
+        try:
+            async for ev in self._stream(
+                "postProcess -func writeCellCentres -latestTime", "postProcess"
+            ):
+                _ = ev
+        except RuntimeError as e:
+            yield {"type": "log",
+                   "line": f"[postProcess] {e} - results will use mesh centroids instead"}
+
         if rc == 0 or residuals.converged:
-            # cell-centre coords for mapping fields back to the viewer mesh
-            try:
-                async for ev in self._stream(
-                    "postProcess -func writeCellCentres -latestTime", "postProcess"
-                ):
-                    _ = ev
-            except RuntimeError as e:
-                yield {"type": "log",
-                       "line": f"[postProcess] {e} - results will use mesh centroids instead"}
             yield {"type": "status", "status": "completed", "iterations": residuals.iteration}
         else:
             yield {"type": "log", "line": "\n".join(tail[-20:])}
-            yield {"type": "error", "message": f"{solver_bin} exited with code {rc}"}
+            # `results_available` tells the frontend to still refresh the Results
+            # tab from whatever partial time dirs were written before the crash.
+            yield {"type": "error", "message": f"{solver_bin} exited with code {rc}",
+                   "results_available": True, "iterations": residuals.iteration}
 
 
 class LocalOpenFoam(OpenFoamAdapter):

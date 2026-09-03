@@ -676,17 +676,20 @@ export function wrapBodyOgrid(
   let host = containing(work);
   if (!host) return null;
 
-  // Carve a snug box around the body so the O-ring is a sane thickness and the
-  // rest of the domain stays H-grid. Skip when the host is already tight.
+  // Carve a SNUG box around the body so the O-ring stays thin and orthogonal and
+  // the rest of the domain is a clean Cartesian H-grid. A thick O-ring is what
+  // makes the four corner wedge blocks skew badly, so keep the offset small.
   const bw = bb.maxX - bb.minX, bh = bb.maxY - bb.minY;
   const hb0 = boundsOf(blockPolygon(work, host));
   const gapL = bb.minX - hb0.minX, gapR = hb0.maxX - bb.maxX;
   const gapB = bb.minY - hb0.minY, gapT = hb0.maxY - bb.maxY;
   const minGap = Math.min(gapL, gapR, gapB, gapT);
-  const hostTooBig = hb0.maxX - hb0.minX > bw * 2.6 || hb0.maxY - hb0.minY > bh * 2.6;
-  if (minGap > 1e-6 && hostTooBig) {
-    const padX = Math.max(Math.min(bw * 0.6, gapL * 0.85, gapR * 0.85), bw * 0.03);
-    const padY = Math.max(Math.min(bh * 0.6, gapB * 0.85, gapT * 0.85), bh * 0.03);
+  const hostTooBig = hb0.maxX - hb0.minX > bw * 1.7 || hb0.maxY - hb0.minY > bh * 1.7;
+  if (minGap > bw * 0.04 && hostTooBig) {
+    // ring reaches ~0.3 * body size out from the wall
+    const off = Math.max(bw, bh) * 0.3;
+    const padX = Math.max(Math.min(off, gapL * 0.9, gapR * 0.9), bw * 0.05);
+    const padY = Math.max(Math.min(off, gapB * 0.9, gapT * 0.9), bh * 0.05);
     for (const [ax, v] of [
       ['x', bb.minX - padX], ['x', bb.maxX + padX],
       ['y', bb.minY - padY], ['y', bb.maxY + padY],
@@ -697,72 +700,133 @@ export function wrapBodyOgrid(
   }
   if (!host || !fullyInside(host, work)) return null;
 
-  const hostBlk = host;
-  const cornerIds = blockCornerIds(work, hostBlk);
-  if (cornerIds.length !== 4) return null;
-  const vmap = new Map(work.vertices.map((v) => [v.id, v.pt] as const));
-  const corners = cornerIds.map((id) => vmap.get(id)!);
-
-  // ray from the body centre through each block corner -> point on the body
-  const inner = corners.map((c) => rayPolygonHit(g, c, body));
-  if (inner.some((p) => !p)) return null;
-  const I = inner as Point2D[];
-
-  const ang = (p: Point2D) => Math.atan2(p.y - g.y, p.x - g.x);
   const norm = (a: number) => { while (a <= -Math.PI) a += 2 * Math.PI; while (a > Math.PI) a -= 2 * Math.PI; return a; };
-  const theta = I.map(ang);
+  const angG = (p: Point2D) => Math.atan2(p.y - g.y, p.x - g.x);
 
-  // four inner arcs, each the body points in the angular sector between two hits
-  const arcs: Point2D[][] = [];
-  for (let k = 0; k < 4; k++) {
-    const gap = norm(theta[(k + 1) % 4] - theta[k]);
-    const dir = Math.sign(gap) || 1;
-    const off = (t: number) => dir * norm(t - theta[k]);
-    const mids = body
-      .filter((p) => { const o = off(ang(p)); return o > 1e-6 && o < Math.abs(gap) - 1e-6; })
-      .sort((p, q) => off(ang(p)) - off(ang(q)));
-    arcs.push([I[k], ...mids, I[(k + 1) % 4]]);
-  }
-
-  // assemble
-  const verts = work.vertices.map((v) => ({ id: v.id, pt: { ...v.pt } }));
-  const innerIds = I.map((p) => { const id = uid(); verts.push({ id, pt: { ...p } }); return id; });
-  const edges = work.edges.map((e) => ({ ...e, path: e.path.map((p) => ({ ...p })) }));
-
-  const radialIds: string[] = [];
-  const arcIds: string[] = [];
-  for (let k = 0; k < 4; k++) {
-    const rad: BlockEdge = {
-      id: uid(), v0: innerIds[k], v1: cornerIds[k], path: [],
-      nodes: 18, law: 'geometric', ratio: 6,
-    };
-    edges.push(rad);
-    radialIds.push(rad.id);
-    const arc: BlockEdge = {
-      id: uid(), v0: innerIds[k], v1: innerIds[(k + 1) % 4],
-      path: arcs[k].slice(1, -1).map((p) => ({ ...p })),
-      patch, nodes: 24, law: 'uniform', ratio: 1,
-    };
-    edges.push(arc);
-    arcIds.push(arc.id);
-  }
-
-  const scratch: Blocking = { vertices: verts, edges, blocks: [], links: work.links };
-  const ringBlocks: Block[] = [];
-  for (let k = 0; k < 4; k++) {
-    const outer = hostBlk.edges[k];               // corner k -> corner k+1
-    const ord = orderBlockEdges(scratch, [outer, radialIds[(k + 1) % 4], arcIds[k], radialIds[k]]);
-    if (!ord) return null;
-    ringBlocks.push({ id: uid(), edges: ord });
-  }
-
-  const next: Blocking = {
-    vertices: verts,
-    edges,
-    blocks: [...work.blocks.filter((b) => b.id !== hostBlk.id), ...ringBlocks],
-    links: [...(work.links ?? []), [...arcIds], [...radialIds]],
+  // Build a ring of `N` blocks around the body. `attach` are the outer vertex ids
+  // (in angular order about g); `outerEdge(k)` is the block edge from attach[k] to
+  // attach[k+1]. N=8 halves the arc each block spans (less corner skew, seams on
+  // the flow axes); we fall back to N=4 if the centre split fails.
+  const buildRing = (
+    w: Blocking,
+    attachIds: string[],
+    outerEdge: (k: number) => string | null,
+    removeIds: Set<string>,
+  ): Blocking | null => {
+    const N = attachIds.length;
+    const vm = new Map(w.vertices.map((v) => [v.id, v.pt] as const));
+    const I = attachIds.map((id) => rayPolygonHit(g, vm.get(id)!, body));
+    if (I.some((p) => !p)) return null;
+    const IP = I as Point2D[];
+    const theta = IP.map(angG);
+    const arcs: Point2D[][] = [];
+    for (let k = 0; k < N; k++) {
+      const gap = norm(theta[(k + 1) % N] - theta[k]);
+      const dir = Math.sign(gap) || 1;
+      const off = (t: number) => dir * norm(t - theta[k]);
+      const mids = body
+        .filter((p) => { const o = off(angG(p)); return o > 1e-6 && o < Math.abs(gap) - 1e-6; })
+        .sort((p, q) => off(angG(p)) - off(angG(q)));
+      arcs.push([IP[k], ...mids, IP[(k + 1) % N]]);
+    }
+    const verts = w.vertices.map((v) => ({ id: v.id, pt: { ...v.pt } }));
+    const innerIds = IP.map((p) => { const id = uid(); verts.push({ id, pt: { ...p } }); return id; });
+    const edges = w.edges.map((e) => ({ ...e, path: e.path.map((p) => ({ ...p })) }));
+    const radialIds: string[] = [];
+    const arcIds: string[] = [];
+    for (let k = 0; k < N; k++) {
+      // strong wall clustering by default - visibly fine right at the body,
+      // coarsening out to the H-grid. Count is kept by applyTargetCellSize.
+      const rad: BlockEdge = { id: uid(), v0: innerIds[k], v1: attachIds[k], path: [], nodes: 26, law: 'geometric', ratio: 10 };
+      const arc: BlockEdge = {
+        id: uid(), v0: innerIds[k], v1: innerIds[(k + 1) % N],
+        path: arcs[k].slice(1, -1).map((p) => ({ ...p })),
+        patch, nodes: N === 8 ? 18 : 30, law: 'uniform', ratio: 1,
+      };
+      edges.push(rad, arc);
+      radialIds.push(rad.id);
+      arcIds.push(arc.id);
+    }
+    const scratch: Blocking = { vertices: verts, edges, blocks: [], links: w.links };
+    const ringBlocks: Block[] = [];
+    for (let k = 0; k < N; k++) {
+      const outer = outerEdge(k);
+      if (!outer) return null;
+      const ord = orderBlockEdges(scratch, [outer, radialIds[(k + 1) % N], arcIds[k], radialIds[k]]);
+      if (!ord) return null;
+      ringBlocks.push({ id: uid(), edges: ord });
+    }
+    return cleanBlocking({
+      vertices: verts,
+      edges,
+      blocks: [...w.blocks.filter((b) => !removeIds.has(b.id)), ...ringBlocks],
+      links: [...(w.links ?? []), [...arcIds], [...radialIds]],
+    });
   };
-  return cleanBlocking(next);
+
+  // ── attempt the 8-cut ring ──
+  const gx = (bb.minX + bb.maxX) / 2, gy = (bb.minY + bb.maxY) / 2;
+  let split = splitAllAt(splitAllAt(work, 'x', gx), 'y', gy);
+  const atCentre = (p: Point2D) => Math.abs(p.x - gx) < 1e-5 && Math.abs(p.y - gy) < 1e-5;
+  const svm = new Map(split.vertices.map((v) => [v.id, v.pt] as const));
+  const quads = split.blocks.filter((b) => {
+    const ids = blockCornerIds(split, b);
+    return ids.length === 4 && ids.some((id) => atCentre(svm.get(id)!));
+  });
+  if (quads.length === 4) {
+    const byAngG = (id: string) => angG(svm.get(id)!);
+    // outer corners (farthest from g) and the box-edge mids (not at g, not a far corner)
+    const farCorners: string[] = [];
+    const edgeMids = new Set<string>();
+    for (const q of quads) {
+      const ids = blockCornerIds(split, q);
+      let far = ids[0], fd = -1;
+      for (const id of ids) {
+        const d = Math.hypot(svm.get(id)!.x - gx, svm.get(id)!.y - gy);
+        if (d > fd) { fd = d; far = id; }
+      }
+      farCorners.push(far);
+      for (const id of ids) if (!atCentre(svm.get(id)!) && id !== far) edgeMids.add(id);
+    }
+    const corners = [...new Set(farCorners)].sort((a, b) => byAngG(a) - byAngG(b));
+    const mids = [...edgeMids].sort((a, b) => byAngG(a) - byAngG(b));
+    if (corners.length === 4 && mids.length === 4) {
+      const attach: string[] = [];
+      let ok = true;
+      for (let k = 0; k < 4; k++) {
+        attach.push(corners[k]);
+        const a0 = byAngG(corners[k]);
+        let a1 = byAngG(corners[(k + 1) % 4]);
+        if (a1 <= a0) a1 += 2 * Math.PI;
+        const mid = mids.find((m) => {
+          let am = byAngG(m);
+          if (am <= a0) am += 2 * Math.PI;
+          return am > a0 + 1e-6 && am < a1 - 1e-6;
+        });
+        if (!mid) { ok = false; break; }
+        attach.push(mid);
+      }
+      if (ok) {
+        const findEdge = (a: string, b: string) =>
+          split.edges.find((e) => (e.v0 === a && e.v1 === b) || (e.v0 === b && e.v1 === a))?.id ?? null;
+        const res = buildRing(
+          split,
+          attach,
+          (k) => findEdge(attach[k], attach[(k + 1) % 8]),
+          new Set(quads.map((q) => q.id)),
+        );
+        if (res) return res;
+      }
+    }
+  }
+
+  // ── fall back to the 4-cut ring on the un-split box ──
+  const cornerIds = blockCornerIds(work, host);
+  if (cornerIds.length !== 4) return null;
+  const hostBlk = host;
+  return (
+    buildRing(work, cornerIds, (k) => hostBlk.edges[k] ?? null, new Set([hostBlk.id])) ?? null
+  );
 }
 
 // ── C-grid (Phase 3) ───────────────────────────────────────────────────────
@@ -1140,8 +1204,15 @@ export function applyTargetCellSize(bk: Blocking, cellSize: number): Blocking {
     arr.push(edgeLength(bk, e));
     groupLens.set(g, arr);
   }
+  // Groups that carry a wall-clustering law (geometric / bump) are wall-normal -
+  // their layer count is deliberate (near-wall resolution / y+), so keep the
+  // count already set rather than deriving it from the target cell size.
+  const wallNormal = new Set<string>();
+  for (const e of bk.edges) if (e.law === 'geometric' || e.law === 'bump') wallNormal.add(find(e.id));
+
   const groupNodes = new Map<string, number>();
   groupLens.forEach((lens, g) => {
+    if (wallNormal.has(g)) return;
     lens.sort((a, b) => a - b);
     const rep = lens[Math.floor(lens.length / 2)] || 0; // median edge length in the group
     groupNodes.set(g, Math.max(4, Math.min(500, Math.round(rep / cellSize) + 1)));

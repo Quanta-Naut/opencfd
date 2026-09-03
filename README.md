@@ -1,6 +1,6 @@
 # 🌊 OpenCFD Studio
 
-A high-performance, minimalist CFD (Computational Fluid Dynamics) workbench combining **OpenFOAM**, **Gmsh**, and **PyVista** with a clean, modern **VS Code-style** desktop UI.
+A high-performance, minimalist CFD (Computational Fluid Dynamics) workbench combining **OpenFOAM** and **Gmsh** with a clean, modern **VS Code-style** desktop UI. Post-processing (smooth fields, streamlines, vorticity) runs on **NumPy** alone - no VTK/PyVista - so the packaged app stays lean.
 
 ---
 

@@ -124,6 +124,10 @@ interface LeftStagePanelProps {
   structuredHint?: 'hgrid' | 'ogrid' | 'cgrid';
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
+  meshTopology?: 'unstructured' | 'structured';
+  onMeshTopologyChange?: (t: 'unstructured' | 'structured') => void;
+  width?: number;
+  onWidthChange?: (w: number) => void;
   projectId?: string;
 }
 
@@ -261,7 +265,7 @@ const StructuredMeshPanel: React.FC<{
 
   const kindBlurb: Record<'hgrid' | 'ogrid' | 'cgrid', string> = {
     hgrid: 'One block per vertical strip of the domain. Ramps become slanted-floor blocks; floor / ceiling steps split automatically.',
-    ogrid: 'Blocks the domain, then wraps every body inside it in a 4-block ring (fine at the wall, coarser outward). The rest stays H-grid.',
+    ogrid: 'Blocks the domain, then wraps every body in an 8-sector ring - fine and orthogonal at the wall, seams on the flow axes. The rest stays a clean H-grid.',
     cgrid: 'Airfoil grid that fills the whole domain. A C-shaped far-field (semicircle + wake) gets a true wrap C-grid whose lines curve around the nose; a rectangular domain gets a C-H grid instead. Set the domain shape to "C-grid" for the best airfoil mesh.',
   };
 
@@ -578,8 +582,39 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   structuredHint,
   structuredSmooth,
   setStructuredSmooth,
+  meshTopology = 'unstructured',
+  onMeshTopologyChange,
+  width = 280,
+  onWidthChange,
   projectId,
 }) => {
+  // Drag the right edge to resize; the width is shared across every stage.
+  const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizeRef.current) return;
+      const next = Math.max(220, Math.min(620, resizeRef.current.startW + (e.clientX - resizeRef.current.startX)));
+      onWidthChange?.(next);
+    };
+    const onUp = () => {
+      if (resizeRef.current) {
+        resizeRef.current = null;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [onWidthChange]);
+  const startResize = (e: React.MouseEvent) => {
+    resizeRef.current = { startX: e.clientX, startW: width };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
   const fileInputAirfoilRef = useRef<HTMLInputElement | null>(null);
   const fileInputDxfRef = useRef<HTMLInputElement | null>(null);
 
@@ -618,7 +653,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
     }
   };
 
-  const [meshTopology, setMeshTopology] = useState<'unstructured' | 'structured'>('unstructured');
+  const setMeshTopology = (t: 'unstructured' | 'structured') => onMeshTopologyChange?.(t);
   const [meshAdvancedOpen, setMeshAdvancedOpen] = useState(true);
   // Geometry-stage accordion: one section open at a time, Geometry (1) by default.
   const [openGeoSection, setOpenGeoSection] = useState<CadWorkflowStep | null>(1);
@@ -660,7 +695,15 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   };
 
   return (
-    <aside className={`w-[280px] h-full bg-white border-r border-[#E1E4E8] flex flex-col select-none shrink-0 ${activeStage === 'mesh' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+    <aside
+      style={{ width }}
+      className={`relative h-full bg-white border-r border-[#E1E4E8] flex flex-col select-none shrink-0 ${activeStage === 'mesh' ? 'overflow-hidden' : 'overflow-y-auto'}`}
+    >
+      <div
+        onMouseDown={startResize}
+        title="Drag to resize"
+        className="absolute top-0 right-0 h-full w-1.5 z-30 cursor-col-resize hover:bg-[#2563EB]/30 transition-colors"
+      />
       {/* 01 GEOMETRY · DOMAIN · BOUNDARY PATCHES (single-open accordion) */}
       {activeStage === 'geometry' && (() => {
         const isInternal = flowType === 'internal';
@@ -800,7 +843,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       }>
                         <button
                           onClick={onSetSelectedAsDomain}
-                          className={`w-full py-2 rounded-lg font-bold shadow-sm transition-colors text-white ${domainState === 'broken' ? 'bg-[#DC2626] hover:bg-[#B91C1C]' : 'bg-[#2563EB] hover:bg-[#1D4ED8]'}`}
+                          className={`w-full py-2 rounded-lg font-bold transition-colors text-white ${domainState === 'broken' ? 'bg-[#DC2626] hover:bg-[#B91C1C]' : 'bg-[#2563EB] hover:bg-[#1D4ED8]'}`}
                         >
                           {domainState === 'ok' ? 'Redefine domain' : domainState === 'broken' ? 'Reselect & redefine' : 'Set as domain'}
                         </button>
@@ -871,7 +914,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       </div>
                     )}
 
-                    <button onClick={onGenerateDomain} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg font-bold shadow-sm transition-colors">
+                    <button onClick={onGenerateDomain} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg font-bold transition-colors">
                       Generate domain
                     </button>
                     </div>
@@ -939,7 +982,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     setAngleOfAttackDeg?.(dirToAoa[flowDirection] ?? 0);
                     setTimeout(() => onAutoSuggestTags?.(), 30);
                   }}
-                  className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg font-bold shadow-sm transition-all active:scale-[0.99]"
+                  className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg font-bold transition-all active:scale-[0.99]"
                 >
                   Auto-tag edges
                 </button>

@@ -1,9 +1,13 @@
+import io
 import os
 import json
 import asyncio
+import zipfile
+from pathlib import Path
 from typing import Dict, Any, List, Tuple
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.services.yplus_service import calculate_yplus, calculate_inflow_turbulence
@@ -328,6 +332,63 @@ async def case_files_endpoint(req: CaseFilesRequest):
         return {"success": True, "files": files, "case_dir": case_dir}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class CaseExportRequest(BaseModel):
+    project_id: str | None = None
+    name: str | None = None
+    # path -> contents, straight from the viewer (used when nothing is on disk yet)
+    files: Dict[str, str] = {}
+
+
+@app.post("/api/solver/case-files/export")
+async def case_files_export_endpoint(req: CaseExportRequest):
+    """Zip the OpenFOAM case for the user to take elsewhere. Prefers the real
+    case on disk (a runnable 0/ + constant/ + system/ tree, minus the written
+    result times); falls back to the dictionaries the viewer already holds."""
+    buf = io.BytesIO()
+    written = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        case_dir: Path | None = None
+        if req.project_id:
+            try:
+                case_dir = Path(resolve_case_dir(req.project_id))
+            except Exception:
+                case_dir = None
+
+        if case_dir and case_dir.is_dir():
+            keep_top = {"0", "system", "constant"}
+            for path in sorted(case_dir.rglob("*")):
+                if not path.is_file():
+                    continue
+                rel = path.relative_to(case_dir)
+                top = rel.parts[0]
+                # keep the setup + mesh, drop result time dirs, logs and caches
+                if top not in keep_top and not top.endswith(".foam"):
+                    continue
+                if "processor" in str(rel) or rel.suffix in (".log", ".pyc"):
+                    continue
+                try:
+                    zf.write(path, rel.as_posix())
+                    written += 1
+                except OSError:
+                    pass
+
+        if written == 0:
+            for rel_path, content in (req.files or {}).items():
+                zf.writestr(rel_path.lstrip("/"), content or "")
+                written += 1
+
+    if written == 0:
+        raise HTTPException(status_code=404, detail="nothing to export - generate the case first")
+
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in (req.name or "openfoam-case")).strip("-")
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe or "openfoam-case"}.zip"'},
+    )
+
 
 @app.post("/api/postprocess/fields")
 async def postprocess_endpoint(req: PostProcessRequest):

@@ -156,7 +156,7 @@ export const SolverControlPanel: React.FC<SolverControlPanelProps> = ({
       {executionStatus === 'running' ? (
         <button
           onClick={onStopSolver}
-          className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors"
+          className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
         >
           <Square className="w-3.5 h-3.5 fill-current" />
           <span>Stop Solver Execution</span>
@@ -164,7 +164,7 @@ export const SolverControlPanel: React.FC<SolverControlPanelProps> = ({
       ) : (
         <button
           onClick={onRunSolver}
-          className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors"
+          className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
         >
           <Play className="w-3.5 h-3.5 fill-current" />
           <span>▶ Run OpenFOAM Solver</span>

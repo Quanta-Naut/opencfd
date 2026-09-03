@@ -70,7 +70,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex items-center justify-center h-screen w-screen bg-[#F5F6F8] text-[#171A1F] font-sans px-6">
-      <div className="w-full max-w-md bg-white border border-[#E1E4E8] rounded-xl p-7 shadow-sm">
+      <div className="w-full max-w-md bg-white border border-[#E1E4E8] rounded-xl p-7 ">
         {phase === 'checking' && (
           <div className="flex items-center gap-3 text-sm text-[#69717D]">
             <Loader2 className="w-4 h-4 animate-spin" /> Starting the OpenCFD engine...

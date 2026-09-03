@@ -34,7 +34,7 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
               onClick={() => onChange({ target_yplus: item.val })}
               className={`py-1.5 px-1 rounded-md text-[11px] font-medium border text-center transition-colors ${
                 yplus.target_yplus === item.val
-                  ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                  ? 'bg-blue-600 text-white border-blue-600 '
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
               }`}
             >
@@ -124,7 +124,7 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
         </div>
 
         {/* Highlight First Layer Height */}
-        <div className="p-2.5 bg-white border border-blue-200/80 rounded-md shadow-xs flex items-center justify-between">
+        <div className="p-2.5 bg-white border border-blue-200/80 rounded-md flex items-center justify-between">
           <div>
             <span className="text-[11px] text-slate-500 block">First Layer Height (Δy)</span>
             <span className="text-sm font-mono font-bold text-slate-900">
@@ -169,7 +169,7 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
       {/* Apply to Gmsh Mesh Button */}
       <button
         onClick={onApplyToMesh}
-        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors"
+        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
       >
         <Zap className="w-3.5 h-3.5 fill-current" />
         <span>Apply Sizing to Gmsh Mesh</span>

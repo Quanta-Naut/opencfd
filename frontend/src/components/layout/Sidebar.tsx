@@ -63,11 +63,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <div className="w-80 h-full flex flex-col bg-white border-r border-slate-200 select-none shadow-xs z-20">
+    <div className="w-80 h-full flex flex-col bg-white border-r border-slate-200 select-none z-20">
       {/* App Header Branding */}
       <div className="px-4 py-3.5 border-b border-slate-200 flex items-center justify-between bg-white">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-xs">
+          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-white ">
             <Wind className="w-4 h-4" />
           </div>
           <div>
@@ -92,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setActiveStep(step.id)}
                 className={`py-1.5 px-1 rounded-md text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
                   isActive
-                    ? 'bg-white text-blue-600 shadow-xs border border-slate-200 font-semibold'
+                    ? 'bg-white text-blue-600 border border-slate-200 font-semibold'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
                 }`}
               >
@@ -112,7 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setActiveStep(step.id)}
                 className={`py-1.5 px-1 rounded-md text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
                   isActive
-                    ? 'bg-white text-blue-600 shadow-xs border border-slate-200 font-semibold'
+                    ? 'bg-white text-blue-600 border border-slate-200 font-semibold'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
                 }`}
               >

@@ -89,7 +89,7 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, delay = 750
             data-state={state}
             onTransitionEnd={() => { if (state === 'out') setState('hidden'); }}
             style={{ position: 'fixed', left: pos.left, top: pos.top, maxWidth }}
-            className="tooltip-pop pointer-events-none z-[9999] rounded-lg bg-white border border-[#E4E7EC] px-3 py-2 text-[11px] leading-relaxed text-[#3F4652] shadow-[0_10px_30px_-6px_rgba(15,23,42,0.18),0_2px_8px_-2px_rgba(15,23,42,0.10)]"
+            className="tooltip-pop pointer-events-none z-[9999] rounded-lg bg-white border border-[#E4E7EC] px-3 py-2 text-[11px] leading-relaxed text-[#3F4652]"
           >
             {content}
           </div>,

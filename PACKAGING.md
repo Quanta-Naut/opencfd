@@ -174,8 +174,9 @@ first, then the bundled `pack.json`. 382 MB is small enough to bundle in the
 installer later if we want a fully offline first run.
 
 Backend runtime deps are `backend/requirements.txt` (lean: no VTK/PyVista/SciPy -
-`app/` only imports numpy/shapely/ezdxf/gmsh at runtime). `requirements-dev.txt`
-keeps the analysis extras for local work.
+`app/` only imports numpy/shapely/ezdxf/gmsh at runtime, post-processing
+included). `requirements-dev.txt` holds a few optional extras for local
+experiment scripts only.
 
 Still to shake out on a real run: PyInstaller hidden imports for `gmsh`, the
 Tauri sidecar spawn + capability config (`src-tauri/capabilities/default.json`,

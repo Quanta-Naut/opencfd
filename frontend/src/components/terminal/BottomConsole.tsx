@@ -35,7 +35,7 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
             onClick={() => setActiveTab('terminal')}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded font-medium transition-colors ${
               activeTab === 'terminal'
-                ? 'bg-white text-slate-800 shadow-xs border border-slate-200'
+                ? 'bg-white text-slate-800 border border-slate-200'
                 : 'text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -52,7 +52,7 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
             onClick={() => setActiveTab('residuals')}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded font-medium transition-colors ${
               activeTab === 'residuals'
-                ? 'bg-white text-slate-800 shadow-xs border border-slate-200'
+                ? 'bg-white text-slate-800 border border-slate-200'
                 : 'text-slate-500 hover:text-slate-800'
             }`}
           >

@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="w-full h-full min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-800 p-6">
-          <div className="max-w-md bg-white border border-slate-200 shadow-md rounded-xl p-6 text-center space-y-4">
+          <div className="max-w-md bg-white border border-slate-200 rounded-xl p-6 text-center space-y-4">
             <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto">
               <AlertTriangle className="w-6 h-6" />
             </div>

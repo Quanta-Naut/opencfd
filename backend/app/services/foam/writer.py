@@ -43,5 +43,9 @@ def boundary_field(patch_dicts: Dict[str, Dict[str, Any]], trailer: str = "") ->
     body = "\n\n".join(
         f"    {name}\n    {{\n{to_block(spec, 8)}\n    }}" for name, spec in patch_dicts.items()
     )
-    tail = f"\n\n    {trailer}" if trailer else ""
-    return "boundaryField\n{\n" + body + tail + "\n}"
+    # The trailer (#includeEtc setConstraintTypes) goes FIRST: it keys entries by
+    # constraint-group name, and one of those keys can collide with a real patch
+    # name (a patch literally called `symmetry` that we want as a non-reflecting
+    # far-field). A later explicit entry for that patch name then wins.
+    head = f"    {trailer}\n\n" if trailer else ""
+    return "boundaryField\n{\n" + head + body + "\n}"

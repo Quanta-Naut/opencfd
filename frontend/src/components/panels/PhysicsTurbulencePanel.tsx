@@ -26,7 +26,7 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
             onClick={() => onChange({ regime: 'laminar' })}
             className={`py-2 rounded-lg font-medium border text-center transition-all ${
               config.regime === 'laminar'
-                ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                ? 'bg-blue-600 text-white border-blue-600 '
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
             }`}
           >
@@ -36,7 +36,7 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
             onClick={() => onChange({ regime: 'turbulent' })}
             className={`py-2 rounded-lg font-medium border text-center transition-all ${
               config.regime === 'turbulent'
-                ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                ? 'bg-blue-600 text-white border-blue-600 '
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
             }`}
           >

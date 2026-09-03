@@ -27,14 +27,18 @@ def build_functions(
         L = forces.get("refLength") or ref_length or 1.0
         A = forces.get("refArea") or (L * 0.1)  # 2D: nominal span = 0.1 m
         compressible = phys.get("compressibility") == "compressible"
+        # Incompressible: pressure is kinematic, so `rho rhoInf` tells libforces to
+        # multiply by rhoInf. Compressible: pressure is in Pa and libforces reads
+        # the `rho` field itself - no `rho` keyword - but `rhoInf` is still needed
+        # as the far-field density in the Cd/Cl denominator (0.5 rhoInf U^2 Aref).
         blocks.append(
             "    forceCoeffs\n    {\n"
             "        type            forceCoeffs;\n"
             "        libs            (\"libforces.so\");\n"
             "        writeControl    timeStep;\n        writeInterval   1;\n"
             f"        patches         ({patch});\n"
-            f"        rho             {'rhoInf' if not compressible else 'rho'};\n"
-            + (f"        rhoInf          {rho};\n" if not compressible else "")
+            + ("" if compressible else "        rho             rhoInf;\n")
+            + f"        rhoInf          {rho};\n"
             + f"        liftDir         {_vec(forces.get('liftDir', [0, 1, 0]))};\n"
             f"        dragDir         {_vec(forces.get('dragDir', [1, 0, 0]))};\n"
             f"        CofR            {_vec(forces.get('centreOfRotation', [0.25, 0, 0]))};\n"

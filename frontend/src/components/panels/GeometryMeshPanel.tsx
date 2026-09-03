@@ -202,7 +202,7 @@ export const GeometryMeshPanel: React.FC<GeometryMeshPanelProps> = ({
       <button
         onClick={onGenerateMesh}
         disabled={isMeshing}
-        className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+        className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
       >
         <Play className="w-3.5 h-3.5 fill-current" />
         <span>{isMeshing ? 'Generating Mesh...' : 'Generate Gmsh Mesh'}</span>

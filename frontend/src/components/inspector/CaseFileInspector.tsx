@@ -29,7 +29,7 @@ export const CaseFileInspector: React.FC<CaseFileInspectorProps> = ({ files }) =
               onClick={() => setSelectedFile(f)}
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded font-mono text-[11px] transition-colors whitespace-nowrap ${
                 selectedFile === f
-                  ? 'bg-white text-blue-600 font-semibold shadow-xs border border-slate-200'
+                  ? 'bg-white text-blue-600 font-semibold border border-slate-200'
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >

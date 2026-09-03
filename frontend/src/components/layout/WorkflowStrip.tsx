@@ -1,5 +1,5 @@
 import React from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, FileCode } from 'lucide-react';
 
 export type StageId = 'geometry' | 'caseSetup' | 'mesh' | 'physics' | 'yplus' | 'solver' | 'results';
 
@@ -13,12 +13,16 @@ interface WorkflowStripProps {
   activeStage: StageId;
   onSelectStage: (stage: StageId) => void;
   stageStatus?: Partial<Record<StageId, StageStatus>>;
+  onOpenCaseFiles?: () => void;
+  caseFilesCount?: number;
 }
 
 export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
   activeStage,
   onSelectStage,
   stageStatus,
+  onOpenCaseFiles,
+  caseFilesCount = 0,
 }) => {
   const stages: { id: StageId; num: string; label: string }[] = [
     { id: 'geometry', num: '01', label: 'Geometry' },
@@ -29,7 +33,7 @@ export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
   ];
 
   return (
-    <nav className="h-9 bg-white border-b border-[#E1E4E8] px-4 flex items-center gap-1 select-none shrink-0 overflow-x-auto">
+    <nav className="h-9 bg-white border-b border-[#E1E4E8] pl-4 pr-2 flex items-center gap-1 select-none shrink-0 overflow-x-auto">
       {stages.map((st, idx) => {
         const isActive = activeStage === st.id;
         const locked = !!stageStatus?.[st.id]?.locked;
@@ -64,6 +68,18 @@ export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
           </React.Fragment>
         );
       })}
+
+      {onOpenCaseFiles && (
+        <button
+          onClick={onOpenCaseFiles}
+          disabled={caseFilesCount === 0}
+          title={caseFilesCount === 0 ? 'Case files appear once the case is set up' : 'Browse the OpenFOAM case dictionaries'}
+          className="ml-auto shrink-0 h-7 inline-flex items-center gap-1.5 rounded-md border border-[#E1E4E8] px-2.5 text-[11px] font-medium text-[#69717D] hover:text-[#171A1F] hover:border-[#C4D4F5] hover:bg-[#F7F9FF] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+        >
+          <FileCode className="w-3.5 h-3.5" />
+          OpenFOAM Dicts
+        </button>
+      )}
     </nav>
   );
 };
