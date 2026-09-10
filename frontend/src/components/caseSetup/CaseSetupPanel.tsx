@@ -9,7 +9,6 @@ import { AnalysisSection } from './AnalysisSection';
 import { ReferenceSection } from './ReferenceSection';
 import { ThermoSection } from './ThermoSection';
 import { TurbulenceSection } from './TurbulenceSection';
-import { NearWallSection } from './NearWallSection';
 import { BoundarySection } from './BoundarySection';
 
 export interface CaseSetupProps {
@@ -111,6 +110,18 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [compressible, flow.regimeHint, flow.mach]);
 
+  // Axisymmetric is derived from the geometry, not a separate switch: the
+  // case is axisymmetric exactly when some patch has been manually tagged
+  // 'axis' in Geometry, never inferred/auto-tagged. This keeps a single
+  // source of truth so it can't drift out of sync with the tagging.
+  const isAxisymmetric = patchRoles.some((p) => p.role === 'axis');
+  useEffect(() => {
+    if (physics.axisymmetric !== isAxisymmetric) {
+      setPhysics({ axisymmetric: isAxisymmetric });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAxisymmetric]);
+
   const model = turbulenceModel(physics.turbulenceModelId as any);
   const section: SectionProps = { state, setPhysics, setCaseSetup, setBoundaries, refLength, flow };
 
@@ -118,7 +129,7 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
     <div className="h-full w-full bg-[#F5F6F8] flex min-h-0" role="region" aria-label="Case setup">
       <aside className="w-[260px] bg-white border-r border-[#E1E4E8] p-4 shrink-0 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-[10px] font-bold text-[#69717D] uppercase tracking-wider">CFD analysis</span>
+          <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">CFD analysis</span>
           <CircleHelp className="w-3.5 h-3.5 text-[#A5ACB5]" />
         </div>
         <div className="space-y-1.5">
@@ -134,7 +145,7 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
               <Gauge className={`w-4 h-4 ${!compressible ? 'text-[#2563EB]' : 'text-[#69717D]'}`} />
               <span className="text-xs font-semibold">Incompressible flow</span>
             </div>
-            <span className="text-[10px] text-[#69717D] block ml-6 mt-1">Constant density, Mach &lt; 0.3</span>
+            <span className="text-[11px] text-[#69717D] block ml-6 mt-1">Constant density, Mach &lt; 0.3</span>
           </button>
           <button
             onClick={() =>
@@ -148,11 +159,12 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
               <Wind className={`w-4 h-4 ${compressible ? 'text-[#2563EB]' : 'text-[#69717D]'}`} />
               <span className="text-xs font-semibold">Compressible flow</span>
             </div>
-            <span className="text-[10px] text-[#69717D] block ml-6 mt-1">Density &amp; energy, up to hypersonic</span>
+            <span className="text-[11px] text-[#69717D] block ml-6 mt-1">Density &amp; energy, up to hypersonic</span>
           </button>
         </div>
+
         <div className="border-t border-[#E1E4E8] my-5" />
-        <span className="text-[10px] font-bold text-[#A5ACB5] uppercase tracking-wider block mb-2">Other modes</span>
+        <span className="text-[11px] font-semibold text-[#A5ACB5] uppercase tracking-wider block mb-2">Other modes</span>
         <div className="space-y-1">
           {lockedModes.map(([id, label, Icon]) => (
             <div key={id} className="p-2.5 rounded-lg flex items-center gap-2.5 text-[#A5ACB5] cursor-not-allowed">
@@ -160,7 +172,7 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
               <Icon className="w-3.5 h-3.5 shrink-0" />
               <span className="text-[11px] leading-tight">
                 {label}
-                <span className="block text-[9px] mt-0.5 uppercase tracking-wide">Coming soon</span>
+                <span className="block text-[10px] mt-0.5 uppercase tracking-wide">Coming soon</span>
               </span>
             </div>
           ))}
@@ -171,10 +183,9 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
         <div className="w-full p-5 lg:p-7 grid grid-cols-1 xl:grid-cols-2 gap-4 content-start items-start">
           <AnalysisSection {...section} flowType={flowType} onFlowTypeChange={onFlowTypeChange} />
           <ReferenceSection {...section} flowType={flowType} />
-          {compressible && <ThermoSection {...section} />}
-          {physics.regime === 'turbulent' && <TurbulenceSection {...section} />}
-          <NearWallSection {...section} model={model} />
           <BoundarySection {...section} model={model} patches={patches} onPatchBC={setPatchBC} />
+          {physics.regime === 'turbulent' && <TurbulenceSection {...section} />}
+          {compressible && <ThermoSection {...section} />}
         </div>
       </main>
     </div>

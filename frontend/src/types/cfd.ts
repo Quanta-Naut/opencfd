@@ -127,6 +127,10 @@ export interface PhysicsConfig {
   /** Wall-treatment choice used by Case Setup (superset of wallTreatment). */
   wallModel: 'auto' | 'wall_functions' | 'resolved';
   speedRegime: SpeedRegime;
+  /** Revolve the 2D cross-section into a wedge about the x-axis (body of
+   * revolution - a nozzle centerline, a bullet-shaped external body, etc).
+   * Works for both internal and external `FlowType`. */
+  axisymmetric: boolean;
 }
 
 /** Near-wall resolution + per-patch boundary conditions, edited in Case Setup. */
@@ -203,6 +207,31 @@ export interface PostProcessConfig {
   showVectors: boolean;
 }
 
+export interface SolverRunRecord {
+  id: string;
+  startedAt: number;                 // Date.now()
+  finishedAt: number | null;
+  status: 'running' | 'completed' | 'error' | 'stopped';
+  label: string;                     // user-editable; default `Run ${n}`
+  config: {
+    timeFormulation: 'steady' | 'transient';
+    turbulenceModel: string;
+    iterations: number;
+    velocity: number;
+    reynolds: number;
+    regime: string;
+    cells: number;
+    momentumOrder: string;
+    relax: { p: number; U: number; k: number; omega: number; e: number };
+    axisymmetric: boolean;
+  };
+  residuals: ResidualDataPoint[];    // this run's full residual stream
+  logs: string[];                    // this run's console lines only
+  finalCd?: number;
+  finalCl?: number;
+  iterationsRun?: number;
+}
+
 export interface CFDProjectState {
   geometry: GeometryConfig;
   physics: PhysicsConfig;
@@ -215,5 +244,6 @@ export interface CFDProjectState {
   postprocess: PostProcessConfig;
   executionStatus: 'idle' | 'meshing' | 'running' | 'completed' | 'error';
   residuals: ResidualDataPoint[];
+  solverRuns: SolverRunRecord[];
   terminalLogs: string[];
 }

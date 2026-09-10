@@ -1,7 +1,7 @@
 import React from 'react';
 import { Wind } from 'lucide-react';
 import { SectionProps } from './CaseSetupPanel';
-import { SectionCard, Field, NumberInput, Stat, fmt } from './ui';
+import { SectionCard, Field, NumberInput, fmt, Stat } from './ui';
 import { FlowType } from '../../types/cadWorkflow';
 
 export const ReferenceSection: React.FC<SectionProps & { flowType: FlowType }> = ({
@@ -24,7 +24,7 @@ export const ReferenceSection: React.FC<SectionProps & { flowType: FlowType }> =
       hint="Drive the Reynolds and Mach numbers, the y+ estimate and the initial mesh sizing."
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <Field label="Velocity U∞">
+        <Field label="Reference velocity" hint="Estimate - sizes Re/Mach, turbulence and mesh y+ even if the inlet itself is pressure-driven below">
           <NumberInput value={physics.inletVelocity} step={1} min={0} unit="m/s" onChange={(v) => setPhysics({ inletVelocity: v })} />
         </Field>
         <Field label="Static pressure p∞">

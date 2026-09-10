@@ -14,7 +14,7 @@ export const DOMAIN_PRESETS: Record<Exclude<DomainPreset, 'custom'>, { upstream:
   large: { upstream: 20, downstream: 40, lateral: 20, label: 'Large', description: '20c upstream / 40c wake / 20c lateral (Farfield)' },
 };
 
-export type BoundaryTag = 'inlet' | 'outlet' | 'wall' | 'farfield' | 'symmetry' | 'periodic';
+export type BoundaryTag = 'inlet' | 'outlet' | 'wall' | 'farfield' | 'symmetry' | 'periodic' | 'axis';
 
 
 export const BOUNDARY_COLORS: Record<BoundaryTag, { hex: string; bg: string; text: string; border: string; label: string }> = {
@@ -24,6 +24,7 @@ export const BOUNDARY_COLORS: Record<BoundaryTag, { hex: string; bg: string; tex
   farfield: { hex: '#0891B2', bg: 'bg-cyan-50', text: 'text-cyan-700', border: 'border-cyan-300', label: 'Farfield (Freestream)' },
   symmetry: { hex: '#9333EA', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-300', label: 'Symmetry Plane' },
   periodic: { hex: '#16A34A', bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-300', label: 'Periodic / Cyclic' },
+  axis: { hex: '#64748B', bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-300', label: 'Axis of Revolution' },
 };
 
 export interface Point2D {
@@ -50,12 +51,15 @@ export interface BoundaryEdge {
 
 export interface CadEntity {
   id: string;
-  type: 'line' | 'polyline' | 'circle' | 'arc' | 'rectangle' | 'spline' | 'construction';
+  type: 'line' | 'polyline' | 'circle' | 'ellipse' | 'arc' | 'rectangle' | 'spline' | 'construction';
   layer: string;
   pts: Point2D[];
   selected?: boolean;
   isClosed?: boolean;
   radius?: number;
+  rx?: number;
+  ry?: number;
+  rotation?: number;
   startAngle?: number;
   endAngle?: number;
   role?: 'geometry' | 'domain_boundary';
@@ -87,6 +91,30 @@ export function getGeometryBBox(entities: CadEntity[]): GeometryBBox {
   }
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const e of geomEntities) {
+    if (e.type === 'circle' && typeof e.radius === 'number' && e.pts[0]) {
+      const c = e.pts[0];
+      const r = e.radius;
+      if (c.x - r < minX) minX = c.x - r;
+      if (c.x + r > maxX) maxX = c.x + r;
+      if (c.y - r < minY) minY = c.y - r;
+      if (c.y + r > maxY) maxY = c.y + r;
+      continue;
+    }
+    if (e.type === 'ellipse' && typeof e.rx === 'number' && typeof e.ry === 'number' && e.pts[0]) {
+      const c = e.pts[0];
+      const rx = e.rx;
+      const ry = e.ry;
+      const rot = e.rotation || 0;
+      const cosR = Math.cos(rot);
+      const sinR = Math.sin(rot);
+      const hw = Math.sqrt((rx * cosR) ** 2 + (ry * sinR) ** 2);
+      const hh = Math.sqrt((rx * sinR) ** 2 + (ry * cosR) ** 2);
+      if (c.x - hw < minX) minX = c.x - hw;
+      if (c.x + hw > maxX) maxX = c.x + hw;
+      if (c.y - hh < minY) minY = c.y - hh;
+      if (c.y + hh > maxY) maxY = c.y + hh;
+      continue;
+    }
     for (const p of e.pts) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
@@ -245,7 +273,7 @@ export function createDomainEntity(
  */
 export function geometryFormsLoop(entities: CadEntity[]): boolean {
   const geom = entities.filter(e => e.layer !== 'construction');
-  if (geom.some(e => (e.isClosed || e.type === 'rectangle') && e.pts.length >= 3)) return true;
+  if (geom.some(e => (e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse') && (e.pts.length >= 3 || e.type === 'circle' || e.type === 'ellipse'))) return true;
   const segs = geom.filter(e => e.pts.length === 2);
   if (segs.length < 3) return false;
   const key = (p: Point2D) => `${Math.round(p.x * 1e4)}_${Math.round(p.y * 1e4)}`;
@@ -287,6 +315,49 @@ export function extractBoundaryEdges(
           p1,
           tag: circleTag || 'wall',
           explicit: circleExplicit,
+          role: ent.role === 'domain_boundary' ? 'domain' : 'geometry',
+          normal: { x: dy / len, y: -dx / len },
+          midpoint: { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 },
+          length: len,
+        });
+      }
+      continue;
+    }
+
+    if (ent.type === 'ellipse' && ent.rx != null && ent.ry != null && ent.pts[0]) {
+      const c = ent.pts[0];
+      const rx = ent.rx;
+      const ry = ent.ry;
+      const rot = ent.rotation || 0;
+      const cosR = Math.cos(rot);
+      const sinR = Math.sin(rot);
+      const SEG = 64;
+      const tagKey = `${ent.id}_0`;
+      const ellipseTag = edgeTagMap[tagKey];
+      const ellipseExplicit = Object.prototype.hasOwnProperty.call(edgeTagMap, tagKey);
+      for (let i = 0; i < SEG; i++) {
+        const a0 = (2 * Math.PI * i) / SEG;
+        const a1 = (2 * Math.PI * (i + 1)) / SEG;
+        const lx0 = rx * Math.cos(a0), ly0 = ry * Math.sin(a0);
+        const lx1 = rx * Math.cos(a1), ly1 = ry * Math.sin(a1);
+        const p0 = {
+          x: c.x + lx0 * cosR - ly0 * sinR,
+          y: c.y + lx0 * sinR + ly0 * cosR,
+        };
+        const p1 = {
+          x: c.x + lx1 * cosR - ly1 * sinR,
+          y: c.y + lx1 * sinR + ly1 * cosR,
+        };
+        const dx = p1.x - p0.x, dy = p1.y - p0.y;
+        const len = Math.hypot(dx, dy) || 1e-9;
+        edges.push({
+          key: `${ent.id}_${i}`,
+          entityId: ent.id,
+          edgeIndex: i,
+          p0,
+          p1,
+          tag: ellipseTag || 'wall',
+          explicit: ellipseExplicit,
           role: ent.role === 'domain_boundary' ? 'domain' : 'geometry',
           normal: { x: dy / len, y: -dx / len },
           midpoint: { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 },
@@ -439,6 +510,9 @@ export function autoSuggestBoundaryTags(
   const result: Record<string, BoundaryTag> = {};
 
   for (const edge of edges) {
+    // 'axis' is never auto-suggested - it is manual-only. Getting it wrong
+    // silently gives a planar (not axisymmetric) solution rather than an
+    // obvious error, so auto-detection is too risky here.
     if (edge.role === 'geometry' && flowType === 'external') {
       result[edge.key] = 'wall';
       continue;
@@ -469,6 +543,7 @@ export function validateBoundaryTags(
     farfield: 0,
     symmetry: 0,
     periodic: 0,
+    axis: 0,
   };
 
   // Only edges the user explicitly tagged count - an untagged edge is not a wall.

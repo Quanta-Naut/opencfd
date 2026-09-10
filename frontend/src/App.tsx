@@ -7,6 +7,7 @@ import { TransientPlaybackControls } from './components/viewport/TransientPlayba
 import { RightContextInspector } from './components/layout/RightContextInspector';
 import { BottomSolverDrawer } from './components/layout/BottomSolverDrawer';
 import { SolverMonitorRail } from './components/solver/SolverMonitorRail';
+import { RunHistoryRail } from './components/results/RunHistoryRail';
 import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { StatusBar } from './components/layout/StatusBar';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
@@ -22,6 +23,7 @@ import {
   SolverControls,
   PostProcessConfig,
   ResidualDataPoint,
+  SolverRunRecord,
 } from './types/cfd';
 import {
   fetchYPlus,
@@ -82,6 +84,7 @@ export interface StudioSession {
   freestreamVelocity: number;
   activeTagTool: BoundaryTag | null;
   blocking?: Blocking | null;
+  ogridParams?: { offsetFactor: number; radialNodes: number; radialRatio: number };
   meshTopology?: 'unstructured' | 'structured';
   meshData?: any;
   meshSig?: string | null;
@@ -152,6 +155,11 @@ export function App({
     () => savedSession?.cadEntities || [],
   );
   const [blocking, setBlocking] = useState<Blocking | null>(() => savedSession?.blocking ?? null);
+  const [ogridParams, setOgridParams] = useState<{
+    offsetFactor: number;
+    radialNodes: number;
+    radialRatio: number;
+  }>(() => savedSession?.ogridParams ?? { offsetFactor: 0.25, radialNodes: 26, radialRatio: 10 });
   const [structuredSmooth, setStructuredSmooth] = useState<boolean>(true);
   const [meshTopology, setMeshTopology] = useState<'unstructured' | 'structured'>(
     () => savedSession?.meshTopology ?? 'unstructured',
@@ -391,6 +399,7 @@ export function App({
       turbulenceModelId: 'kOmegaSST',
       wallModel: 'auto',
       speedRegime: 'incompressible',
+      axisymmetric: false,
       ...(savedSession?.state?.physics || {}),
     },
     caseSetup: {
@@ -469,6 +478,11 @@ export function App({
     },
     executionStatus: savedSession?.state?.executionStatus === 'completed' ? 'completed' : 'idle',
     residuals: savedSession?.state?.residuals ?? [],
+    solverRuns: (savedSession?.state?.solverRuns ?? []).map((r: SolverRunRecord) =>
+      r.status === 'running'
+        ? { ...r, status: 'stopped' as const, finishedAt: r.startedAt }
+        : r,
+    ),
     terminalLogs: savedSession?.state?.terminalLogs ?? ['OpenCFD ready.'],
   }));
 
@@ -480,6 +494,20 @@ export function App({
   );
   const [isMeshing, setIsMeshing] = useState<boolean>(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
+  const runLogStartRef = useRef(0);
+
+  // Derive axisymmetric directly from the boundary patches: when any edge is tagged
+  // 'axis', the case is assumed axisymmetric.
+  useEffect(() => {
+    const hasAxis = boundaryEdges.some((e) => e.explicit && e.tag === 'axis');
+    if (state.physics.axisymmetric !== hasAxis) {
+      setState((prev) => ({
+        ...prev,
+        physics: { ...prev.physics, axisymmetric: hasAxis },
+      }));
+    }
+  }, [boundaryEdges, state.physics.axisymmetric]);
 
   // Distinct solver patches + their roles, for the Case Setup boundary table and
   // the case generator. Once a mesh exists its boundary names are the ground
@@ -488,7 +516,7 @@ export function App({
   // can appear here with no explicit tag - infer its role from the name so it
   // still gets a real BC and the solver never hits a missing-patchField error.
   const patchRoles = useMemo(() => {
-    const order: BoundaryTag[] = ['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic'];
+    const order: BoundaryTag[] = ['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic', 'axis'];
     const roleFromName = (n: string): BoundaryTag => {
       const k = n.toLowerCase();
       return (order.find((t) => k === t || k.startsWith(t)) as BoundaryTag) || 'wall';
@@ -574,6 +602,11 @@ export function App({
       residuals: state.residuals.length > 4000 ? state.residuals.slice(-4000) : state.residuals,
       terminalLogs:
         state.terminalLogs.length > 800 ? state.terminalLogs.slice(-800) : state.terminalLogs,
+      solverRuns: (state.solverRuns ?? []).slice(-20).map((r) => ({
+        ...r,
+        residuals: r.residuals.length > 4000 ? r.residuals.slice(-4000) : r.residuals,
+        logs: r.logs.length > 500 ? r.logs.slice(-500) : r.logs,
+      })),
     },
     cadEntities,
     edgeTagMap,
@@ -588,6 +621,7 @@ export function App({
     freestreamVelocity,
     activeTagTool,
     blocking,
+    ogridParams,
     meshTopology,
     meshData,
     meshSig: meshSigRef.current,
@@ -795,7 +829,9 @@ export function App({
     try {
       const mesh = await generateMesh(state.geometry.type, {
         chord: state.geometry.chord,
-        angleOfAttackDeg: state.geometry.angleOfAttackDeg,
+        // Angle of attack has no meaning for a body of revolution - it would
+        // break the axisymmetry assumption itself.
+        angleOfAttackDeg: state.physics.axisymmetric ? 0 : state.geometry.angleOfAttackDeg,
         cylinderDiameter: state.geometry.cylinderDiameter,
         domainLength: state.geometry.domainLength,
         domainHeight: state.geometry.domainHeight,
@@ -821,6 +857,7 @@ export function App({
         // straight back into the domain).
         speedRegime: state.physics.speedRegime,
         compressibility: state.physics.compressibility,
+        axisymmetric: state.physics.axisymmetric,
       });
 
       setMeshData(mesh);
@@ -891,13 +928,15 @@ export function App({
     setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
     if (kind === 'cgrid') {
       const af = airfoilsForCGrid(cadEntities)[0];
-      const domain = outlineRing(cadEntities.filter((e) => e.role === 'domain_boundary'));
+      const domEnts = cadEntities.filter((e) => e.role === 'domain_boundary');
+      const domain = outlineRing(domEnts);
       if (!af || domain.length < 3) {
         toast('C-grid needs an elongated body (airfoil) inside a closed domain.', 'error', 7000);
         return;
       }
       const ent = cadEntities[af.index];
-      const raw = cGridFromAirfoil(entityRing(ent), domain, bodyPatchFor(ent.id));
+      const domEnt = domEnts.length === 1 ? domEnts[0] : domEnts.find((e) => (e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse'));
+      const raw = cGridFromAirfoil(entityRing(ent), domain, bodyPatchFor(ent.id), ent.id, domEnt?.id);
       if (!raw) {
         toast(
           'Could not build a C-grid. Give the airfoil more room downstream of the trailing edge.',
@@ -921,7 +960,10 @@ export function App({
     if (kind === 'ogrid') {
       for (const b of bodiesForOgrid(cadEntities, bk)) {
         const ent = cadEntities[b.index];
-        const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id));
+        const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id), {
+          bodyEntityId: ent.id,
+          ...ogridParams,
+        });
         if (next) {
           bk = next;
           wrapped += 1;
@@ -955,7 +997,10 @@ export function App({
     if (!blocking) return;
     const ent = cadEntities[bodyIndex];
     if (!ent) return;
-    const next = wrapBodyOgrid(blocking, entityRing(ent), bodyPatchFor(ent.id));
+    const next = wrapBodyOgrid(blocking, entityRing(ent), bodyPatchFor(ent.id), {
+      bodyEntityId: ent.id,
+      ...ogridParams,
+    });
     if (!next) {
       toast(
         'Could not wrap that body. Make sure it sits well inside the domain, clear of the edges.',
@@ -969,6 +1014,38 @@ export function App({
       'O-grid ring built around the body. Set the ring and wall-normal counts below.',
       'success',
     );
+  };
+
+  const handleUpdateOgridParams = (p: Partial<typeof ogridParams>) => {
+    const nextParams = { ...ogridParams, ...p };
+    setOgridParams(nextParams);
+
+    // Only rebuild if a body is actually wrapped. A bare `curveId` is not enough -
+    // Phase 1 puts curveId on plain domain-outline edges too.
+    const hasOgrid =
+      blocking &&
+      (bodiesForOgrid(cadEntities, blocking).some((b) => b.wrapped) ||
+        blocking.edges.some((e) => {
+          if (!e.curveId) return false;
+          return cadEntities.find((x) => x.id === e.curveId)?.role !== 'domain_boundary';
+        }));
+    if (!hasOgrid) return;
+
+    let bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
+    if (!bk) return;
+    for (const b of bodiesForOgrid(cadEntities, bk)) {
+      const ent = cadEntities[b.index];
+      const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id), {
+        bodyEntityId: ent.id,
+        ...nextParams,
+      });
+      if (next) {
+        bk = next;
+      }
+    }
+    bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
+    setBlocking(bk);
+    toast('Rebuilt the O-grid ring.', 'info');
   };
 
   const handleGenerateStructuredMesh = async () => {
@@ -1130,6 +1207,7 @@ export function App({
 
   const [resultsLoading, setResultsLoading] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false); // right-hand residuals/forces rail
+  const [runsRailOpen, setRunsRailOpen] = useState(false); // right-hand run history rail on Results tab
   const [caseFilesOpen, setCaseFilesOpen] = useState(false); // OpenFOAM dicts modal
   // Live cell-based field streamed from the solver while it runs (Solver stage).
   const [livePreview, setLivePreview] = useState<
@@ -1444,11 +1522,81 @@ export function App({
     [],
   );
 
+  const finalizeRun = (
+    status: 'completed' | 'error' | 'stopped',
+    extra?: { iterations?: number },
+  ) => {
+    const targetId = activeRunIdRef.current;
+    if (!targetId) return;
+    activeRunIdRef.current = null;
+
+    setState((prev) => {
+      const last = prev.residuals.length > 0 ? prev.residuals[prev.residuals.length - 1] : undefined;
+      const finalCd = typeof last?.cd === 'number' ? last.cd : undefined;
+      const finalCl = typeof last?.cl === 'number' ? last.cl : undefined;
+      const iterationsRun = extra?.iterations ?? last?.iteration;
+      const logs = prev.terminalLogs.slice(runLogStartRef.current);
+      const residuals = [...prev.residuals];
+      const finishedAt = Date.now();
+
+      return {
+        ...prev,
+        solverRuns: (prev.solverRuns ?? []).map((r) => {
+          if (r.id !== targetId) return r;
+          return {
+            ...r,
+            status,
+            finishedAt,
+            residuals,
+            logs,
+            ...(finalCd !== undefined ? { finalCd } : {}),
+            ...(finalCl !== undefined ? { finalCl } : {}),
+            ...(iterationsRun !== undefined ? { iterationsRun } : {}),
+          };
+        }),
+      };
+    });
+  };
+
   const handleRunSolver = async () => {
+    if (activeRunIdRef.current) {
+      finalizeRun('stopped');
+    }
     if (wsRef.current) wsRef.current.close();
     setMonitorOpen(true); // reveal the residuals / forces rail for the run
     setLivePreview(null); // start the live field preview fresh
     clearResultsCache(); // the previous run's frames must not survive a new solve
+
+    const n = (state.solverRuns?.length ?? 0) + 1;
+    const runId =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `run-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const record: SolverRunRecord = {
+      id: runId,
+      startedAt: Date.now(),
+      finishedAt: null,
+      status: 'running',
+      label: `Run ${n}`,
+      config: {
+        timeFormulation: state.physics.timeFormulation === 'transient' ? 'transient' : 'steady',
+        turbulenceModel: state.physics.turbulenceModelId,
+        iterations: state.solution.run.iterations,
+        velocity: state.physics.inletVelocity,
+        reynolds:
+          (state.physics.inletVelocity * caseRefLength) /
+          Math.max(state.physics.kinematicViscosity, 1e-12),
+        regime: state.physics.regime,
+        cells: meshData?.num_elements ?? 0,
+        momentumOrder: state.solution.methods.momentum,
+        relax: state.solution.controls.relax,
+        axisymmetric: state.physics.axisymmetric,
+      },
+      residuals: [],
+      logs: [],
+    };
+    activeRunIdRef.current = record.id;
+    runLogStartRef.current = state.terminalLogs.length;
 
     setState((prev) => ({
       ...prev,
@@ -1456,8 +1604,9 @@ export function App({
       residuals: [],
       terminalLogs: [
         ...prev.terminalLogs,
-        `[OpenFOAM] Writing case (${patchSpec.length} patches), solver ${state.solution.methods.coupling}...`,
+        `[OpenFOAM] Writing case (${patchSpec.length} patches), ${state.physics.timeFormulation === 'transient' ? 'transient' : 'steady-state'}...`,
       ],
+      solverRuns: [...(prev.solverRuns ?? []), record],
     }));
 
     // regenerate the case dictionaries with the current solution config
@@ -1490,9 +1639,10 @@ export function App({
           patchTypes: Object.fromEntries(
             patchRoles.map((p) => [
               p.name,
-              p.role === 'wall' ? 'wall' : p.role === 'symmetry' ? 'symmetry' : 'patch',
+              p.role === 'wall' ? 'wall' : p.role === 'symmetry' ? 'symmetry' : p.role === 'axis' ? 'empty' : 'patch',
             ]),
           ),
+          axisymmetric: state.physics.axisymmetric,
           iterations: state.solution.run.iterations,
           regime: state.physics.regime,
           velocity: state.physics.inletVelocity,
@@ -1524,6 +1674,7 @@ export function App({
       } else if (msg.type === 'field') {
         setLivePreview(msg.data);
       } else if (msg.type === 'status' && msg.status === 'completed') {
+        finalizeRun('completed', { iterations: msg.iterations });
         setState((prev) => ({
           ...prev,
           executionStatus: 'completed',
@@ -1535,6 +1686,7 @@ export function App({
         toast('Solver run finished.', 'success');
         void loadResults(true);
       } else if (msg.type === 'error') {
+        finalizeRun('error');
         setState((prev) => ({
           ...prev,
           executionStatus: 'error',
@@ -1551,6 +1703,7 @@ export function App({
     };
 
     ws.onerror = () => {
+      finalizeRun('error');
       setState((prev) => ({
         ...prev,
         executionStatus: 'error',
@@ -1564,6 +1717,7 @@ export function App({
   };
 
   const handleStopSolver = () => {
+    finalizeRun('stopped');
     if (wsRef.current) {
       wsRef.current.close();
     }
@@ -1641,6 +1795,8 @@ export function App({
           onGenerateStructuredMesh={handleGenerateStructuredMesh}
           ogridBodies={ogridBodies}
           onWrapBody={handleWrapBody}
+          ogridParams={ogridParams}
+          onUpdateOgridParams={handleUpdateOgridParams}
           structuredHint={structuredHint}
           structuredSmooth={structuredSmooth}
           setStructuredSmooth={setStructuredSmooth}
@@ -1816,8 +1972,10 @@ export function App({
             </div>
           </main>
 
-          {/* 4. COLLAPSIBLE BOTTOM DRAWER — console only (Slides over canvas as overlay) */}
-          <div className="absolute bottom-0 left-0 right-0 z-30 pointer-events-auto">
+          {/* 4. COLLAPSIBLE BOTTOM DRAWER - console only (Slides over canvas as overlay) */}
+          <div
+            className={`absolute bottom-0 left-0 right-0 z-30 pointer-events-auto${activeStage === 'caseSetup' ? ' hidden' : ''}`}
+          >
             <BottomSolverDrawer
               terminalLogs={state.terminalLogs}
               executionStatus={state.executionStatus}
@@ -1834,6 +1992,30 @@ export function App({
             executionStatus={state.executionStatus}
             open={monitorOpen}
             onOpenChange={setMonitorOpen}
+          />
+        )}
+
+        {/* Right rail: solver run history on the Results tab. */}
+        {activeStage === 'results' && (
+          <RunHistoryRail
+            runs={state.solverRuns ?? []}
+            executionStatus={state.executionStatus}
+            open={runsRailOpen}
+            onOpenChange={setRunsRailOpen}
+            onRelabelRun={(id, label) =>
+              setState((prev) => ({
+                ...prev,
+                solverRuns: (prev.solverRuns ?? []).map((r) =>
+                  r.id === id ? { ...r, label } : r,
+                ),
+              }))
+            }
+            onDeleteRun={(id) =>
+              setState((prev) => ({
+                ...prev,
+                solverRuns: (prev.solverRuns ?? []).filter((r) => r.id !== id),
+              }))
+            }
           />
         )}
       </div>

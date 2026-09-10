@@ -58,6 +58,26 @@ def _entity_points(entity: Dict[str, Any]) -> List[Tuple[float, float]]:
             for index in range(64)
         ]
 
+    if entity.get("type") == "ellipse" and entity.get("rx") is not None and entity.get("ry") is not None:
+        center = entity.get("pts", [])[0]
+        center_x = float(center["x"] if isinstance(center, dict) else center[0])
+        center_y = float(center["y"] if isinstance(center, dict) else center[1])
+        rx = abs(float(entity["rx"]))
+        ry = abs(float(entity["ry"]))
+        rotation = float(entity.get("rotation", 0) or 0)
+        cos_rot = math.cos(rotation)
+        sin_rot = math.sin(rotation)
+        pts = []
+        for index in range(64):
+            ang = 2 * math.pi * index / 64
+            lx = rx * math.cos(ang)
+            ly = ry * math.sin(ang)
+            pts.append((
+                center_x + lx * cos_rot - ly * sin_rot,
+                center_y + lx * sin_rot + ly * cos_rot,
+            ))
+        return pts
+
     # Open linework is not a valid 2D surface boundary. Domain rectangles,
     # imported closed polylines and sketches marked isClosed are valid loops.
     if not entity.get("isClosed") and entity.get("type") not in {"rectangle"} and entity.get("role") != "domain_boundary":
@@ -174,7 +194,7 @@ def _polygon_metrics(points: List[List[float]]) -> Tuple[float, float, float]:
     return 1.0 - skewness, min_angle, skewness
 
 
-def _mesh_quality(nodes: List[List[float]], elements: List[List[int]]) -> Dict[str, float]:
+def _mesh_quality(nodes: List[List[float]], elements: List[List[int]]) -> Dict[str, Any]:
     """Scale-independent 0..1 quality summary for a mixed triangle/quad mesh."""
     qualities: List[float] = []
     minimum_angles: List[float] = []
@@ -191,9 +211,12 @@ def _mesh_quality(nodes: List[List[float]], elements: List[List[int]]) -> Dict[s
         qualities.append(quality)
         minimum_angles.append(angle)
         skewnesses.append(skewness)
+    total_elements = triangles + quads
+    quad_fraction = round(quads / total_elements, 4) if total_elements > 0 else 0.0
     if not qualities:
         return {"minimum": 0.0, "mean": 0.0, "p05": 0.0, "min_angle_degrees": 0.0,
-                "max_skewness": 1.0, "triangles": triangles, "quads": quads}
+                "max_skewness": 1.0, "triangles": triangles, "quads": quads,
+                "quad_fraction": quad_fraction}
     ordered = sorted(qualities)
     return {
         "minimum": round(ordered[0], 4),
@@ -203,6 +226,7 @@ def _mesh_quality(nodes: List[List[float]], elements: List[List[int]]) -> Dict[s
         "max_skewness": round(max(skewnesses), 4),
         "triangles": triangles,
         "quads": quads,
+        "quad_fraction": quad_fraction,
     }
 
 
@@ -435,6 +459,15 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
     domain_height = max(point[1] for point in outer_points) - min(point[1] for point in outer_points)
     span = max(domain_width, domain_height, 0.1)
 
+    # Axisymmetric is derived purely from the user having manually tagged some
+    # edge 'axis' - never inferred/auto-tagged, and never a separate flag that
+    # could drift out of sync with the tagging. Whatever y that edge sits at
+    # (not necessarily 0 - the sketch canvas has no reason to be centered on
+    # the world origin) is normalised to y = 0 once the axis-tagged nodes are
+    # known, after meshing; see the axisymmetric block near the end of this
+    # function.
+    axisymmetric = "axis" in {str(v).strip().lower() for v in joined_edge_tags.values()}
+
     # Smallest obstacle bounding-box diagonal drives the near-body sizing so a
     # thin airfoil is resolved regardless of how large the flow domain is.
     feature_span = span
@@ -456,7 +489,7 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         # A circle carries one entity-wide tag at "<id>_0" (its outline is
         # regenerated / resampled, so per-segment indices are not stable).
         circle_tag = None
-        if loop["entity"].get("type") == "circle":
+        if loop["entity"].get("type") in {"circle", "ellipse"}:
             circle_tag = str(joined_edge_tags.get(f"{loop_id}_0", "")).strip().lower()
         for i in range(len(lp)):
             seg_tag = circle_tag if circle_tag is not None else \
@@ -570,7 +603,10 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         def _auto_domain_patch(p0: Tuple[float, float], p1: Tuple[float, float]) -> str:
             """Classify an untagged outer-domain edge by its outward normal so the
             solver always gets a complete inlet/outlet/side patch set even when
-            the user forgot to tag an edge. Mirrors the frontend auto-suggest."""
+            the user forgot to tag an edge. Mirrors the frontend auto-suggest.
+            Never auto-classifies 'axis' - that tag is manual-only, since
+            getting it wrong silently produces a planar (not axisymmetric)
+            solution rather than an obvious error."""
             dx, dy = p1[0] - p0[0], p1[1] - p0[1]
             length = math.hypot(dx, dy) or 1e-9
             # outer loop is wound CCW here, so the outward normal is (dy, -dx).
@@ -594,7 +630,7 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
             # A circle is one patch keyed at "<id>_0" (see the wall scan above).
             circle_tag = (
                 edge_tags.get(f"{entity_id}_0")
-                if loop["entity"].get("type") == "circle" else None
+                if loop["entity"].get("type") in {"circle", "ellipse"} else None
             )
             line_tags: List[int] = []
             raw_points = loop["points"]
@@ -607,11 +643,19 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 pairs = list(reversed(pairs))
             points = [p for p, _ in pairs]
             point_tags = [gmsh.model.geo.addPoint(x, y, 0, size) for (x, y), size in pairs]
+            n_pts = len(point_tags)
             for index, start in enumerate(point_tags):
                 line = gmsh.model.geo.addLine(start, point_tags[(index + 1) % len(point_tags)])
                 line_tags.append(line)
                 all_lines.append(line)
-                tag = circle_tag if circle_tag is not None else edge_tags.get(f"{entity_id}_{index}")
+                # `edge_tags` keys are "<entity>_<i>" for the ORIGINAL (pre-reverse)
+                # edge i = original point i -> point (i+1). Reversing `pairs` above
+                # to fix the loop's winding also reverses which original edge each
+                # new position corresponds to - without this remap, an explicit
+                # tag silently lands on the wrong edge whenever a hand-drawn loop
+                # happens to wind clockwise (reverse=True).
+                orig_index = (n_pts - 2 - index) % n_pts if reverse else index
+                tag = circle_tag if circle_tag is not None else edge_tags.get(f"{entity_id}_{orig_index}")
                 if tag:
                     name = str(tag)
                 elif outer_domain:
@@ -825,13 +869,23 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         for algo in (6, 5, 1):
             if algo != primary_algorithm:
                 attempts.append({"algo": algo, "keep_bl": True, "recomb": -1})
-        attempts.append({"algo": 1, "keep_bl": False, "recomb": 0 if element_type != "hybrid" else -1})
+        # For a quad request the final rung must degrade to quad-dominant
+        # recombination (recomb=1), never recomb=0.
+        final_recomb = 1 if recombine else (0 if element_type != "hybrid" else -1)
+        attempts.append({"algo": 1, "keep_bl": False, "recomb": final_recomb})
+        if recombine:
+            # Fall to pure triangles only if every recombined attempt raised an
+            # exception or produced no elements.
+            attempts.append({"algo": 1, "keep_bl": False, "recomb": 0, "emergency_tri": True})
 
         generated = False
         last_error: Any = None
         best_mesh: Any = None
+        best_score = -1.0
         best_fallback_note = ""
         for attempt_index, cfg in enumerate(attempts):
+            if cfg.get("emergency_tri") and best_mesh is not None:
+                continue
             try:
                 gmsh.model.mesh.clear()
                 if not cfg["keep_bl"] and boundary_layer_field:
@@ -861,6 +915,15 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                     gmsh.option.setNumber("Mesh.RecombineAll", 1 if want_recomb else 0)
                     if want_recomb:
                         gmsh.option.setNumber("Mesh.RecombinationAlgorithm", max(1, recomb_mode))
+                        try:
+                            gmsh.model.mesh.setRecombine(2, surface)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            gmsh.model.mesh.removeConstraints([(2, surface)])
+                        except Exception:
+                            pass
                     do_recombine = want_recomb
                 else:
                     do_recombine = recombine
@@ -902,27 +965,52 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 candidate_quality = _mesh_quality(candidate_nodes, candidate_elements)
                 candidate_angle = candidate_quality["min_angle_degrees"]
                 has_prisms = candidate_quality["quads"] > 0 and use_prism
-                # Score: raw min angle, plus a bump for keeping the requested
-                # prism layer as long as it is not badly degenerate. A prism mesh
-                # at ~9deg (a couple of thin cells at a sharp trailing edge) is
-                # more useful for CFD than a pristine triangle-only mesh.
-                candidate_score = candidate_angle + (18.0 if has_prisms and candidate_angle >= 6.0 else 0.0)
-                best_score = -1.0 if best_mesh is None else (
-                    best_mesh[3]["min_angle_degrees"]
-                    + (18.0 if best_mesh[5] and best_mesh[3]["min_angle_degrees"] >= 6.0 else 0.0)
-                )
+                quad_frac = candidate_quality.get("quad_fraction", 0.0)
+
+                # Element-type-aware scoring:
+                # - When element_type is "quad" or "quad_dominant", strongly prefer
+                #   meshes that are actually mostly quads. A recombined mesh that is
+                #   >= ~70% quads with an acceptable min angle (>= 6 deg) must beat a
+                #   pure-triangle candidate with a better angle (max triangle min angle
+                #   is at most 60 deg). Raw min angle acts as the tie-breaker.
+                # - For "hybrid", keep the existing prism bonus (+18.0) if prisms are
+                #   present and min angle >= 6.0 deg.
+                # - For "tri", raw min-angle is the sole criterion.
+                if recombine:
+                    quad_bonus = (100.0 * quad_frac) if candidate_angle >= 6.0 else 0.0
+                    candidate_score = candidate_angle + quad_bonus
+                elif element_type == "hybrid":
+                    candidate_score = candidate_angle + (18.0 if has_prisms and candidate_angle >= 6.0 else 0.0)
+                else:
+                    candidate_score = candidate_angle
+
                 if best_mesh is None or candidate_score > best_score:
+                    best_score = candidate_score
                     best_mesh = (cfg["algo"], candidate_nodes, candidate_elements,
                                  candidate_quality, node_index, has_prisms)
                     if attempt_index > 0:
-                        best_fallback_note = (
-                            f"Primary settings failed or gave slivers; used fallback "
-                            f"'{_algo_name(cfg['algo'])}'."
-                        )
+                        if cfg.get("emergency_tri"):
+                            best_fallback_note = (
+                                "Recombined quad meshing failed; used triangle fallback "
+                                f"'{_algo_name(cfg['algo'])}'."
+                            )
+                        else:
+                            best_fallback_note = (
+                                f"Primary settings failed or gave slivers; used fallback "
+                                f"'{_algo_name(cfg['algo'])}'."
+                            )
                 generated = True
+
                 # A healthy mesh ends the ladder; a marginal one keeps trying in
                 # case a later fallback is cleaner, but is still kept as backup.
-                if candidate_angle >= 12.0 or (has_prisms and candidate_angle >= 8.0):
+                if recombine:
+                    healthy_mesh = quad_frac >= 0.70 and candidate_angle >= 8.0
+                elif has_prisms:
+                    healthy_mesh = candidate_angle >= 8.0
+                else:
+                    healthy_mesh = candidate_angle >= 12.0
+
+                if healthy_mesh:
                     break
             except Exception as exc:  # pragma: no cover - depends on CAD input
                 last_error = exc
@@ -950,9 +1038,16 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 gmsh.option.setNumber("Mesh.MeshSizeMax", max(uniform * 4.0, far_size))
                 gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 1)
                 gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
-                gmsh.option.setNumber("Mesh.RecombineAll", 0)
+                gmsh.option.setNumber("Mesh.RecombineAll", 1 if recombine else 0)
+                if recombine:
+                    gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 3 if element_type == "quad" else 1)
                 gmsh.option.setNumber("Mesh.Algorithm", 1)
                 gmsh.model.mesh.generate(2)
+                if recombine:
+                    try:
+                        gmsh.model.mesh.recombine()
+                    except Exception:
+                        pass
                 u_tags, u_coords, _ = gmsh.model.mesh.getNodes()
                 u_index = {int(tag): idx for idx, tag in enumerate(u_tags)}
                 u_nodes = [
@@ -970,6 +1065,33 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                         for i in range(0, len(u_flat), npe)
                         if all(int(u_flat[i + o]) in u_index for o in range(npe))
                     ])
+                if not u_elements and recombine:
+                    # If recombined uniform meshing yielded no elements, retry as pure triangles
+                    gmsh.model.mesh.clear()
+                    gmsh.option.setNumber("Mesh.RecombineAll", 0)
+                    try:
+                        gmsh.model.mesh.removeConstraints([(2, surface)])
+                    except Exception:
+                        pass
+                    gmsh.option.setNumber("Mesh.Algorithm", 1)
+                    gmsh.model.mesh.generate(2)
+                    u_tags, u_coords, _ = gmsh.model.mesh.getNodes()
+                    u_index = {int(tag): idx for idx, tag in enumerate(u_tags)}
+                    u_nodes = [
+                        [float(u_coords[i]), float(u_coords[i + 1]), 0.0]
+                        for i in range(0, len(u_coords), 3)
+                    ]
+                    u_elements = []
+                    u_types, _, u_enodes = gmsh.model.mesh.getElements(2, surface)
+                    for u_type, u_flat in zip(u_types, u_enodes):
+                        npe = {2: 3, 3: 4}.get(u_type)
+                        if not npe:
+                            continue
+                        u_elements.extend([
+                            [u_index[int(u_flat[i + o])] for o in range(npe)]
+                            for i in range(0, len(u_flat), npe)
+                            if all(int(u_flat[i + o]) in u_index for o in range(npe))
+                        ])
                 if u_elements:
                     best_mesh = (1, u_nodes, u_elements,
                                  _mesh_quality(u_nodes, u_elements), u_index, False)
@@ -980,7 +1102,46 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                         "Growth rate, or a smaller Max size."
                     )
             except Exception as exc:
-                last_error = exc
+                if recombine:
+                    try:
+                        gmsh.model.mesh.clear()
+                        gmsh.option.setNumber("Mesh.RecombineAll", 0)
+                        try:
+                            gmsh.model.mesh.removeConstraints([(2, surface)])
+                        except Exception:
+                            pass
+                        gmsh.option.setNumber("Mesh.Algorithm", 1)
+                        gmsh.model.mesh.generate(2)
+                        u_tags, u_coords, _ = gmsh.model.mesh.getNodes()
+                        u_index = {int(tag): idx for idx, tag in enumerate(u_tags)}
+                        u_nodes = [
+                            [float(u_coords[i]), float(u_coords[i + 1]), 0.0]
+                            for i in range(0, len(u_coords), 3)
+                        ]
+                        u_elements = []
+                        u_types, _, u_enodes = gmsh.model.mesh.getElements(2, surface)
+                        for u_type, u_flat in zip(u_types, u_enodes):
+                            npe = {2: 3, 3: 4}.get(u_type)
+                            if not npe:
+                                continue
+                            u_elements.extend([
+                                [u_index[int(u_flat[i + o])] for o in range(npe)]
+                                for i in range(0, len(u_flat), npe)
+                                if all(int(u_flat[i + o]) in u_index for o in range(npe))
+                            ])
+                        if u_elements:
+                            best_mesh = (1, u_nodes, u_elements,
+                                         _mesh_quality(u_nodes, u_elements), u_index, False)
+                            generated = True
+                            warnings.append(
+                                "Refinement settings were too aggressive for this geometry - "
+                                "generated a uniform mesh. Try a larger Local wall size, a lower "
+                                "Growth rate, or a smaller Max size."
+                            )
+                    except Exception as inner_exc:
+                        last_error = inner_exc
+                else:
+                    last_error = exc
 
         if not generated or best_mesh is None:
             raise ValueError(f"Gmsh could not mesh this geometry: {last_error}")
@@ -1004,11 +1165,69 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
         if not elements:
             raise ValueError("Gmsh generated no 2D elements.")
 
+        if axisymmetric:
+            axis_idx = boundaries.get("axis") or []
+            if not axis_idx:
+                raise ValueError(
+                    "axisymmetric case has no 'axis' tagged edge - tag the "
+                    "centerline edge of the domain as 'axis'"
+                )
+            axis_id_set = set(axis_idx)
+            axis_ys = [nodes[i][1] for i in axis_idx]
+            axis_y_mean = sum(axis_ys) / len(axis_ys)
+            axis_y_spread = max(axis_ys) - min(axis_ys)
+            # Compare the wobble to the geometry's own radius, not the
+            # (possibly much longer) axial length - a hand-drawn centerline
+            # can easily wobble a percent or two of the radius without
+            # anything actually being wrong; every axis node is forced to
+            # exactly y = 0 below regardless, which absorbs that fine. Only
+            # reject a wobble big enough to mean the wrong edge got tagged.
+            radial_scale = max(domain_height, 1e-6)
+            if axis_y_spread > radial_scale * 0.25:
+                raise ValueError(
+                    "the 'axis' edge isn't straight enough to be a "
+                    f"centerline (it varies by {axis_y_spread:.4g} m across "
+                    "its length) - check that only the true centerline edge "
+                    "is tagged 'axis'"
+                )
+            # The sketch canvas has no reason to be centered on the world
+            # origin - normalise so the tagged axis actually sits at y = 0,
+            # which the wedge revolve (mesh_bridge.py) assumes. Forcing the
+            # user to draw at exactly y = 0 instead would just reintroduce
+            # the kind of pixel-precision snapping annoyance already removed
+            # from freehand drawing.
+            if abs(axis_y_mean) > 1e-9:
+                nodes = [[p[0], p[1] - axis_y_mean] for p in nodes]
+                warnings.append(
+                    f"Axisymmetric: the sketch was shifted {-axis_y_mean:.4g} m "
+                    "so the tagged axis edge sits exactly on the centerline."
+                )
+            # Only non-axis points need to sit above the centerline - axis
+            # nodes themselves get forced to exactly y = 0 in the revolve
+            # (mesh_bridge.py) no matter how they wobbled around the mean.
+            non_axis_ys = [p[1] for i, p in enumerate(nodes) if i not in axis_id_set]
+            min_y_after = min(non_axis_ys) if non_axis_ys else 0.0
+            if min_y_after < -radial_scale * 0.02:
+                raise ValueError(
+                    "axisymmetric geometry has points on both sides of the "
+                    "tagged 'axis' edge - draw only the half cross-section "
+                    "above the centerline"
+                )
+
         if quality["min_angle_degrees"] and quality["min_angle_degrees"] < 8.0:
             warnings.append(
                 f"Sliver elements present (min angle {quality['min_angle_degrees']}°); "
                 "consider a finer preset or enabling optimisation."
             )
+
+        has_quads = quality.get("quads", 0) > 0
+        actually_recombined = bool(recombine and has_quads)
+        if recombine and not has_quads:
+            warnings.append(
+                f"'{element_type}' mesh requested, but recombination produced no quad elements; "
+                "a triangle mesh was generated as fallback."
+            )
+
         return {
             "generator": _algo_name(actual_algorithm),
             "algorithm": _algo_name(actual_algorithm),
@@ -1027,7 +1246,8 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 "boundary_layer_thickness_m": round(thickness, 6) if thickness else 0.0,
                 "proximity_refinement": use_proximity,
                 "prism_layers": use_prism,
-                "recombined": recombine,
+                "recombined": actually_recombined,
+                "quad_fraction": quality.get("quad_fraction", 0.0),
                 "optimized": optimize_mesh,
             },
             "num_nodes": len(nodes),
@@ -1201,37 +1421,102 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
     return {"moved": moved, "sweeps": sweeps, "converged": converged, "free": len(free)}
 
 
-def _distribute_cells(total: int, lengths: List[float]) -> List[int]:
-    """Split `total` cells across segments proportional to length, min 1 each.
+def _law_cell_sizes(n_cells: int, law: str, ratio: float) -> List[float]:
+    """`n_cells` cell-size fractions (summing to 1) along a unit edge under the
+    grading law. `ratio` = last cell / first cell for 'geometric'; for 'bump'
+    < 1 clusters cells at BOTH ends, > 1 clusters them in the middle.
 
-    Used when a block side is a polyline (e.g. a wedge floor: ramp + step + flat).
-    The returned counts always sum to exactly `total` so opposite block sides stay
-    matched for the transfinite mesher.
+    Shared by the structured edge distributor - the single source of truth for
+    what a law means, so a polyline (curved) edge grades exactly like a single
+    straight one.
     """
-    n = len(lengths)
-    if n == 0:
-        return []
-    total = max(total, n)
-    span = sum(lengths) or 1.0
-    raw = [total * l / span for l in lengths]
-    alloc = [max(1, int(math.floor(r))) for r in raw]
-    diff = total - sum(alloc)
-    # hand out / take back the remainder by fractional part
-    frac_order = sorted(range(n), key=lambda i: raw[i] - alloc[i], reverse=True)
-    k = 0
-    guard = 0
-    while diff > 0:
-        alloc[frac_order[k % n]] += 1
-        diff -= 1
-        k += 1
-    while diff < 0 and guard < 100000:
-        i = frac_order[k % n]
-        if alloc[i] > 1:
-            alloc[i] -= 1
-            diff += 1
-        k += 1
-        guard += 1
-    return alloc
+    n = max(1, int(n_cells))
+    if n == 1:
+        return [1.0]
+    if law == "geometric" and abs(ratio - 1.0) > 1e-6:
+        q = max(ratio, 1e-6) ** (1.0 / (n - 1))
+        w = [q ** k for k in range(n)]
+    elif law == "bump":
+        r = max(ratio, 0.02)
+        w = []
+        for k in range(n):
+            u = (k + 0.5) / n
+            w.append(r ** (1.0 - 2.0 * min(u, 1.0 - u)))
+    else:
+        w = [1.0] * n
+    # Floor so an extreme ratio on a short edge can't produce a sub-micron cell
+    # that collapses under the point-key rounding (1e-6).
+    w = [max(x, 5e-4) for x in w]
+    s = sum(w) or 1.0
+    return [x / s for x in w]
+
+
+def _distribute_nodes_on_polyline(
+    pts: List[Tuple[float, float]],
+    n_cells: int,
+    law: str,
+    ratio: float,
+) -> List[Tuple[float, float]]:
+    """Place `n_cells + 1` points along the polyline `pts` by arc length, spaced
+    per the grading law. A node is snapped exactly onto any sharp interior
+    corner (turn > 35 deg) so a wedge / step floor keeps its crease.
+
+    The polyline may be a densely sampled curve (a wall-hugging block edge) or a
+    few straight segments (a wedge floor) - either way the result has exactly
+    `n_cells` cells, so opposite block edges (equal `nodes`) always match for the
+    transfinite mesher.
+    """
+    n_cells = max(1, int(n_cells))
+    cum = [0.0]
+    for i in range(len(pts) - 1):
+        cum.append(cum[-1] + math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]))
+    total_len = cum[-1]
+    if total_len < 1e-12:
+        return [pts[0], pts[-1]]
+
+    fracs = _law_cell_sizes(n_cells, law, ratio)
+    s = [0.0]
+    for f in fracs:
+        s.append(s[-1] + f * total_len)
+    s[-1] = total_len
+
+    # sharp interior corners -> arc-length positions a node must land on
+    corners: List[float] = []
+    for i in range(1, len(pts) - 1):
+        ax, ay = pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]
+        bx, by = pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]
+        na, nb = math.hypot(ax, ay), math.hypot(bx, by)
+        if na < 1e-12 or nb < 1e-12:
+            continue
+        cos_t = max(-1.0, min(1.0, (ax * bx + ay * by) / (na * nb)))
+        if math.degrees(math.acos(cos_t)) > 35.0:
+            corners.append(cum[i])
+    for sc in corners:
+        best_j, best_d = None, 1e18
+        for j in range(1, len(s) - 1):
+            d = abs(s[j] - sc)
+            if d < best_d:
+                best_d, best_j = d, j
+        if best_j is not None:
+            s[best_j] = sc
+    s.sort()
+    for j in range(1, len(s)):
+        if s[j] <= s[j - 1]:
+            s[j] = min(total_len, s[j - 1] + total_len * 1e-6)
+
+    out: List[Tuple[float, float]] = []
+    seg = 0
+    for sv in s:
+        while seg < len(cum) - 2 and cum[seg + 1] < sv:
+            seg += 1
+        seg_len = cum[seg + 1] - cum[seg]
+        f = 0.0 if seg_len < 1e-12 else max(0.0, min(1.0, (sv - cum[seg]) / seg_len))
+        out.append((
+            pts[seg][0] + (pts[seg + 1][0] - pts[seg][0]) * f,
+            pts[seg][1] + (pts[seg + 1][1] - pts[seg][1]) * f,
+        ))
+    return out
+
 
 
 def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1267,10 +1552,16 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
                 point_cache[k] = gmsh.model.geo.addPoint(float(x), float(y), 0.0)
             return point_cache[k]
 
-        # Each block edge becomes one or more straight sub-curves. A wedge / step
-        # floor is a polyline (ramp, riser, flat), NOT a spline - a spline would
-        # round the sharp corners into an S bend. The sub-curves are stored in
-        # p0 -> p1 order so the block loop can walk them forward or reversed.
+        # Each block edge becomes exactly `nodes - 1` straight sub-curves, one
+        # per cell. The node POSITIONS are pre-distributed along the edge's arc
+        # length by the grading law (`_distribute_nodes_on_polyline`), so the
+        # curve geometry (a densely sampled wall) is decoupled from the cell
+        # count: opposite block edges carry equal `nodes` and therefore always
+        # get matching discretisation for the transfinite surface, whatever the
+        # path sampling. Each sub-curve is a plain 2-node transfinite segment -
+        # no per-curve Progression, the spacing is already in the point layout.
+        # A wedge / step floor keeps its crease because a node is snapped onto
+        # every sharp interior corner.
         edge_curves: List[List[int]] = []          # ordered sub-curve tags per edge
         edge_end_nodes: List[Tuple[int, int]] = []  # (start point tag, end point tag) per edge
         curve_meta: List[Tuple[int, str]] = []      # (curve tag, patch name)
@@ -1291,36 +1582,26 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
             if len(pts) < 2:
                 raise ValueError("A block edge collapsed to a single point.")
 
-            seg_count = len(pts) - 1
-            lengths = [math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]) for i in range(seg_count)]
-            total_cells = max(nodes - 1, seg_count)
-            if seg_count == 1:
-                cell_alloc = [total_cells]
-            else:
-                cell_alloc = _distribute_cells(total_cells, lengths)
-                if law != "uniform":
-                    warnings.append(
-                        f"The '{patch}' side has corners, so its {law} grading was spread evenly along it."
-                    )
+            n_cells = max(1, nodes - 1)
+            node_pts = _distribute_nodes_on_polyline(pts, n_cells, law, ratio)
 
             subs: List[int] = []
-            for i in range(seg_count):
-                pa = add_point(*pts[i])
-                pb = add_point(*pts[i + 1])
-                c = gmsh.model.geo.addLine(pa, pb)
-                n_i = cell_alloc[i] + 1
-                if seg_count == 1 and law == "bump":
-                    gmsh.model.geo.mesh.setTransfiniteCurve(c, n_i, "Bump", max(ratio, 0.05))
-                elif seg_count == 1 and law == "geometric" and abs(ratio - 1.0) > 1e-6:
-                    per = ratio ** (1.0 / max(n_i - 1, 1))
-                    gmsh.model.geo.mesh.setTransfiniteCurve(c, n_i, "Progression", per)
-                else:
-                    gmsh.model.geo.mesh.setTransfiniteCurve(c, n_i)
+            prev_tag = add_point(*node_pts[0])
+            for i in range(1, len(node_pts)):
+                cur_tag = add_point(*node_pts[i])
+                if cur_tag == prev_tag:
+                    continue
+                c = gmsh.model.geo.addLine(prev_tag, cur_tag)
+                gmsh.model.geo.mesh.setTransfiniteCurve(c, 2)
                 subs.append(c)
                 curve_meta.append((c, patch))
+                prev_tag = cur_tag
+
+            if not subs:
+                raise ValueError("A block edge produced no sub-curves.")
 
             edge_curves.append(subs)
-            edge_end_nodes.append((add_point(*pts[0]), add_point(*pts[-1])))
+            edge_end_nodes.append((add_point(*node_pts[0]), add_point(*node_pts[-1])))
 
         surfaces: List[int] = []
         curve_use: Dict[int, int] = {}  # abs curve tag -> how many surfaces touch it

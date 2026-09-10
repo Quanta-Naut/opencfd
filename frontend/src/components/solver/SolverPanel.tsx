@@ -163,12 +163,16 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
 
         <Head>Solution methods</Head>
         <Row label="Coupling">
-          <select className={sel} value={c.methods.coupling} onChange={(e) => setMethods({ coupling: e.target.value as any })}>
-            <option value="SIMPLE">SIMPLE</option>
-            <option value="SIMPLEC">SIMPLEC</option>
-            <option value="PIMPLE">PIMPLE</option>
-            <option value="PISO">PISO</option>
-          </select>
+          {/* OpenFOAM 13's foamRun picks the pressure-velocity algorithm itself
+              from the time scheme + corrector count - there is nothing to choose.
+              Show what it will run so the panel still explains itself. */}
+          <span className="text-[11px] text-[#69717D]">
+            {!transient
+              ? 'SIMPLE - steady, auto'
+              : c.methods.nOuterCorrectors > 1
+                ? 'PIMPLE - transient, auto'
+                : 'PISO - transient, auto'}
+          </span>
         </Row>
         <Row label="Momentum">
           <select className={sel} value={c.methods.momentum} onChange={(e) => setMethods({ momentum: e.target.value as any })}>

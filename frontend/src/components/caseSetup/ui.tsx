@@ -16,8 +16,8 @@ export const SectionCard: React.FC<{
       <div className="flex items-center gap-2">
         {icon && <span className="text-[#2563EB] shrink-0">{icon}</span>}
         <div>
-          <h2 className="text-sm font-bold text-[#171A1F]">{title}</h2>
-          {hint && <p className="text-[10px] text-[#69717D] mt-1 max-w-md">{hint}</p>}
+          <h2 className="text-[13px] font-bold text-[#171A1F]">{title}</h2>
+          {hint && <p className="text-[11px] text-[#69717D] mt-1 max-w-md">{hint}</p>}
         </div>
       </div>
       {right}
@@ -32,9 +32,9 @@ export const Field: React.FC<{ label: React.ReactNode; hint?: string; children: 
   children,
 }) => (
   <label className="block">
-    <span className="text-[10px] font-semibold text-[#69717D] block mb-1.5">{label}</span>
+    <span className="text-[11px] font-semibold text-[#69717D] block mb-1.5">{label}</span>
     {children}
-    {hint && <span className="text-[9px] text-[#A5ACB5] block mt-1">{hint}</span>}
+    {hint && <span className="text-[10px] text-[#8A929E] block mt-1">{hint}</span>}
   </label>
 );
 
@@ -130,7 +130,7 @@ export const Stat: React.FC<{ label: string; value: string; tone?: 'default' | '
   tone = 'default',
 }) => (
   <div className="bg-[#F8FAFC] border border-[#E8EDF1] rounded-lg px-3 py-2">
-    <span className="text-[9px] uppercase tracking-wide text-[#8B95A1] block">{label}</span>
+    <span className="text-[10px] uppercase tracking-wide text-[#8B95A1] block">{label}</span>
     <span
       className={`text-[13px] font-mono font-semibold block mt-0.5 ${
         tone === 'warn' ? 'text-[#B4622D]' : tone === 'good' ? 'text-[#059669]' : 'text-[#171A1F]'
@@ -146,5 +146,7 @@ export const fmt = (n: number, sig = 3): string => {
   if (n === 0) return '0';
   const abs = Math.abs(n);
   if (abs >= 1e5 || abs < 1e-3) return n.toExponential(sig - 1);
-  return n.toPrecision(sig).replace(/\.?0+$/, '');
+  // Strip trailing zeros only AFTER a decimal point - a bare "340" must not
+  // become "34" (the old /\.?0+$/ ate significant integer zeros).
+  return n.toPrecision(sig).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 };

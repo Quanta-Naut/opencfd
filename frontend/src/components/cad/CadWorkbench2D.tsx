@@ -3,6 +3,7 @@ import {
   MousePointer2,
   Minus,
   Circle,
+  CircleDot,
   Square,
   CornerUpRight,
   Maximize2,
@@ -74,7 +75,7 @@ import {
   validateBoundaryTags,
   generateDefaultAirfoilPoints,
 } from '../../types/cadWorkflow';
-import { Blocking, blockPolygon, entityRing } from '../../types/blocking';
+import { Blocking, blockPolygon, entityRing, applyVertexMove, cleanBlocking, propagateNodeCounts } from '../../types/blocking';
 import { useWebGLField } from './useWebGLField';
 
 // ─── CAD Workbench Tool & State Types ─────────────────────────────────────────
@@ -85,6 +86,7 @@ export type CadTool =
   | 'polyline'
   | 'rectangle'
   | 'circle_center_radius'
+  | 'ellipse_center'
   | 'circle_3pt'
   | 'arc_center'
   | 'arc_3pt'
@@ -117,7 +119,7 @@ interface Snap {
 
 export interface DynamicDimPrompt {
   entityId: string;
-  type: 'line' | 'rectangle' | 'circle' | 'arc';
+  type: 'line' | 'rectangle' | 'circle' | 'ellipse' | 'arc';
   worldPos: Point2D;
   val1: string;
   val2?: string;
@@ -126,6 +128,10 @@ export interface DynamicDimPrompt {
   basePt: Point2D;
   endPt?: Point2D;
   layer: string;
+  /** True while the shape is still being placed (no entity exists yet) - the
+   * box tracks the mouse live until the user types, and Tab/Enter/typed
+   * values drive the in-progress preview instead of editing a committed entity. */
+  live?: boolean;
 }
 
 
@@ -240,6 +246,23 @@ function moveEntityVertex(ent: CadEntity, idx: number, np: Point2D): CadEntity {
     }
     const r = Math.hypot(np.x - pts[0].x, np.y - pts[0].y);
     return { ...ent, radius: r, pts: [pts[0], np] };
+  }
+  if (ent.type === 'ellipse' && pts.length >= 2) {
+    if (idx === 0) {
+      const dx = np.x - pts[0].x, dy = np.y - pts[0].y;
+      return { ...ent, pts: pts.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+    }
+    if (idx === 1) {
+      const rx = Math.hypot(np.x - pts[0].x, np.y - pts[0].y);
+      const rotation = Math.atan2(np.y - pts[0].y, np.x - pts[0].x);
+      return { ...ent, rx, rotation, pts: [pts[0], np] };
+    }
+    if (idx === 2) {
+      const c = pts[0];
+      const rot = ent.rotation || 0;
+      const distMinor = Math.abs(-(np.x - c.x) * Math.sin(rot) + (np.y - c.y) * Math.cos(rot));
+      return { ...ent, ry: distMinor };
+    }
   }
   pts[idx] = np;
   return { ...ent, pts };
@@ -390,6 +413,40 @@ function segCircleIntersect(a: Point2D, b: Point2D, center: Point2D, radius: num
   return res;
 }
 
+/** Intersections of finite segment a→b with rotated ellipse (center, rx, ry, rotation) */
+function segEllipseIntersect(
+  a: Point2D,
+  b: Point2D,
+  center: Point2D,
+  rx: number,
+  ry: number,
+  rotation: number = 0
+): Point2D[] {
+  if (rx <= 1e-9 || ry <= 1e-9) return [];
+  const cosR = Math.cos(rotation);
+  const sinR = Math.sin(rotation);
+  const toUnit = (p: Point2D): Point2D => {
+    const tx = p.x - center.x;
+    const ty = p.y - center.y;
+    const rxRot = tx * cosR + ty * sinR;
+    const ryRot = -tx * sinR + ty * cosR;
+    return { x: rxRot / rx, y: ryRot / ry };
+  };
+  const fromUnit = (p: Point2D): Point2D => {
+    const sx = p.x * rx;
+    const sy = p.y * ry;
+    return {
+      x: center.x + sx * cosR - sy * sinR,
+      y: center.y + sx * sinR + sy * cosR,
+    };
+  };
+
+  const aUnit = toUnit(a);
+  const bUnit = toUnit(b);
+  const hitsUnit = segCircleIntersect(aUnit, bUnit, { x: 0, y: 0 }, 1);
+  return hitsUnit.map(fromUnit);
+}
+
 function normalizeAngle(a: number): number {
 
   let res = a % (2 * Math.PI);
@@ -403,6 +460,32 @@ export interface TrimTarget {
   targetSegIdx: number;
   subSeg: { p0: Point2D; p1: Point2D };
   preservedSegs: { p0: Point2D; p1: Point2D }[];
+  preservedPolylines?: Point2D[][];
+  subPolyline?: Point2D[];
+}
+
+function sampleArcPoints(
+  hStart: { idx: number; pt: Point2D },
+  hEnd: { idx: number; pt: Point2D },
+  ring: Point2D[]
+): Point2D[] {
+  const N = ring.length;
+  const pts: Point2D[] = [hStart.pt];
+  let k = Math.floor(hStart.idx) + 1;
+  const endLimit = hStart.idx <= hEnd.idx ? hEnd.idx : hEnd.idx + N;
+
+  while (k < endLimit) {
+    const ringVtx = ring[k % N];
+    if (dist(pts[pts.length - 1], ringVtx) > 1e-4) {
+      pts.push(ringVtx);
+    }
+    k++;
+  }
+
+  if (dist(pts[pts.length - 1], hEnd.pt) > 1e-4) {
+    pts.push(hEnd.pt);
+  }
+  return pts;
 }
 
 function getTrimTarget(rawPt: Point2D, entities: CadEntity[], zoom: number): TrimTarget | null {
@@ -422,9 +505,208 @@ function getTrimTarget(rawPt: Point2D, entities: CadEntity[], zoom: number): Tri
       const d = distToSegment(rawPt, ent.pts[i], ent.pts[0]);
       if (d < hitR && d < bestD) { bestD = d; targetEnt = ent; targetSegIdx = i; }
     }
+    if (ent.type === 'circle' && ent.pts.length >= 1) {
+      const r = ent.radius ?? (ent.pts[1] ? dist(ent.pts[0], ent.pts[1]) : 0);
+      if (r > 0) {
+        const radialD = Math.abs(dist(rawPt, ent.pts[0]) - r);
+        if (radialD < hitR && radialD < bestD) {
+          bestD = radialD;
+          targetEnt = ent;
+          targetSegIdx = -1;
+        }
+      }
+    }
+    if (ent.type === 'ellipse' && ent.pts.length >= 1 && ent.rx != null && ent.ry != null) {
+      const c = ent.pts[0];
+      const rx = ent.rx;
+      const ry = ent.ry;
+      const rot = ent.rotation || 0;
+      const cosR = Math.cos(rot);
+      const sinR = Math.sin(rot);
+      const N = 32;
+      let minD = Infinity;
+      let prevP = {
+        x: c.x + rx * cosR,
+        y: c.y + rx * sinR,
+      };
+      for (let j = 1; j <= N; j++) {
+        const a = (2 * Math.PI * j) / N;
+        const lx = rx * Math.cos(a);
+        const ly = ry * Math.sin(a);
+        const curP = {
+          x: c.x + lx * cosR - ly * sinR,
+          y: c.y + lx * sinR + ly * cosR,
+        };
+        const d = distToSegment(rawPt, prevP, curP);
+        if (d < minD) minD = d;
+        prevP = curP;
+      }
+      if (minD < hitR && minD < bestD) {
+        bestD = minD;
+        targetEnt = ent;
+        targetSegIdx = -1;
+      }
+    }
   }
 
-  if (!targetEnt || targetSegIdx < 0) return null;
+  if (!targetEnt) return null;
+  if (targetEnt.type !== 'circle' && targetEnt.type !== 'ellipse' && targetSegIdx < 0) return null;
+
+  if (targetEnt.type === 'circle' || targetEnt.type === 'ellipse') {
+    const c = targetEnt.pts[0];
+    let rx = 0;
+    let ry = 0;
+    let rot = 0;
+    if (targetEnt.type === 'circle') {
+      rx = targetEnt.radius ?? (targetEnt.pts[1] ? dist(c, targetEnt.pts[1]) : 0);
+      ry = rx;
+      rot = 0;
+    } else {
+      rx = targetEnt.rx ?? (targetEnt.pts[1] ? dist(c, targetEnt.pts[1]) : 0);
+      ry = targetEnt.ry ?? (rx * 0.5);
+      rot = targetEnt.rotation || 0;
+    }
+    if (rx <= 1e-6 || ry <= 1e-6) return null;
+
+    const N = 128;
+    const cosR = Math.cos(rot);
+    const sinR = Math.sin(rot);
+    const ring: Point2D[] = [];
+    for (let k = 0; k < N; k++) {
+      const a = (2 * Math.PI * k) / N;
+      const lx = rx * Math.cos(a);
+      const ly = ry * Math.sin(a);
+      ring.push({
+        x: c.x + lx * cosR - ly * sinR,
+        y: c.y + lx * sinR + ly * cosR,
+      });
+    }
+
+    const rawHits: { idx: number; pt: Point2D }[] = [];
+    for (let k = 0; k < N; k++) {
+      const segA = ring[k];
+      const segB = ring[(k + 1) % N];
+
+      for (const other of entities) {
+        if (other.id === targetEnt.id) continue;
+
+        for (let j = 0; j < other.pts.length - 1; j++) {
+          if (other.type === 'construction' && other.pts.length >= 2) {
+            const ix = segInfLineIntersect(segA, segB, other.pts[0], other.pts[1]);
+            if (ix) {
+              const t = segParam(ix, segA, segB);
+              rawHits.push({ idx: (k + t) % N, pt: ix });
+            }
+          } else {
+            const ix = segSegIntersect(segA, segB, other.pts[j], other.pts[j + 1]);
+            if (ix) {
+              const t = segParam(ix, segA, segB);
+              rawHits.push({ idx: (k + t) % N, pt: ix });
+            }
+          }
+        }
+
+        if (other.isClosed && other.pts.length >= 3) {
+          const j = other.pts.length - 1;
+          const ix = segSegIntersect(segA, segB, other.pts[j], other.pts[0]);
+          if (ix) {
+            const t = segParam(ix, segA, segB);
+            rawHits.push({ idx: (k + t) % N, pt: ix });
+          }
+        }
+
+        if (other.type === 'circle' && other.pts.length >= 2) {
+          const rOther = other.radius ?? dist(other.pts[0], other.pts[1]);
+          const ixs = segCircleIntersect(segA, segB, other.pts[0], rOther);
+          for (const ix of ixs) {
+            const t = segParam(ix, segA, segB);
+            rawHits.push({ idx: (k + t) % N, pt: ix });
+          }
+        }
+
+        if (other.type === 'ellipse' && other.pts.length >= 2 && other.rx != null && other.ry != null) {
+          const ixs = segEllipseIntersect(segA, segB, other.pts[0], other.rx, other.ry, other.rotation || 0);
+          for (const ix of ixs) {
+            const t = segParam(ix, segA, segB);
+            rawHits.push({ idx: (k + t) % N, pt: ix });
+          }
+        }
+      }
+    }
+
+    rawHits.sort((a, b) => a.idx - b.idx);
+    const uniqueHits: { idx: number; pt: Point2D }[] = [];
+    for (const h of rawHits) {
+      const isDup = uniqueHits.some(u => {
+        const idxDiff = Math.abs(u.idx - h.idx);
+        const wrapDiff = Math.abs(idxDiff - N);
+        return dist(u.pt, h.pt) < 1e-3 || idxDiff < 0.2 || wrapDiff < 0.2;
+      });
+      if (!isDup) uniqueHits.push(h);
+    }
+
+    if (uniqueHits.length < 2) {
+      return {
+        targetEnt,
+        targetSegIdx: -1,
+        subSeg: { p0: ring[0], p1: ring[Math.floor(N / 2)] },
+        subPolyline: [...ring, ring[0]],
+        preservedSegs: [],
+        preservedPolylines: [],
+      };
+    }
+
+    let clickIdx = 0;
+    let clickMinD = Infinity;
+    for (let k = 0; k < N; k++) {
+      const a = ring[k];
+      const b = ring[(k + 1) % N];
+      const d = distToSegment(rawPt, a, b);
+      if (d < clickMinD) {
+        clickMinD = d;
+        const t = segParam(rawPt, a, b);
+        clickIdx = (k + t) % N;
+      }
+    }
+
+    let trimSpanIdx = -1;
+    for (let i = 0; i < uniqueHits.length - 1; i++) {
+      if (clickIdx >= uniqueHits[i].idx && clickIdx <= uniqueHits[i + 1].idx) {
+        trimSpanIdx = i;
+        break;
+      }
+    }
+    if (trimSpanIdx === -1) {
+      trimSpanIdx = uniqueHits.length - 1;
+    }
+
+    const preservedPolylines: Point2D[][] = [];
+    const preservedSegs: { p0: Point2D; p1: Point2D }[] = [];
+    let subPolyline: Point2D[] = [];
+    let subSeg = { p0: ring[0], p1: ring[Math.floor(N / 2)] };
+
+    for (let i = 0; i < uniqueHits.length; i++) {
+      const hStart = uniqueHits[i];
+      const hEnd = uniqueHits[(i + 1) % uniqueHits.length];
+      const arcPts = sampleArcPoints(hStart, hEnd, ring);
+      if (i === trimSpanIdx) {
+        subPolyline = arcPts;
+        subSeg = { p0: hStart.pt, p1: hEnd.pt };
+      } else {
+        preservedPolylines.push(arcPts);
+        preservedSegs.push({ p0: hStart.pt, p1: hEnd.pt });
+      }
+    }
+
+    return {
+      targetEnt,
+      targetSegIdx: -1,
+      subSeg,
+      subPolyline,
+      preservedSegs,
+      preservedPolylines,
+    };
+  }
 
   const segA = targetEnt.pts[targetSegIdx];
   const segB = targetEnt.pts[(targetSegIdx + 1) % targetEnt.pts.length];
@@ -462,6 +744,13 @@ function getTrimTarget(rawPt: Point2D, entities: CadEntity[], zoom: number): Tri
     if (other.type === 'circle' && other.pts.length >= 2) {
       const r = other.radius ?? dist(other.pts[0], other.pts[1]);
       const ixs = segCircleIntersect(segA, segB, other.pts[0], r);
+      for (const ix of ixs) {
+        const t = segParam(ix, segA, segB);
+        if (t > 1e-5 && t < 1 - 1e-5) tParams.push(t);
+      }
+    }
+    if (other.type === 'ellipse' && other.pts.length >= 2 && other.rx != null && other.ry != null) {
+      const ixs = segEllipseIntersect(segA, segB, other.pts[0], other.rx, other.ry, other.rotation || 0);
       for (const ix of ixs) {
         const t = segParam(ix, segA, segB);
         if (t > 1e-5 && t < 1 - 1e-5) tParams.push(t);
@@ -787,40 +1076,59 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
 
   // ── Camera Framing Helper ───────────────────────────────────────────────────
-  const fitBoundingBox = useCallback((box: { minX: number; maxX: number; minY: number; maxY: number }, marginRatio = 0.70) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const cw = canvas.clientWidth || 800;
-    const ch = canvas.clientHeight || 600;
+  const fitBoundingBox = useCallback(
+    (box: { minX: number; maxX: number; minY: number; maxY: number }, marginRatio = 0.70): boolean => {
+      const canvas = canvasRef.current;
+      const cw =
+        (canvas && canvas.clientWidth > 0 ? canvas.clientWidth : 0) ||
+        (containerRef.current && containerRef.current.clientWidth > 0 ? containerRef.current.clientWidth : 0) ||
+        viewport.w ||
+        0;
+      const ch =
+        (canvas && canvas.clientHeight > 0 ? canvas.clientHeight : 0) ||
+        (containerRef.current && containerRef.current.clientHeight > 0 ? containerRef.current.clientHeight : 0) ||
+        viewport.h ||
+        0;
 
-    // Get bottom drawer overlay height if present
-    const bottomBarPx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar')) || 32;
-    // Visible canvas height above the bottom console drawer
-    const visibleH = Math.max(100, ch - bottomBarPx);
+      if (!cw || !ch || cw < 50 || ch < 50) return false;
 
-    const w = Math.max(0.01, box.maxX - box.minX);
-    const h = Math.max(0.01, box.maxY - box.minY);
-    const cx = (box.minX + box.maxX) / 2;
-    const cy = (box.minY + box.maxY) / 2;
+      if (
+        !isFinite(box.minX) ||
+        !isFinite(box.maxX) ||
+        !isFinite(box.minY) ||
+        !isFinite(box.maxY) ||
+        box.maxX < box.minX ||
+        box.maxY < box.minY
+      ) {
+        return false;
+      }
 
-    const availW = cw * marginRatio;
-    const availH = visibleH * marginRatio;
-    const newZoom = Math.max(0.5, Math.min(25000, Math.min(availW / w, availH / h)));
-    
-    // Screen Y = ch/2 + pan.y - worldY * zoom
-    // To shift the center of the rendered content UP on screen (away from the bottom console),
-    // pan.y must be DECREASED (i.e. - bottomBarPx/2), but because world Y is inverted (-wy*zoom),
-    // screen_y = ch/2 + pan.y - cy*zoom. We want screen_cy = (ch - bottomBarPx)/2 = ch/2 - bottomBarPx/2.
-    // So: ch/2 + pan.y - cy*zoom = ch/2 - bottomBarPx/2  ==>  pan.y = cy*zoom - (bottomBarPx / 2).
-    // Let's ensure bottomBarPx is measured accurately and add padding for the transient player.
-    const newPan = {
-      x: -cx * newZoom,
-      y: cy * newZoom,
-    };
+      // Get bottom drawer overlay height if present
+      const bottomBarPx =
+        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar')) || 32;
+      // Visible canvas height above the bottom console drawer
+      const visibleH = Math.max(100, ch - bottomBarPx);
 
-    setZoom(newZoom);
-    setPan(newPan);
-  }, []);
+      const w = Math.max(0.01, box.maxX - box.minX);
+      const h = Math.max(0.01, box.maxY - box.minY);
+      const cx = (box.minX + box.maxX) / 2;
+      const cy = (box.minY + box.maxY) / 2;
+
+      const availW = cw * marginRatio;
+      const availH = visibleH * marginRatio;
+      const newZoom = Math.max(0.5, Math.min(25000, Math.min(availW / w, availH / h)));
+
+      const newPan = {
+        x: -cx * newZoom,
+        y: cy * newZoom,
+      };
+
+      setZoom(newZoom);
+      setPan(newPan);
+      return true;
+    },
+    [viewport.w, viewport.h],
+  );
 
   // Watch the canvas box; re-render + re-frame when the layout changes.
   useEffect(() => {
@@ -862,34 +1170,113 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const fitRef = useRef(fitCurrentContent);
   fitRef.current = fitCurrentContent;
 
-  // Re-frame ONLY when the view/stage switches or the mesh first appears - never
-  // on an entity edit. Dragging a domain slider must not recentre the canvas, or
-  // the handle chases the moving frame and the domain runs away. Explicit
-  // reframes ("Generate domain", double middle-click, fit button) still work.
+  // Re-frame ONLY when landing on the Results view - never just from switching
+  // stage tabs (Geometry/Mesh/Solver) or from a mesh finishing generation,
+  // and never on an entity edit or a domain-slider drag. The user finds an
+  // automatic recentre while iterating on geometry/mesh disorienting; Results
+  // is the one view where showing the whole field is the point of arriving
+  // there. Explicit reframes ("Generate domain", double middle-click, the fit
+  // button) still work regardless.
   const fitKey = useMemo(() => {
-    const hasMesh = (meshData?.nodes?.length ?? 0) > 0 ? 1 : 0;
-    const hasEnts = cadState.entities.some((e) => e.layer !== 'construction') ? 1 : 0;
-    const view = meshOnly ? (showField ? 'results' : 'solver') : canvasMode;
-    return `${hasMesh}:${hasEnts}:${view}`;
-  }, [meshData, cadState.entities, meshOnly, showField, canvasMode]);
+    return meshOnly ? (showField ? 'results' : 'solver') : canvasMode;
+  }, [meshOnly, showField, canvasMode]);
   useEffect(() => {
     if (isDrawing || draggingDomainHandleRef.current) return;
+    if (fitKey !== 'results') return;
     const id = requestAnimationFrame(() => fitRef.current());
     return () => cancelAnimationFrame(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fitKey]);
 
-  // Re-frame when a big layout change (rail push/collapse) resizes the canvas.
-  const prevVpW = useRef(0);
+  // When opening a project from the projects window with geometry already in the session,
+  // frame that geometry once so it is comfortably visible instead of centering on (0, 0).
+  const hasAutoCenteredInitialRef = useRef(false);
+  const userInteractedRef = useRef(false);
   useEffect(() => {
-    if (viewport.w === 0) { prevVpW.current = viewport.w; return; }
-    const bigChange = Math.abs(viewport.w - prevVpW.current) > 48;
-    prevVpW.current = viewport.w;
-    if (!bigChange || panning.current || isDrawing || draggingDomainHandleRef.current) return;
-    const id = requestAnimationFrame(() => fitRef.current());
-    return () => cancelAnimationFrame(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewport.w, viewport.h, isDrawing]);
+    if (hasAutoCenteredInitialRef.current || userInteractedRef.current) return;
+
+    const canvas = canvasRef.current;
+    const cw =
+      (canvas && canvas.clientWidth > 0 ? canvas.clientWidth : 0) ||
+      (containerRef.current && containerRef.current.clientWidth > 0 ? containerRef.current.clientWidth : 0) ||
+      viewport.w ||
+      0;
+    const ch =
+      (canvas && canvas.clientHeight > 0 ? canvas.clientHeight : 0) ||
+      (containerRef.current && containerRef.current.clientHeight > 0 ? containerRef.current.clientHeight : 0) ||
+      viewport.h ||
+      0;
+
+    // Wait until layout has completed and canvas has non-trivial dimensions
+    if (cw < 50 || ch < 50) return;
+
+    const entities =
+      cadState.entities.length > 0
+        ? cadState.entities
+        : initialEntities && initialEntities.length > 0
+          ? initialEntities
+          : [];
+
+    const geomEnts = entities.filter(
+      (e) => e.layer !== 'construction' && e.pts && e.pts.length > 0,
+    );
+    if (geomEnts.length === 0) return;
+
+    // We prefer framing actual geometry entities (e.g. airfoil, obstacle, body) if present,
+    // falling back to whatever non-construction geometry is loaded (which may include domain).
+    const actualGeom = geomEnts.filter((e) => e.role !== 'domain_boundary');
+    const targetEnts = actualGeom.length > 0 ? actualGeom : geomEnts;
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const ent of targetEnts) {
+      if (ent.type === 'circle' && typeof ent.radius === 'number' && ent.pts[0]) {
+        const c = ent.pts[0];
+        const r = ent.radius;
+        minX = Math.min(minX, c.x - r);
+        maxX = Math.max(maxX, c.x + r);
+        minY = Math.min(minY, c.y - r);
+        maxY = Math.max(maxY, c.y + r);
+      } else if (ent.type === 'ellipse' && typeof ent.rx === 'number' && typeof ent.ry === 'number' && ent.pts[0]) {
+        const c = ent.pts[0];
+        const rx = ent.rx;
+        const ry = ent.ry;
+        const rot = ent.rotation || 0;
+        const cosR = Math.cos(rot);
+        const sinR = Math.sin(rot);
+        const hw = Math.sqrt((rx * cosR) ** 2 + (ry * sinR) ** 2);
+        const hh = Math.sqrt((rx * sinR) ** 2 + (ry * cosR) ** 2);
+        minX = Math.min(minX, c.x - hw);
+        maxX = Math.max(maxX, c.x + hw);
+        minY = Math.min(minY, c.y - hh);
+        maxY = Math.max(maxY, c.y + hh);
+      } else {
+        for (const p of ent.pts) {
+          if (!p || typeof p.x !== 'number' || typeof p.y !== 'number') continue;
+          if (!isFinite(p.x) || !isFinite(p.y)) continue;
+          minX = Math.min(minX, p.x);
+          maxX = Math.max(maxX, p.x);
+          minY = Math.min(minY, p.y);
+          maxY = Math.max(maxY, p.y);
+        }
+      }
+    }
+
+    if (!isFinite(minX) || !isFinite(maxX) || !isFinite(minY) || !isFinite(maxY)) {
+      return;
+    }
+
+    if (maxX === minX) { minX -= 0.5; maxX += 0.5; }
+    if (maxY === minY) { minY -= 0.5; maxY += 0.5; }
+
+    const applied = fitBoundingBox({ minX, maxX, minY, maxY }, 0.72);
+    if (applied) {
+      hasAutoCenteredInitialRef.current = true;
+    }
+  }, [cadState.entities, initialEntities, viewport.w, viewport.h, fitBoundingBox]);
+
+  // A layout change (e.g. the residuals rail opening when Run is clicked)
+  // used to auto-refit here, which is exactly the kind of unwanted recentre
+  // the user does not want outside of explicitly landing on Results - removed.
 
   // When switching between steps (e.g. to Step 2, Step 3), reset to 'select' tool by default
   useEffect(() => {
@@ -897,6 +1284,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     setIsDrawing(false);
     setTempPts([]);
     setDimPrompt(null);
+    setManualDim(false);
     setCmdText('Switched to Select mode. Drag or click domain / boundary controls.');
   }, [currentStep]);
 
@@ -966,6 +1354,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   }, [glReady, pan, zoom, showField, fieldData, activeField, colormap, displayOnly, showMesh, canvasMode, glRender, glCanvasRef, viewport.w, viewport.h]);
 
   const handleAuxClick = useCallback((e: React.MouseEvent) => {
+    userInteractedRef.current = true;
     if (e.button !== 1) return;
     e.preventDefault();
     const now = Date.now();
@@ -1090,7 +1479,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const domainRing = useMemo<Point2D[]>(() => {
     const dom = cadState.entities.find((e) => e.role === 'domain_boundary');
     if (!dom) return [];
-    return dom.type === 'circle' ? entityRing(dom) : dom.pts.map((p) => ({ ...p }));
+    return (dom.type === 'circle' || dom.type === 'ellipse') ? entityRing(dom) : dom.pts.map((p) => ({ ...p }));
   }, [cadState.entities]);
 
   /** Snap a dragged block vertex: exact snap to a geometry/domain corner or a
@@ -1105,7 +1494,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       const corners: Point2D[] = [];
       for (const e of cadState.entities) {
         if (e.layer === 'construction') continue;
-        for (const q of e.type === 'circle' ? entityRing(e) : e.pts) corners.push(q);
+        for (const q of (e.type === 'circle' || e.type === 'ellipse') ? entityRing(e) : e.pts) corners.push(q);
       }
 
       // 1. exact snap to a corner or sibling vertex
@@ -1185,11 +1574,14 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const [dimPrompt, setDimPrompt] = useState<DynamicDimPrompt | null>(null);
   const [inputVal1, setInputVal1] = useState('');
   const [inputVal2, setInputVal2] = useState('');
+  // True once the user has typed into the live (still-drawing) dimension box -
+  // from then on the typed values drive the preview, not the mouse.
+  const [manualDim, setManualDim] = useState(false);
   const input1Ref = useRef<HTMLInputElement>(null);
   const input2Ref = useRef<HTMLInputElement>(null);
 
   // ── Trim Tool Preview ───────────────────────────────────────────────────────
-  const [hoveredTrim, setHoveredTrim] = useState<{ p0: Point2D; p1: Point2D } | null>(null);
+  const [hoveredTrim, setHoveredTrim] = useState<{ p0: Point2D; p1: Point2D; polyline?: Point2D[] } | null>(null);
 
   // ── Fallback edgeTagMap if not controlled ──────────────────────────────────
   const [localEdgeTagMap, setLocalEdgeTagMap] = useState<Record<string, BoundaryTag>>({});
@@ -1197,6 +1589,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   const setEdgeTagMap = onSetEdgeTagMap ?? setLocalEdgeTagMap;
 
   const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null);
+  const [hoveredVertex, setHoveredVertex] = useState<Point2D | null>(null);
 
   // ── Computed Bounding Box & Domain / Boundary Validations ──────────────────
   const geometryBBox = useMemo(() => getGeometryBBox(cadState.entities), [cadState.entities]);
@@ -1373,15 +1766,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
     const activeStart = tempPts.length > 0 ? tempPts[tempPts.length - 1] : null;
 
-    // 1. ORIGIN SNAP (priority when hovered near (0,0))
-    const dOrigin = dist(raw, { x: 0, y: 0 });
-    if (dOrigin < snapR * 1.2) {
-      return {
-        pt: { x: 0, y: 0 },
-        type: 'origin',
-        guides: [],
-      };
-    }
+    // The origin is a snap CANDIDATE (below, same radius/priority as any other
+    // point) but must never magnetically grab the cursor on its own - it used
+    // to have an enlarged, always-on capture radius here, which made ordinary
+    // drawing near the middle of the canvas "snap to center" unexpectedly. A
+    // deliberate re-centre is still one double middle-click away (handleAuxClick).
 
     // 2. COLLECT KEY GEOMETRIC VERTICES (Endpoints, Midpoints, Centers)
     const keyPoints: { pt: Point2D; type: Snap['type'] }[] = [
@@ -1401,6 +1790,41 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
       if (e.type === 'circle' && e.pts[0]) {
         keyPoints.push({ pt: e.pts[0], type: 'center' });
+        const c = e.pts[0];
+        const r = e.radius ?? (e.pts[1] ? dist(c, e.pts[1]) : 0);
+        if (r > 0) {
+          keyPoints.push({ pt: { x: +(c.x + r).toFixed(5), y: +c.y.toFixed(5) }, type: 'endpoint' });
+          keyPoints.push({ pt: { x: +(c.x - r).toFixed(5), y: +c.y.toFixed(5) }, type: 'endpoint' });
+          keyPoints.push({ pt: { x: +c.x.toFixed(5), y: +(c.y + r).toFixed(5) }, type: 'endpoint' });
+          keyPoints.push({ pt: { x: +c.x.toFixed(5), y: +(c.y - r).toFixed(5) }, type: 'endpoint' });
+        }
+      }
+      if (e.type === 'ellipse' && e.pts[0]) {
+        keyPoints.push({ pt: e.pts[0], type: 'center' });
+        if (typeof e.rx === 'number' && typeof e.ry === 'number') {
+          const c = e.pts[0];
+          const rx = e.rx;
+          const ry = e.ry;
+          const rot = e.rotation || 0;
+          const cosR = Math.cos(rot);
+          const sinR = Math.sin(rot);
+          keyPoints.push({ pt: { x: c.x + rx * cosR, y: c.y + rx * sinR }, type: 'endpoint' });
+          keyPoints.push({ pt: { x: c.x - rx * cosR, y: c.y - rx * sinR }, type: 'endpoint' });
+          keyPoints.push({ pt: { x: c.x - ry * sinR, y: c.y + ry * cosR }, type: 'endpoint' });
+          keyPoints.push({ pt: { x: c.x + ry * sinR, y: c.y - ry * cosR }, type: 'endpoint' });
+
+          // 4 true AXIS-ALIGNED quadrant points (extreme points of the ellipse in world x and y)
+          const tx = Math.atan2(-ry * sinR, rx * cosR);
+          const ty = Math.atan2(ry * cosR, rx * sinR);
+          const evalE = (t: number): Point2D => ({
+            x: +(c.x + rx * Math.cos(t) * cosR - ry * Math.sin(t) * sinR).toFixed(5),
+            y: +(c.y + rx * Math.cos(t) * sinR + ry * Math.sin(t) * cosR).toFixed(5),
+          });
+          keyPoints.push({ pt: evalE(tx), type: 'endpoint' });
+          keyPoints.push({ pt: evalE(tx + Math.PI), type: 'endpoint' });
+          keyPoints.push({ pt: evalE(ty), type: 'endpoint' });
+          keyPoints.push({ pt: evalE(ty + Math.PI), type: 'endpoint' });
+        }
       }
       if (e.type === 'arc' && e.pts[0]) {
         keyPoints.push({ pt: e.pts[0], type: 'center' });
@@ -1419,6 +1843,15 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
     }
     if (directSnap) {
+      if (activeStart && dist(directSnap.pt, activeStart) > 1e-4) {
+        const dx = Math.abs(directSnap.pt.x - activeStart.x);
+        const dy = Math.abs(directSnap.pt.y - activeStart.y);
+        if (dx < alignTol) {
+          directSnap.guides = [{ type: 'vertical', from: activeStart, to: directSnap.pt }];
+        } else if (dy < alignTol) {
+          directSnap.guides = [{ type: 'horizontal', from: activeStart, to: directSnap.pt }];
+        }
+      }
       return directSnap;
     }
 
@@ -1635,18 +2068,26 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       drawGridLines(minorStep, '#EBEBEB', 1);
       drawGridLines(majorStep, '#D8D8D8', 1.2);
 
-      // Axes
-      ctx.strokeStyle = '#D0D0D0';
+      // Axes: X-axis in light red, Y-axis in light green
+      // X-axis (y = 0 line)
+      ctx.strokeStyle = '#F87171'; // Light red (tailwind red-400)
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(0, o.y); ctx.lineTo(cw, o.y);
+      ctx.stroke();
+
+      // Y-axis (x = 0 line)
+      ctx.strokeStyle = '#4ADE80'; // Light green (tailwind green-400)
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
       ctx.moveTo(o.x, 0); ctx.lineTo(o.x, ch);
       ctx.stroke();
 
       // Axis labels
-      ctx.fillStyle = '#BBBBBB';
       ctx.font = '10px JetBrains Mono';
+      ctx.fillStyle = '#EF4444'; // Red label for X
       ctx.fillText('X', cw - 16, o.y - 6);
+      ctx.fillStyle = '#22C55E'; // Green label for Y
       ctx.fillText('Y', o.x + 6, 14);
     }
 
@@ -1918,6 +2359,21 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         ctx.moveTo(center.x - 5, center.y); ctx.lineTo(center.x + 5, center.y);
         ctx.moveTo(center.x, center.y - 5); ctx.lineTo(center.x, center.y + 5);
         ctx.stroke();
+      } else if (e.type === 'ellipse' && e.pts.length >= 2) {
+        const center = ws(e.pts[0].x, e.pts[0].y);
+        const rx = (e.rx ?? dist(e.pts[0], e.pts[1])) * SCALE;
+        const ry = (e.ry ?? (rx / SCALE * 0.5)) * SCALE;
+        const rot = e.rotation ?? Math.atan2(e.pts[1].y - e.pts[0].y, e.pts[1].x - e.pts[0].x);
+        ctx.beginPath();
+        ctx.ellipse(center.x, center.y, Math.max(0.5, rx), Math.max(0.5, ry), -rot, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Center mark
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(center.x - 5, center.y); ctx.lineTo(center.x + 5, center.y);
+        ctx.moveTo(center.x, center.y - 5); ctx.lineTo(center.x, center.y + 5);
+        ctx.stroke();
       } else if (e.type === 'arc' && e.pts.length >= 3) {
         const center = ws(e.pts[0].x, e.pts[0].y);
         const r = dist(e.pts[0], e.pts[1]) * SCALE;
@@ -1929,6 +2385,18 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
 
       ctx.setLineDash([]);
+    }
+
+    // Hover: a small solid square around the SINGLE nearest vertex a click would
+    // grab (Select tool). One point, not a box over the whole entity.
+    if (hoveredVertex) {
+      const p = ws(hoveredVertex.x, hoveredVertex.y);
+      ctx.save();
+      ctx.strokeStyle = '#2563EB';
+      ctx.lineWidth = 1.25;
+      ctx.setLineDash([]);
+      ctx.strokeRect(p.x - 4.5, p.y - 4.5, 9, 9);
+      ctx.restore();
     }
 
     // ─── Temp geometry (in-progress entity) ──────────────────────────────────
@@ -1945,6 +2413,47 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
           ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
           ctx.stroke();
         }
+      } else if (tool === 'ellipse_center' && tempPts.length === 1) {
+        const c = ws(tempPts[0].x, tempPts[0].y);
+        const cur = ws(snap.pt.x, snap.pt.y);
+        const rx = dist(tempPts[0], snap.pt) * SCALE;
+        const rot = Math.atan2(snap.pt.y - tempPts[0].y, snap.pt.x - tempPts[0].x);
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(cur.x, cur.y);
+        ctx.stroke();
+        if (rx > 0) {
+          ctx.beginPath();
+          ctx.ellipse(c.x, c.y, rx, rx * 0.5, -rot, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else if (tool === 'ellipse_center' && tempPts.length === 2) {
+        const c = ws(tempPts[0].x, tempPts[0].y);
+        const m = ws(tempPts[1].x, tempPts[1].y);
+        const rxWorld = dist(tempPts[0], tempPts[1]);
+        const rot = Math.atan2(tempPts[1].y - tempPts[0].y, tempPts[1].x - tempPts[0].x);
+        const ryWorld = Math.abs(-(snap.pt.x - tempPts[0].x) * Math.sin(rot) + (snap.pt.y - tempPts[0].y) * Math.cos(rot));
+        const rx = rxWorld * SCALE;
+        const ry = Math.max(0.5, ryWorld * SCALE);
+        ctx.beginPath();
+        ctx.moveTo(c.x - (m.x - c.x), c.y - (m.y - c.y));
+        ctx.lineTo(m.x, m.y);
+        ctx.stroke();
+        if (rx > 0) {
+          ctx.beginPath();
+          ctx.ellipse(c.x, c.y, rx, ry, -rot, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        const cur = ws(snap.pt.x, snap.pt.y);
+        ctx.save();
+        ctx.strokeStyle = '#94A3B8';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(cur.x, cur.y);
+        ctx.stroke();
+        ctx.restore();
       } else if (tool === 'rectangle' && tempPts.length === 1) {
         const a = ws(tempPts[0].x, tempPts[0].y);
         const b = ws(snap.pt.x, snap.pt.y);
@@ -1966,20 +2475,36 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
     // ─── Trim Tool Hover Preview ─────────────────────────────────────────────
     if (tool === 'trim' && hoveredTrim) {
-      const p0 = ws(hoveredTrim.p0.x, hoveredTrim.p0.y);
-      const p1 = ws(hoveredTrim.p1.x, hoveredTrim.p1.y);
-
       ctx.strokeStyle = '#EF4444';
       ctx.lineWidth = 3.5;
       ctx.setLineDash([5, 3]);
       ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
-      ctx.lineTo(p1.x, p1.y);
+      if (hoveredTrim.polyline && hoveredTrim.polyline.length >= 2) {
+        const pStart = ws(hoveredTrim.polyline[0].x, hoveredTrim.polyline[0].y);
+        ctx.moveTo(pStart.x, pStart.y);
+        for (let i = 1; i < hoveredTrim.polyline.length; i++) {
+          const pt = ws(hoveredTrim.polyline[i].x, hoveredTrim.polyline[i].y);
+          ctx.lineTo(pt.x, pt.y);
+        }
+      } else {
+        const p0 = ws(hoveredTrim.p0.x, hoveredTrim.p0.y);
+        const p1 = ws(hoveredTrim.p1.x, hoveredTrim.p1.y);
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+      }
       ctx.stroke();
       ctx.setLineDash([]);
 
       // Red 'X' icon at trim cut center
-      const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+      let mid: Point2D;
+      if (hoveredTrim.polyline && hoveredTrim.polyline.length >= 2) {
+        const midPt = hoveredTrim.polyline[Math.floor(hoveredTrim.polyline.length / 2)];
+        mid = ws(midPt.x, midPt.y);
+      } else {
+        const p0 = ws(hoveredTrim.p0.x, hoveredTrim.p0.y);
+        const p1 = ws(hoveredTrim.p1.x, hoveredTrim.p1.y);
+        mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+      }
       ctx.strokeStyle = '#DC2626';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -2216,7 +2741,8 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         const colorConfig = BOUNDARY_COLORS[edge.tag] || BOUNDARY_COLORS.wall;
         // A circle is drawn as many short arc segments; only show a normal arrow
         // every so often so the outline does not turn into a sunburst.
-        const isCircleSeg = cadState.entities.find(en => en.id === edge.entityId)?.type === 'circle';
+        const edgeEntType = cadState.entities.find(en => en.id === edge.entityId)?.type;
+        const isCircleSeg = edgeEntType === 'circle' || edgeEntType === 'ellipse';
         const showArrow = !isCircleSeg || edge.edgeIndex % 8 === 0;
 
         ctx.save();
@@ -2369,20 +2895,19 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
           ctx.fill();
         }
       }
-      // corner handles: a small bold dot (a touch fatter than the 2.5px edge),
-      // NOT a big box. Hovering draws a hollow square around it so it reads as
-      // "this is the vertex you are about to grab".
+      // corner handles: a small dot per vertex. Hovering the one you are about to
+      // grab draws a small solid-border square (no fill) tight around that dot.
       for (const v of blocking.vertices) {
         const s = ws(v.pt.x, v.pt.y);
         const hot = hoveredBlockVtx === v.id;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, hot ? 3.6 : 2.6, 0, Math.PI * 2);
+        ctx.arc(s.x, s.y, hot ? 2.6 : 2.0, 0, Math.PI * 2);
         ctx.fillStyle = hot ? '#E05A00' : '#7C3AED';
         ctx.fill();
         if (hot) {
           ctx.strokeStyle = '#E05A00';
-          ctx.lineWidth = 1.25;
-          ctx.strokeRect(s.x - 7, s.y - 7, 14, 14);
+          ctx.lineWidth = 1;
+          ctx.strokeRect(s.x - 4.5, s.y - 4.5, 9, 9);
         }
       }
 
@@ -2404,7 +2929,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       ctx.restore();
     }
 
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines, showMeshQuality, meshSkew, viewport.w, viewport.h, livePreview, liveField]);
+  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, hoveredVertex, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines, showMeshQuality, meshSkew, viewport.w, viewport.h, livePreview, liveField]);
 
 
 
@@ -2429,6 +2954,33 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         const radialD = Math.abs(dist(rawPt, ent.pts[0]) - r);
         if (radialD < hitR && radialD < bestD) { bestD = radialD; bestId = ent.id; }
       }
+      if (ent.type === 'ellipse' && ent.pts.length >= 2 && ent.rx != null && ent.ry != null) {
+        const c = ent.pts[0];
+        const rx = ent.rx;
+        const ry = ent.ry;
+        const rot = ent.rotation || 0;
+        const cosR = Math.cos(rot);
+        const sinR = Math.sin(rot);
+        const N = 32;
+        let minD = Infinity;
+        let prevP = {
+          x: c.x + rx * cosR,
+          y: c.y + rx * sinR,
+        };
+        for (let j = 1; j <= N; j++) {
+          const a = (2 * Math.PI * j) / N;
+          const lx = rx * Math.cos(a);
+          const ly = ry * Math.sin(a);
+          const curP = {
+            x: c.x + lx * cosR - ly * sinR,
+            y: c.y + lx * sinR + ly * cosR,
+          };
+          const d = distToSegment(rawPt, prevP, curP);
+          if (d < minD) minD = d;
+          prevP = curP;
+        }
+        if (minD < hitR && minD < bestD) { bestD = minD; bestId = ent.id; }
+      }
       for (const p of ent.pts) {
         const d = dist(rawPt, p);
         if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
@@ -2446,10 +2998,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         const vid = blockDrag.current.vid;
         const { pt, guides } = snapBlockVertex(raw, vid);
         blockSnapGuides.current = guides;
-        onUpdateBlocking({
-          ...blocking,
-          vertices: blocking.vertices.map((v) => (v.id === vid ? { ...v, pt } : v)),
-        });
+        onUpdateBlocking(applyVertexMove(blocking, vid, pt, cadState.entities));
         return;
       }
       const vHit = 12 / zoom;
@@ -2470,7 +3019,91 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     }
 
     const s = computeSnap(raw);
-    setSnap(s);
+    // Once the user has typed into the live dimension box, the mouse no
+    // longer drives the preview - the typed-value sync effect owns `snap`.
+    const dimIsManual = isDrawing && dimPrompt?.live && manualDim;
+    if (!dimIsManual) {
+      setSnap(s);
+    }
+
+    // Live-update the dimension box (Onshape/Fusion-style dynamic input)
+    // while a shape is being placed and the user hasn't started typing yet.
+    if (isDrawing && dimPrompt?.live && !manualDim && tempPts.length > 0) {
+      // The current segment's start: the last placed vertex (matters for
+      // polyline, which chains many segments through the same 'line' prompt;
+      // for line/rectangle/circle this is always tempPts[0] too).
+      const p0 = dimPrompt.basePt;
+      if (dimPrompt.type === 'line') {
+        const len = dist(p0, s.pt);
+        const angDeg = (Math.atan2(s.pt.y - p0.y, s.pt.x - p0.x) * 180) / Math.PI;
+        setInputVal1(len.toFixed(4));
+        setInputVal2(angDeg.toFixed(1));
+        setDimPrompt((prev) =>
+          prev && prev.live
+            ? { ...prev, val1: len.toFixed(4), val2: angDeg.toFixed(1), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
+            : prev,
+        );
+      } else if (dimPrompt.type === 'rectangle') {
+        const w = Math.abs(s.pt.x - p0.x);
+        const h = Math.abs(s.pt.y - p0.y);
+        setInputVal1(w.toFixed(4));
+        setInputVal2(h.toFixed(4));
+        setDimPrompt((prev) =>
+          prev && prev.live
+            ? { ...prev, val1: w.toFixed(4), val2: h.toFixed(4), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
+            : prev,
+        );
+      } else if (dimPrompt.type === 'circle') {
+        const r = dist(p0, s.pt);
+        setInputVal1(r.toFixed(4));
+        setInputVal2((r * 2).toFixed(4));
+        setDimPrompt((prev) =>
+          prev && prev.live
+            ? { ...prev, val1: r.toFixed(4), val2: (r * 2).toFixed(4), worldPos: { x: p0.x + r * 0.707, y: p0.y + r * 0.707 }, endPt: s.pt }
+            : prev,
+        );
+      } else if (dimPrompt.type === 'ellipse') {
+        if (tempPts.length === 1) {
+          const rx = dist(p0, s.pt);
+          const ry = rx * 0.5;
+          setInputVal1(rx.toFixed(4));
+          setInputVal2(ry.toFixed(4));
+          setDimPrompt((prev) =>
+            prev && prev.live
+              ? { ...prev, val1: rx.toFixed(4), val2: ry.toFixed(4), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
+              : prev,
+          );
+        } else if (tempPts.length === 2 && tempPts[1]) {
+          const rx = dist(p0, tempPts[1]);
+          const rot = Math.atan2(tempPts[1].y - p0.y, tempPts[1].x - p0.x);
+          const ry = Math.abs(-(s.pt.x - p0.x) * Math.sin(rot) + (s.pt.y - p0.y) * Math.cos(rot));
+          setInputVal1(rx.toFixed(4));
+          setInputVal2(ry.toFixed(4));
+          const cosR = Math.cos(rot);
+          const sinR = Math.sin(rot);
+          const wpX = p0.x + (rx * 0.707) * cosR - (ry * 0.707) * sinR;
+          const wpY = p0.y + (rx * 0.707) * sinR + (ry * 0.707) * cosR;
+          setDimPrompt((prev) =>
+            prev && prev.live
+              ? { ...prev, val1: rx.toFixed(4), val2: ry.toFixed(4), worldPos: { x: wpX, y: wpY }, endPt: s.pt }
+              : prev,
+          );
+        }
+      } else if (dimPrompt.type === 'arc') {
+        // R was fixed the moment the start point was placed (tempPts[1]) -
+        // only the sweep angle tracks the mouse from here.
+        const r = dist(p0, tempPts[1] ?? s.pt);
+        const sa = Math.atan2((tempPts[1]?.y ?? s.pt.y) - p0.y, (tempPts[1]?.x ?? s.pt.x) - p0.x);
+        const ea = Math.atan2(s.pt.y - p0.y, s.pt.x - p0.x);
+        const sweepDeg = ((ea - sa) * 180 / Math.PI + 360) % 360;
+        setInputVal2(sweepDeg.toFixed(1));
+        setDimPrompt((prev) =>
+          prev && prev.live
+            ? { ...prev, val1: r.toFixed(4), val2: sweepDeg.toFixed(1), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
+            : prev,
+        );
+      }
+    }
 
     const ang = tempPts.length > 0
       ? ((Math.atan2(s.pt.y - tempPts[tempPts.length - 1].y, s.pt.x - tempPts[tempPts.length - 1].x) * 180) / Math.PI).toFixed(1)
@@ -2517,9 +3150,28 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     // Trim hover preview
     if (tool === 'trim') {
       const target = getTrimTarget(raw, cadState.entities, zoom);
-      setHoveredTrim(target ? target.subSeg : null);
+      setHoveredTrim(target ? { p0: target.subSeg.p0, p1: target.subSeg.p1, polyline: target.subPolyline } : null);
     } else if (hoveredTrim) {
       setHoveredTrim(null);
+    }
+
+    // Hover: mark the single nearest entity vertex (Select tool) so you can see
+    // exactly which point a click / drag will grab.
+    if (tool === 'select' && !displayOnly && !isDrawing && !editDrag.current) {
+      const r = 11 / zoom;
+      let best: Point2D | null = null;
+      let bd = r;
+      for (const en of cadState.entities) {
+        if (en.layer === 'construction' && !showConstruction) continue;
+        for (const p of en.pts) {
+          const d = Math.hypot(p.x - raw.x, p.y - raw.y);
+          if (d < bd) { bd = d; best = p; }
+        }
+      }
+      const changed = (!best) !== (!hoveredVertex) || (best && hoveredVertex && (best.x !== hoveredVertex.x || best.y !== hoveredVertex.y));
+      if (changed) setHoveredVertex(best ? { x: best.x, y: best.y } : null);
+    } else if (hoveredVertex) {
+      setHoveredVertex(null);
     }
 
     // Pan (middle mouse or Alt+drag)
@@ -2568,10 +3220,11 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       const cy = e.clientY - rect.top;
       setMarquee({ x: sx, y: sy, w: cx - sx, h: cy - sy });
     }
-  }, [toWorld, computeSnap, tempPts, tool, cadState.entities, zoom, hoveredTrim, currentStep, flowType, isDrawing, geometryBBox, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, domainShape, draggingDomainHandle, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor, hoveredDomainHandle, showBlocking, blocking, onUpdateBlocking, hoveredBlockVtx, hoveredBlockIdx]);
+  }, [toWorld, computeSnap, tempPts, tool, cadState.entities, zoom, hoveredTrim, currentStep, flowType, isDrawing, geometryBBox, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, domainShape, draggingDomainHandle, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor, hoveredDomainHandle, showBlocking, blocking, onUpdateBlocking, hoveredBlockVtx, hoveredBlockIdx, dimPrompt, manualDim]);
 
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    userInteractedRef.current = true;
     // Step 2: Domain Handle Drag start
     if (!displayOnly && currentStep === 2 && hoveredDomainHandle) {
       const hasDomain = cadState.entities.some(e => e.role === 'domain_boundary');
@@ -2634,7 +3287,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       let grabbedDist = Infinity;
       let grabbedId: string | null = null;
       for (const en of cadState.entities) {
-        if (en.layer === 'construction' || en.type === 'circle') continue;
+        if (en.layer === 'construction' || en.type === 'circle' || en.type === 'ellipse') continue;
         for (let i = 0; i < en.pts.length; i++) {
           const d = Math.hypot(en.pts[i].x - raw.x, en.pts[i].y - raw.y);
           if (d < vHit && d < grabbedDist) { grabbedDist = d; grabbed = en.pts[i]; grabbedId = en.id; }
@@ -2685,8 +3338,12 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     panning.current = false;
 
     if (blockDrag.current) {
+      const moved = Boolean(blockDrag.current.recorded);
       blockDrag.current = null;
       blockSnapGuides.current = [];
+      if (moved && blocking && onUpdateBlocking) {
+        onUpdateBlocking(cleanBlocking(propagateNodeCounts(blocking)));
+      }
       setCmdText('Block corner moved.');
       return;
     }
@@ -2758,11 +3415,12 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       setCmdText(`Selected ${selCount} entit${selCount === 1 ? 'y' : 'ies'}.${crossing ? ' (crossing)' : ' (window)'}`);
       setMarquee(null);
     }
-  }, [tool, marquee, cadState.entities, pan, zoom]);
+  }, [tool, marquee, cadState.entities, pan, zoom, blocking, onUpdateBlocking]);
 
 
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
+    userInteractedRef.current = true;
     e.preventDefault();
     const factor = e.deltaY < 0 ? 1.15 : 0.87;
     const c = canvasRef.current;
@@ -2824,6 +3482,29 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       });
       setInputVal1(r.toFixed(4));
       setInputVal2((r * 2).toFixed(4));
+    } else if (ent.type === 'ellipse' && ent.pts.length >= 1) {
+      const c = ent.pts[0];
+      const rx = ent.rx ?? (ent.pts[1] ? dist(c, ent.pts[1]) : 1);
+      const ry = ent.ry ?? (rx * 0.5);
+      const rot = ent.rotation ?? (ent.pts[1] ? Math.atan2(ent.pts[1].y - c.y, ent.pts[1].x - c.x) : 0);
+      const cosR = Math.cos(rot);
+      const sinR = Math.sin(rot);
+      const wpX = c.x + (rx * 0.707) * cosR - (ry * 0.707) * sinR;
+      const wpY = c.y + (rx * 0.707) * sinR + (ry * 0.707) * cosR;
+      setDimPrompt({
+        entityId: ent.id,
+        type: 'ellipse',
+        worldPos: { x: wpX, y: wpY },
+        val1: rx.toFixed(4),
+        val2: ry.toFixed(4),
+        label1: 'Rx',
+        label2: 'Ry',
+        basePt: c,
+        endPt: ent.pts[1] || { x: c.x + rx * cosR, y: c.y + rx * sinR },
+        layer: ent.layer,
+      });
+      setInputVal1(rx.toFixed(4));
+      setInputVal2(ry.toFixed(4));
     } else if (ent.type === 'rectangle' && ent.pts.length >= 3) {
       const p0 = ent.pts[0], p2 = ent.pts[2];
       const w = Math.abs(p2.x - p0.x);
@@ -2946,6 +3627,27 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         ),
       });
       setCmdText(`Circle dimensioned: R=${r}m (Ø=${(r * 2).toFixed(3)}m)`);
+    } else if (type === 'ellipse') {
+      const rx = v1;
+      const ry = !isNaN(v2) && v2 > 0 ? v2 : (rx * 0.5);
+      dispatch({
+        type: 'REPLACE_ENTITIES',
+        entities: cadState.entities.map(e => {
+          if (e.id !== entityId) return e;
+          const rot = e.rotation || 0;
+          const p1 = {
+            x: +(basePt.x + rx * Math.cos(rot)).toFixed(5),
+            y: +(basePt.y + rx * Math.sin(rot)).toFixed(5),
+          };
+          return {
+            ...e,
+            rx,
+            ry,
+            pts: [basePt, p1],
+          };
+        }),
+      });
+      setCmdText(`Ellipse dimensioned: Rx=${rx}m, Ry=${ry}m`);
     } else if (type === 'arc' && endPt) {
       const r = v1;
       const sa = Math.atan2(endPt.y - basePt.y, endPt.x - basePt.x);
@@ -2976,6 +3678,50 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     }
   }, [dimPrompt?.entityId]);
 
+  // While the live (still-drawing) box has typed values, drive the rubber-band
+  // preview from them instead of the mouse - the canvas paint code already
+  // reads `snap.pt` for that preview, so this is the only place that needs to
+  // know about typed vs. mouse-driven input. Direction/angle for a rectangle
+  // or circle still comes from wherever the mouse last pointed (`endPt`,
+  // frozen the moment typing started), matching the typed magnitude to it.
+  useEffect(() => {
+    if (!manualDim || !dimPrompt?.live) return;
+    const p0 = dimPrompt.basePt;
+    const v1 = parseFloat(inputVal1);
+    const v2 = parseFloat(inputVal2);
+    const dir = dimPrompt.endPt ?? { x: p0.x + 1, y: p0.y };
+    let pt: Point2D | null = null;
+    if (dimPrompt.type === 'line' && !isNaN(v1)) {
+      const rad = !isNaN(v2) ? (v2 * Math.PI) / 180 : Math.atan2(dir.y - p0.y, dir.x - p0.x);
+      pt = { x: p0.x + v1 * Math.cos(rad), y: p0.y + v1 * Math.sin(rad) };
+    } else if (dimPrompt.type === 'rectangle' && !isNaN(v1) && !isNaN(v2)) {
+      const sx = Math.sign(dir.x - p0.x) || 1;
+      const sy = Math.sign(dir.y - p0.y) || 1;
+      pt = { x: p0.x + v1 * sx, y: p0.y + v2 * sy };
+    } else if (dimPrompt.type === 'circle' && !isNaN(v1)) {
+      const ang = Math.atan2(dir.y - p0.y, dir.x - p0.x);
+      pt = { x: p0.x + v1 * Math.cos(ang), y: p0.y + v1 * Math.sin(ang) };
+    } else if (dimPrompt.type === 'ellipse') {
+      if (tempPts.length === 1 && !isNaN(v1)) {
+        const ang = Math.atan2(dir.y - p0.y, dir.x - p0.x);
+        pt = { x: p0.x + v1 * Math.cos(ang), y: p0.y + v1 * Math.sin(ang) };
+      } else if (tempPts.length === 2 && !isNaN(v2) && tempPts[1]) {
+        const rot = Math.atan2(tempPts[1].y - p0.y, tempPts[1].x - p0.x);
+        const side = Math.sign(-(dir.x - p0.x) * Math.sin(rot) + (dir.y - p0.y) * Math.cos(rot)) || 1;
+        pt = {
+          x: p0.x + side * v2 * (-Math.sin(rot)),
+          y: p0.y + side * v2 * Math.cos(rot),
+        };
+      }
+    } else if (dimPrompt.type === 'arc' && !isNaN(v2) && tempPts[1]) {
+      const r = !isNaN(v1) ? v1 : dist(p0, tempPts[1]);
+      const sa = Math.atan2(tempPts[1].y - p0.y, tempPts[1].x - p0.x);
+      const ea = sa + (v2 * Math.PI) / 180;
+      pt = { x: p0.x + r * Math.cos(ea), y: p0.y + r * Math.sin(ea) };
+    }
+    if (pt) setSnap({ pt, type: 'origin', guides: [] });
+  }, [inputVal1, inputVal2, manualDim, dimPrompt, tempPts]);
+
   const handleDimKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Tab') {
       e.preventDefault();
@@ -2990,12 +3736,21 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
-      if (dimPrompt) {
+      if (dimPrompt?.live) {
+        commitPoint(snap.pt);
+        setManualDim(false);
+      } else if (dimPrompt) {
         commitDimension(dimPrompt, inputVal1, inputVal2);
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
+      if (dimPrompt?.live) {
+        setIsDrawing(false);
+        setTempPts([]);
+        setManualDim(false);
+        setCmdText(`${tool.toUpperCase()}: Cancelled. Press Esc again to return to Select.`);
+      }
       setDimPrompt(null);
     }
   };
@@ -3007,8 +3762,23 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       if (!isDrawing) {
         setTempPts([pt]);
         setIsDrawing(true);
-        setDimPrompt(null);
-        setCmdText('LINE: Pick second point (or press Esc to cancel)');
+        setManualDim(false);
+        setDimPrompt({
+          entityId: uid(),
+          type: 'line',
+          live: true,
+          worldPos: pt,
+          val1: '0.0000',
+          val2: '0.0',
+          label1: 'L',
+          label2: '∠',
+          basePt: pt,
+          endPt: pt,
+          layer,
+        });
+        setInputVal1('0.0000');
+        setInputVal2('0.0');
+        setCmdText('LINE: Type Length, press Tab for Angle, Enter to commit - or click second point.');
       } else {
         const newId = uid();
         const p0 = tempPts[0];
@@ -3029,6 +3799,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         });
         setInputVal1(len.toFixed(4));
         setInputVal2(ang.toFixed(1));
+        setManualDim(false);
         setTempPts([pt]); // chain: start next line from here
         setCmdText('LINE: Type Length, press Tab for Angle, Enter to commit.');
       }
@@ -3036,24 +3807,71 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       if (!isDrawing) {
         setTempPts([pt]);
         setIsDrawing(true);
-        setDimPrompt(null);
-        setCmdText('POLYLINE: Pick next vertex (click near start to close)');
+        setManualDim(false);
+        setDimPrompt({
+          entityId: uid(),
+          type: 'line',
+          live: true,
+          worldPos: pt,
+          val1: '0.0000',
+          val2: '0.0',
+          label1: 'L',
+          label2: '∠',
+          basePt: pt,
+          endPt: pt,
+          layer,
+        });
+        setInputVal1('0.0000');
+        setInputVal2('0.0');
+        setCmdText('POLYLINE: Type Length, press Tab for Angle, Enter for next vertex - or click.');
       } else {
         const s = tempPts[0];
         if (tempPts.length >= 2 && dist(pt, s) < 12 / zoom) {
           dispatch({ type: 'ADD_ENTITY', entity: { id: uid(), type: 'polyline', layer, pts: tempPts, isClosed: true } });
-          setIsDrawing(false); setTempPts([]); setDimPrompt(null);
+          setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false);
           setCmdText('POLYLINE: Closed. Pick first point for next polyline.');
         } else {
           setTempPts(prev => [...prev, pt]);
+          setManualDim(false);
+          setDimPrompt({
+            entityId: uid(),
+            type: 'line',
+            live: true,
+            worldPos: pt,
+            val1: '0.0000',
+            val2: '0.0',
+            label1: 'L',
+            label2: '∠',
+            basePt: pt,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1('0.0000');
+          setInputVal2('0.0');
+          setCmdText('POLYLINE: Type Length, press Tab for Angle, Enter for next vertex - or click near start to close.');
         }
       }
     } else if (tool === 'rectangle') {
       if (!isDrawing) {
         setTempPts([pt]);
         setIsDrawing(true);
-        setDimPrompt(null);
-        setCmdText('RECTANGLE: Pick opposite corner');
+        setManualDim(false);
+        setDimPrompt({
+          entityId: uid(),
+          type: 'rectangle',
+          live: true,
+          worldPos: pt,
+          val1: '0.0000',
+          val2: '0.0000',
+          label1: 'W',
+          label2: 'H',
+          basePt: pt,
+          endPt: pt,
+          layer,
+        });
+        setInputVal1('0.0000');
+        setInputVal2('0.0000');
+        setCmdText('RECTANGLE: Type Width, press Tab for Height, Enter to commit - or pick opposite corner.');
       } else {
         const p0 = tempPts[0];
         const newId = uid();
@@ -3074,6 +3892,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         });
         setInputVal1(Math.abs(w).toFixed(4));
         setInputVal2(Math.abs(h).toFixed(4));
+        setManualDim(false);
         setIsDrawing(false); setTempPts([]);
         setCmdText('RECTANGLE: Type Width, press Tab for Height, Enter to commit.');
       }
@@ -3081,8 +3900,23 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       if (!isDrawing) {
         setTempPts([pt]);
         setIsDrawing(true);
-        setDimPrompt(null);
-        setCmdText('CIRCLE: Pick point on circumference');
+        setManualDim(false);
+        setDimPrompt({
+          entityId: uid(),
+          type: 'circle',
+          live: true,
+          worldPos: pt,
+          val1: '0.0000',
+          val2: '0.0000',
+          label1: 'R',
+          label2: 'Ø',
+          basePt: pt,
+          endPt: pt,
+          layer,
+        });
+        setInputVal1('0.0000');
+        setInputVal2('0.0000');
+        setCmdText('CIRCLE: Type Radius, Enter to commit - or pick point on circumference.');
       } else {
         const c = tempPts[0];
         const r = dist(c, pt);
@@ -3102,8 +3936,93 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         });
         setInputVal1(r.toFixed(4));
         setInputVal2((r * 2).toFixed(4));
+        setManualDim(false);
         setIsDrawing(false); setTempPts([]);
         setCmdText('CIRCLE: Type Radius, press Enter to commit.');
+      }
+    } else if (tool === 'ellipse_center') {
+      if (!isDrawing || tempPts.length === 0) {
+        setTempPts([pt]);
+        setIsDrawing(true);
+        setManualDim(false);
+        setDimPrompt({
+          entityId: uid(),
+          type: 'ellipse',
+          live: true,
+          worldPos: pt,
+          val1: '0.0000',
+          val2: '0.0000',
+          label1: 'Rx',
+          label2: 'Ry',
+          basePt: pt,
+          endPt: pt,
+          layer,
+        });
+        setInputVal1('0.0000');
+        setInputVal2('0.0000');
+        setCmdText('ELLIPSE: Specify endpoint of major axis (or type Rx and press Tab/Enter).');
+      } else if (tempPts.length === 1) {
+        const c = tempPts[0];
+        const v1Typed = parseFloat(inputVal1);
+        let majorEnd = pt;
+        if (manualDim && !isNaN(v1Typed) && v1Typed > 0) {
+          const dir = dimPrompt?.endPt ?? pt;
+          const ang = Math.atan2(dir.y - c.y, dir.x - c.x);
+          majorEnd = { x: c.x + v1Typed * Math.cos(ang), y: c.y + v1Typed * Math.sin(ang) };
+        }
+        const rx = dist(c, majorEnd);
+        if (rx < 1e-4) return;
+        setTempPts([c, majorEnd]);
+        const defaultRy = rx * 0.5;
+        setDimPrompt({
+          entityId: uid(),
+          type: 'ellipse',
+          live: true,
+          worldPos: pt,
+          val1: rx.toFixed(4),
+          val2: defaultRy.toFixed(4),
+          label1: 'Rx',
+          label2: 'Ry',
+          basePt: c,
+          endPt: pt,
+          layer,
+        });
+        setInputVal1(rx.toFixed(4));
+        setInputVal2(defaultRy.toFixed(4));
+        setManualDim(false);
+        setCmdText('ELLIPSE: Specify distance for other axis (or type Ry and press Enter).');
+      } else {
+        const c = tempPts[0];
+        const majorEnd = tempPts[1];
+        const rx = dist(c, majorEnd);
+        const rot = Math.atan2(majorEnd.y - c.y, majorEnd.x - c.x);
+        const v2Typed = parseFloat(inputVal2);
+        let ry: number;
+        if (manualDim && !isNaN(v2Typed) && v2Typed > 0) {
+          ry = v2Typed;
+        } else {
+          const ryCalc = Math.abs(-(pt.x - c.x) * Math.sin(rot) + (pt.y - c.y) * Math.cos(rot));
+          ry = ryCalc < 1e-4 ? Math.max(1e-4, rx * 0.5) : ryCalc;
+        }
+        const newId = uid();
+        dispatch({
+          type: 'ADD_ENTITY',
+          entity: {
+            id: newId,
+            type: 'ellipse',
+            layer,
+            pts: [c, majorEnd],
+            rx,
+            ry,
+            rotation: rot,
+            isClosed: true,
+          },
+        });
+        setDimPrompt(null);
+        setManualDim(false);
+        setIsDrawing(false);
+        setTempPts([]);
+        setCmdText('ELLIPSE: Created.');
       }
     } else if (tool === 'arc_center') {
       if (tempPts.length === 0) {
@@ -3111,16 +4030,40 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         setDimPrompt(null);
         setCmdText('ARC: Pick start point on arc');
       } else if (tempPts.length === 1) {
+        const c = tempPts[0];
+        const r = dist(c, pt);
         setTempPts(prev => [...prev, pt]);
-        setCmdText('ARC: Pick end point on arc');
+        setManualDim(false);
+        setDimPrompt({
+          entityId: uid(),
+          type: 'arc',
+          live: true,
+          worldPos: pt,
+          val1: r.toFixed(4),
+          val2: '90.0',
+          label1: 'R',
+          label2: '∠',
+          basePt: c,
+          endPt: pt,
+          layer,
+        });
+        setInputVal1(r.toFixed(4));
+        setInputVal2('90.0');
+        setCmdText('ARC: Type Radius, press Tab for Sweep, Enter to commit - or pick end point.');
       } else {
         const [c, s, _] = tempPts;
         const sa = Math.atan2(s.y - c.y, s.x - c.x);
         const ea = Math.atan2(pt.y - c.y, pt.x - c.x);
-        const r = dist(c, s);
+        // A typed Radius during the live sweep-picking step overrides the
+        // start point's own distance from the centre (it moves the start
+        // point out/in along `sa` to match, same as the post-commit editor).
+        const typedR = dimPrompt?.live && dimPrompt.type === 'arc' ? parseFloat(dimPrompt.val1) : NaN;
+        const r = !isNaN(typedR) && typedR > 0 ? typedR : dist(c, s);
+        const sNew = !isNaN(typedR) && typedR > 0 ? { x: c.x + r * Math.cos(sa), y: c.y + r * Math.sin(sa) } : s;
         const sweepDeg = ((ea - sa) * 180 / Math.PI + 360) % 360;
         const newId = uid();
-        dispatch({ type: 'ADD_ENTITY', entity: { id: newId, type: 'arc', layer, pts: [c, s, pt], startAngle: sa, endAngle: ea } });
+        dispatch({ type: 'ADD_ENTITY', entity: { id: newId, type: 'arc', layer, pts: [c, sNew, pt], startAngle: sa, endAngle: ea } });
+        setManualDim(false);
         setDimPrompt({
           entityId: newId,
           type: 'arc',
@@ -3149,7 +4092,7 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         setCmdText('XLINE: Pick first point');
       }
     }
-  }, [tool, isDrawing, tempPts, zoom, constructionMode]);
+  }, [tool, isDrawing, tempPts, zoom, constructionMode, dimPrompt]);
 
 
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
@@ -3173,10 +4116,10 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         const d = distToSegment(rawPt, edge.p0, edge.p1);
         if (d < 18 / zoom) {
           const ent = cadState.entities.find(en => en.id === edge.entityId);
-          const wholeEntity = ent?.type === 'circle';
+          const wholeEntity = ent?.type === 'circle' || ent?.type === 'ellipse';
           const targetKey = wholeEntity ? `${edge.entityId}_0` : edge.key;
           setEdgeTagMap(prev => ({ ...prev, [targetKey]: activeTagTool }));
-          setCmdText(`Tagged ${wholeEntity ? 'circle' : 'edge'} as ${activeTagTool.toUpperCase()}.`);
+          setCmdText(`Tagged ${wholeEntity ? (ent?.type === 'ellipse' ? 'ellipse' : 'circle') : 'edge'} as ${activeTagTool.toUpperCase()}.`);
           return;
         }
       }
@@ -3200,25 +4143,38 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         return;
       }
 
-      const { targetEnt, targetSegIdx, preservedSegs } = target;
+      const { targetEnt, targetSegIdx, preservedSegs, preservedPolylines } = target;
       const otherEntities = cadState.entities.filter(e => e.id !== targetEnt.id);
       const newSegments: CadEntity[] = [];
 
-      // If targetEnt was a multi-segment polyline/rectangle, preserve all other unmodified segments as individual lines
-      if (targetEnt.pts.length > 2) {
-        for (let i = 0; i < targetEnt.pts.length - 1; i++) {
-          if (i !== targetSegIdx) {
-            newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [targetEnt.pts[i], targetEnt.pts[i + 1]] });
+      if (preservedPolylines !== undefined) {
+        for (const arc of preservedPolylines) {
+          newSegments.push({
+            id: uid(),
+            type: 'polyline',
+            layer: targetEnt.layer,
+            pts: arc,
+            isClosed: false,
+            ...(targetEnt.role ? { role: targetEnt.role } : {}),
+          });
+        }
+      } else {
+        // If targetEnt was a multi-segment polyline/rectangle, preserve all other unmodified segments as individual lines
+        if (targetEnt.pts.length > 2) {
+          for (let i = 0; i < targetEnt.pts.length - 1; i++) {
+            if (i !== targetSegIdx) {
+              newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [targetEnt.pts[i], targetEnt.pts[i + 1]] });
+            }
+          }
+          if (targetEnt.isClosed && targetSegIdx !== targetEnt.pts.length - 1) {
+            newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [targetEnt.pts[targetEnt.pts.length - 1], targetEnt.pts[0]] });
           }
         }
-        if (targetEnt.isClosed && targetSegIdx !== targetEnt.pts.length - 1) {
-          newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [targetEnt.pts[targetEnt.pts.length - 1], targetEnt.pts[0]] });
-        }
-      }
 
-      // Add the preserved sub-segments
-      for (const seg of preservedSegs) {
-        newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [seg.p0, seg.p1] });
+        // Add the preserved sub-segments
+        for (const seg of preservedSegs) {
+          newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [seg.p0, seg.p1] });
+        }
       }
 
       dispatch({ type: 'REPLACE_ENTITIES', entities: [...otherEntities, ...newSegments] });
@@ -3289,13 +4245,14 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     if (e.key === 'F8') setOrtho(o => !o);
     if (e.key === 'F3') setSnapEnabled(s => !s);
     if (e.key === 'F7') setShowGrid(g => !g);
-    if (e.key === 'l' || e.key === 'L') { setTool('line'); setIsDrawing(false); setTempPts([]); }
-    if (e.key === 'p' || e.key === 'P') { setTool('polyline'); setIsDrawing(false); setTempPts([]); }
-    if (e.key === 'r' || e.key === 'R') { setTool('rectangle'); setIsDrawing(false); setTempPts([]); }
-    if (e.key === 'c' || e.key === 'C') { setTool('circle_center_radius'); setIsDrawing(false); setTempPts([]); }
-    if (e.key === 'a' || e.key === 'A') { setTool('arc_center'); setIsDrawing(false); setTempPts([]); }
-    if (e.key === 's' || e.key === 'S') { setTool('select'); setIsDrawing(false); setTempPts([]); }
-    if (e.key === 't' || e.key === 'T') { setTool('trim'); setIsDrawing(false); setTempPts([]); }
+    if (e.key === 'l' || e.key === 'L') { setTool('line'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
+    if (e.key === 'p' || e.key === 'P') { setTool('polyline'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
+    if (e.key === 'r' || e.key === 'R') { setTool('rectangle'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
+    if (e.key === 'c' || e.key === 'C') { setTool('circle_center_radius'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
+    if (e.key === 'e' || e.key === 'E') { setTool('ellipse_center'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
+    if (e.key === 'a' || e.key === 'A') { setTool('arc_center'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
+    if (e.key === 's' || e.key === 'S') { setTool('select'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
+    if (e.key === 't' || e.key === 'T') { setTool('trim'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
   }, [tool, isDrawing, tempPts, constructionMode, undo, redo, undoBlocking, redoBlocking]);
 
   useEffect(() => {
@@ -3658,6 +4615,7 @@ boundary
       polyline: 'pick first vertex',
       rectangle: 'pick first corner',
       circle_center_radius: 'pick center',
+      ellipse_center: 'pick center, then major axis endpoint, then minor axis',
       arc_center: 'pick center, then start point, then end point',
       construction_line: 'pick two points for an infinite reference line',
       trim: 'click a line to remove it (or the piece between two crossings)',
@@ -3703,6 +4661,7 @@ boundary
           <Btn t="polyline"            icon={<ArrowUpRight className="w-4 h-4" />}    label="Pline"   kbd="P" />
           <Btn t="rectangle"           icon={<Square className="w-4 h-4" />}          label="Rect"    kbd="R" />
           <Btn t="circle_center_radius" icon={<Circle className="w-4 h-4" />}         label="Circle"  kbd="C" />
+          <Btn t="ellipse_center"      icon={<CircleDot className="w-4 h-4" />}       label="Ellipse" kbd="E" />
           <Btn t="arc_center"          icon={<TriangleRight className="w-4 h-4" />}   label="Arc"     kbd="A" />
           <Btn t="construction_line"   icon={<ScanLine className="w-4 h-4" />}        label="XLine"   />
         </div>
@@ -4173,6 +5132,7 @@ boundary
                   step="any"
                   value={inputVal1}
                   onChange={(e) => {
+                    if (dimPrompt.live) setManualDim(true);
                     setInputVal1(e.target.value);
                     if (dimPrompt.type === 'circle' && dimPrompt.label2 === 'Ø') {
                       const n = parseFloat(e.target.value);
@@ -4194,6 +5154,7 @@ boundary
                     step="any"
                     value={inputVal2}
                     onChange={(e) => {
+                      if (dimPrompt.live) setManualDim(true);
                       setInputVal2(e.target.value);
                       if (dimPrompt.type === 'circle' && dimPrompt.label2 === 'Ø') {
                         const n = parseFloat(e.target.value);

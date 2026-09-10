@@ -12,12 +12,13 @@ const ROLE_COLOR: Record<string, string> = {
   farfield: '#7C3AED',
   symmetry: '#B4622D',
   periodic: '#B4622D',
+  axis: '#64748B',
 };
 
 // compact inline input: label above a narrow field
-const Cell: React.FC<{ label: string; children: React.ReactNode; w?: string }> = ({ label, children, w = 'w-24' }) => (
+const Cell: React.FC<{ label: string; children: React.ReactNode; w?: string }> = ({ label, children, w = 'w-28' }) => (
   <label className={`flex flex-col gap-0.5 ${w}`}>
-    <span className="text-[9px] text-[#8B95A1] uppercase tracking-wide truncate">{label}</span>
+    <span className="text-[10px] font-semibold text-[#69717D] truncate">{label}</span>
     {children}
   </label>
 );
@@ -37,7 +38,7 @@ export const BoundarySection: React.FC<
       <section className="bg-white border border-[#E1E4E8] rounded-xl p-5 xl:col-span-2">
         <div className="flex items-center gap-2 mb-2">
           <SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />
-          <h2 className="text-sm font-bold text-[#171A1F]">Boundary conditions</h2>
+          <h2 className="text-[13px] font-bold text-[#171A1F]">Boundary conditions</h2>
         </div>
         <p className="text-[11px] text-[#69717D]">
           Tag the domain edges in Geometry ▸ Boundary patches. Each patch then gets a row here.
@@ -51,25 +52,25 @@ export const BoundarySection: React.FC<
       <div className="flex items-center gap-2">
         <SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />
         <div>
-          <h2 className="text-sm font-bold text-[#171A1F]">Boundary conditions</h2>
-          <p className="text-[10px] text-[#69717D] mt-0.5">
+          <h2 className="text-[13px] font-bold text-[#171A1F]">Boundary conditions</h2>
+          <p className="text-[11px] text-[#69717D] mt-0.5">
             Auto-filled from each patch tag, the reference conditions and the turbulence model.
           </p>
         </div>
       </div>
 
-      <div className="border border-[#E1E4E8] rounded-lg divide-y divide-[#EEF1F4]">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {patches
-          .filter((p) => p.role !== 'symmetry' && p.role !== 'periodic')
+          .filter((p) => p.role !== 'symmetry' && p.role !== 'periodic' && p.role !== 'axis')
           .map((p) => (
             <PatchRow key={p.name} entry={p} compressible={compressible} onChange={(bc) => onPatchBC(p.name, bc)} />
           ))}
       </div>
 
-      <p className="text-[9px] text-[#A5ACB5]">
+      <p className="text-[10px] text-[#8A929E]">
         Writes <span className="font-mono">0/</span>: {fields.join(', ')}, nut
-        {patches.some((p) => p.role === 'symmetry' || p.role === 'periodic') &&
-          ' · symmetry / periodic patches are written automatically'}
+        {patches.some((p) => p.role === 'symmetry' || p.role === 'periodic' || p.role === 'axis') &&
+          ' · symmetry / periodic / axis patches are written automatically'}
       </p>
     </section>
   );
@@ -86,14 +87,16 @@ const PatchRow: React.FC<{
   const isWall = bc.kind === 'noSlipWall' || bc.kind === 'movingWall' || bc.kind === 'rotatingWall';
 
   return (
-    <div className="flex flex-wrap items-end gap-x-3 gap-y-2 px-3 py-2.5">
-      <span className="flex items-center gap-2 text-[11px] font-semibold text-[#171A1F] w-24 shrink-0 self-center">
+    <div className="border border-[#E1E4E8] rounded-lg p-3 space-y-2">
+      <span className="flex items-center gap-2 text-[11px] font-semibold text-[#171A1F]">
         <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: ROLE_COLOR[role] }} />
         {name}
+        <span className="ml-auto text-[10px] font-normal uppercase tracking-wide text-[#A5ACB5]">{role}</span>
       </span>
 
+      <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
       {kinds.length > 1 && (
-            <Cell label="Condition" w="w-40">
+            <Cell label="Condition" w="w-full">
               <Select value={bc.kind} onChange={(v) => set({ kind: v as PatchBC['kind'] })}>
                 {kinds.map((k) => (
                   <option key={k} value={k}>{KIND_LABEL[k]}</option>
@@ -144,6 +147,7 @@ const PatchRow: React.FC<{
               )}
             </>
           )}
+      </div>
     </div>
   );
 };

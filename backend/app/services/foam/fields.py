@@ -90,8 +90,8 @@ def write_fields(
         # `.*` first so an explicit patch name (exact match) always wins over it.
         pf: Dict[str, Dict[str, Any]] = {'".*"': _catch_all(f, compressible)}
         for p in patches:
-            if p["role"] in ("symmetry", "periodic"):
-                continue  # handled by setConstraintTypes
+            if p["role"] in ("symmetry", "periodic", "axis"):
+                continue  # handled by setConstraintTypes (axis has no faces at all)
             pf[p["name"]] = field_bc(f, p, phys, turb)
         body = (
             f"dimensions      {dims};\n\n"

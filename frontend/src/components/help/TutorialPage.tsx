@@ -352,18 +352,17 @@ export const TutorialPage: React.FC = () => {
 
           <Section id="axisymmetric" title="Axisymmetric">
             <p className="text-[13px] leading-relaxed text-[#374151]">
-              Not supported yet - there is no <code className="text-[12px] bg-[#F5F6F8] px-1 rounded">axis</code>
-              tag, and the OpenFOAM case export is still a fixed template.
+              For a body of revolution - a nozzle or duct cross-section (internal), or a bullet/cone-shaped
+              body in free stream (external). Simply select the <b>axis</b> patch under <b>Boundary patches</b> and
+              tag your axis edge — the case is automatically assumed axisymmetric. Both flow types work.
             </p>
             <p className="text-[13px] leading-relaxed text-[#374151] mt-2">
-              <b>Stopgap:</b> model the half-section and tag the axis edge as <Tag color={C.sym}>symmetry</Tag>.
-              That gives a <b>planar 2D</b> solution - correct only if the real flow is genuinely 2D, not
-              a body of revolution.
-            </p>
-            <p className="text-[13px] leading-relaxed text-[#374151] mt-2">
-              A true axisymmetric run needs the 2D mesh revolved into a 1-cell wedge with
-              <code className="text-[12px] bg-[#F5F6F8] px-1 rounded"> wedge</code> front/back patches and an
-              <code className="text-[12px] bg-[#F5F6F8] px-1 rounded"> axis</code> patch - backend work.
+              Draw only the <b>half cross-section</b>: x = axial direction, y = radius (y &ge; 0). Tag the
+              centerline edge (y = 0) as <Tag color={C.wall}>axis</Tag> instead of <Tag color={C.sym}>symmetry</Tag>.
+              The mesh must be all-triangle (Axisymmetric locks this automatically) - the solver revolves it
+              into a 5&deg; wedge with <code className="text-[12px] bg-[#F5F6F8] px-1 rounded">wedge</code>
+              front/back patches at run time. Angle of attack is disabled - it has no meaning for a body of
+              revolution.
             </p>
           </Section>
 

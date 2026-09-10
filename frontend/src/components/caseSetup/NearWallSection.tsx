@@ -76,7 +76,7 @@ export const NearWallSection: React.FC<SectionProps & { model: TurbulenceModel }
         <Stat label="Prism layers" value={String(wr.layerCount)} />
         <Stat label="Layer stack" value={`${fmt(wr.totalLayerThickness * 1000, 3)} mm`} />
       </div>
-      <p className="text-[9px] text-[#A5ACB5]">
+      <p className="text-[10px] text-[#8A929E]">
         Cf {wr.skinFriction.toExponential(2)} · τw {fmt(wr.wallShearStress, 3)} Pa · uτ {fmt(wr.frictionVelocity, 3)} m/s
       </p>
     </SectionCard>

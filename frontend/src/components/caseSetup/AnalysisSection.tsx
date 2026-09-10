@@ -20,7 +20,7 @@ export const AnalysisSection: React.FC<
     >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Field label="Flow topology" hint="Set in Geometry ▸ Domain">
-          <div className="w-full px-2.5 py-2 bg-[#F5F6F8] border border-[#DDE2E8] rounded-md font-mono text-xs text-[#69717D] capitalize">
+          <div className="w-full px-2.5 py-2 bg-[#F5F6F8] border border-[#DDE2E8] rounded-md text-xs text-[#69717D] capitalize">
             {flowType} flow
           </div>
         </Field>
@@ -41,7 +41,7 @@ export const AnalysisSection: React.FC<
           label={
             <span className="flex items-center gap-1.5">
               Speed regime
-              <span className="text-[9px] font-semibold px-1 py-px rounded bg-[#EEF2FF] text-[#2563EB]">
+              <span className="text-[10px] font-semibold px-1 py-px rounded bg-[#EEF2FF] text-[#2563EB]">
                 AUTO
               </span>
             </span>

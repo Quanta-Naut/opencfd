@@ -16,6 +16,7 @@ def normalise_patches(patches: List[Dict[str, Any]] | None, ref_velocity: float)
         bc.setdefault("kind", {
             "inlet": "velocityInlet", "outlet": "pressureOutlet", "wall": "noSlipWall",
             "farfield": "farfield", "symmetry": "symmetry", "periodic": "periodic",
+            "axis": "axis",
         }.get(role, "noSlipWall"))
         out.append({"name": str(p.get("name", role)), "role": role, "bc": bc})
     return out

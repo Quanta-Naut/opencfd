@@ -76,7 +76,7 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
     run = sol.get("run", {})
 
     if is_shock_case(phys):
-        return _write_shock_system(phys, run, functions_block, ref_length)
+        return _write_shock_system(phys, run, functions_block, ref_length, controls)
 
     module = pick_solver(phys)
     compressible = phys.get("compressibility") == "compressible"
@@ -227,7 +227,7 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
 
 
 def _write_shock_system(phys: Dict[str, Any], run: Dict[str, Any], functions_block: str,
-                        ref_length: float = 1.0) -> Dict[str, str]:
+                        ref_length: float = 1.0, controls: Dict[str, Any] | None = None) -> Dict[str, str]:
     """system/ for the density-based `shockFluid` module (supersonic / hypersonic).
 
     Runs in **local-time-stepping** mode (`ddtSchemes localEuler`): each cell
@@ -246,7 +246,18 @@ def _write_shock_system(phys: Dict[str, Any], run: Dict[str, Any], functions_blo
     # Near Mach 1 the acoustic and convective speeds are close and the explicit
     # density solve is stiff - a low Courant limit keeps a shock from over/under-
     # shooting T into negative territory (-> sqrt FPE in fluxPredictor).
-    max_co = float(run.get("maxCo") or 0.25)
+    #
+    # The Solver panel's "Max Courant" field defaults to 5, which is right for
+    # the pressure-based PIMPLE transient path but detonates this density-based
+    # LTS pseudo-time march (the explicit acoustic step overshoots and T goes
+    # negative on the first few iterations). So treat the UI value as an upper
+    # wish only and hard-clamp to a shock-safe ceiling; ignore anything >= 1.
+    _ui_co = (controls or {}).get("maxCo") or run.get("maxCo")
+    try:
+        _ui_co = float(_ui_co) if _ui_co is not None else None
+    except (TypeError, ValueError):
+        _ui_co = None
+    max_co = min(_ui_co, 0.5) if (_ui_co is not None and _ui_co < 1.0) else 0.25
 
     control = (
         "solver          shockFluid;\n"

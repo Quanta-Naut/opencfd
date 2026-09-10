@@ -3,7 +3,7 @@
 // are selectable and what parameters each needs. The frontend sends this spec
 // to the backend, which turns it into the OpenFOAM `0/` files.
 
-export type PatchRole = 'inlet' | 'outlet' | 'wall' | 'farfield' | 'symmetry' | 'periodic';
+export type PatchRole = 'inlet' | 'outlet' | 'wall' | 'farfield' | 'symmetry' | 'periodic' | 'axis';
 
 export type PatchKind =
   | 'velocityInlet' | 'massFlowInlet' | 'totalPressureInlet'
@@ -11,7 +11,8 @@ export type PatchKind =
   | 'noSlipWall' | 'slipWall' | 'movingWall' | 'rotatingWall'
   | 'farfield'
   | 'symmetry'
-  | 'periodic';
+  | 'periodic'
+  | 'axis';
 
 export interface PatchBC {
   /** which variant of the role's behaviour */
@@ -57,6 +58,7 @@ export const KIND_LABEL: Record<PatchKind, string> = {
   farfield: 'Freestream / far-field',
   symmetry: 'Symmetry plane',
   periodic: 'Periodic',
+  axis: 'Axis of revolution',
 };
 
 export const KINDS_FOR_ROLE: Record<PatchRole, PatchKind[]> = {
@@ -66,6 +68,7 @@ export const KINDS_FOR_ROLE: Record<PatchRole, PatchKind[]> = {
   farfield: ['farfield'],
   symmetry: ['symmetry'],
   periodic: ['periodic'],
+  axis: ['axis'],
 };
 
 export function defaultPatchBC(role: PatchRole, refVelocity: number): PatchBC {
@@ -82,6 +85,8 @@ export function defaultPatchBC(role: PatchRole, refVelocity: number): PatchBC {
       return { kind: 'symmetry' };
     case 'periodic':
       return { kind: 'periodic' };
+    case 'axis':
+      return { kind: 'axis' };
   }
 }
 
@@ -107,6 +112,7 @@ export function summarisePatch(bc: PatchBC): string {
     case 'farfield': return `freestream ${bc.velocity ?? 0} m/s`;
     case 'symmetry': return 'symmetry';
     case 'periodic': return 'periodic';
+    case 'axis': return 'axis (no faces)';
   }
 }
 

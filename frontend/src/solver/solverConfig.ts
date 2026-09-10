@@ -2,14 +2,14 @@
 // (Methods / Controls / Reports / Monitors / Initialization / Run) but writes
 // OpenFOAM fvSchemes, fvSolution and functionObjects.
 
-export type Coupling = 'SIMPLE' | 'SIMPLEC' | 'PIMPLE' | 'PISO';
 export type SpatialOrder = 'firstOrder' | 'secondOrder' | 'central' | 'blended';
 export type TimeScheme = 'steadyState' | 'Euler' | 'backward' | 'CrankNicolson';
 export type InitMode = 'uniform' | 'potentialFlow' | 'continue';
 export type StabilityPreset = 'conservative' | 'balanced' | 'aggressive' | 'custom';
 
 export interface SolverMethods {
-  coupling: Coupling;
+  // Pressure-velocity coupling (SIMPLE / PISO / PIMPLE) is not configurable:
+  // OpenFOAM 13's foamRun derives it from the time scheme and corrector count.
   momentum: SpatialOrder;
   turbulence: SpatialOrder;
   energy: SpatialOrder;
@@ -83,15 +83,14 @@ export const PRESET_RELAX: Record<Exclude<StabilityPreset, 'custom'>, SolverCont
 };
 
 export const PRESET_METHODS: Record<Exclude<StabilityPreset, 'custom'>, Partial<SolverMethods>> = {
-  conservative: { momentum: 'firstOrder', turbulence: 'firstOrder', coupling: 'SIMPLE' },
-  balanced: { momentum: 'secondOrder', turbulence: 'firstOrder', coupling: 'SIMPLEC' },
-  aggressive: { momentum: 'secondOrder', turbulence: 'secondOrder', coupling: 'SIMPLEC' },
+  conservative: { momentum: 'firstOrder', turbulence: 'firstOrder' },
+  balanced: { momentum: 'secondOrder', turbulence: 'firstOrder' },
+  aggressive: { momentum: 'secondOrder', turbulence: 'secondOrder' },
 };
 
 export function defaultSolverConfig(): SolverConfig {
   return {
     methods: {
-      coupling: 'SIMPLEC',
       momentum: 'secondOrder',
       turbulence: 'firstOrder',
       energy: 'secondOrder',

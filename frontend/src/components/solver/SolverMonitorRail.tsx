@@ -119,7 +119,7 @@ export const SolverMonitorRail: React.FC<SolverMonitorRailProps> = ({
   const cd = typeof last?.cd === 'number' ? last.cd : null;
   const cl = typeof last?.cl === 'number' ? last.cl : null;
   const lastIter = last?.iteration ?? 0;
-  const fmt = (v: number | null) => (v === null ? '—' : v.toFixed(4));
+  const fmt = (v: number | null) => (v === null ? '-' : v.toFixed(4));
 
   const resData = useMemo(
     () =>
@@ -231,7 +231,7 @@ export const SolverMonitorRail: React.FC<SolverMonitorRailProps> = ({
             <span className="text-[10px] font-semibold uppercase tracking-wider text-[#8A929E]">Force coefficients</span>
             {forceData.length >= 2 && (
               <span className="text-[10px] font-mono text-[#69717D]">
-                L/D <strong className="text-[#2563EB]">{cd && cl ? (cl / cd).toFixed(2) : '—'}</strong>
+                L/D <strong className="text-[#2563EB]">{cd && cl ? (cl / cd).toFixed(2) : '-'}</strong>
               </span>
             )}
           </div>

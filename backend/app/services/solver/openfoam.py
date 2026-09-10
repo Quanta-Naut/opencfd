@@ -35,7 +35,7 @@ def _classic_solver(phys: Dict[str, Any]) -> str:
         ("compressible", False): "rhoPimpleFoam",
     }[(comp, steady)]
 from .logparse import ResidualStream, read_force_coeffs
-from .mesh_bridge import write_foam_msh
+from .mesh_bridge import AXISYM_WEDGE_ANGLE_DEG, write_foam_msh
 
 # Sourced before every command so `simpleFoam` etc. are on PATH. Covers the ESI
 # .deb layout, the Foundation /opt layout (also the Windows WSL pack), and a
@@ -198,12 +198,19 @@ class OpenFoamAdapter(SolverAdapter):
     # plain patch, so the polyMesh patch type must match.
     _CONSTRAINT = {"empty", "symmetry", "symmetryPlane", "wedge", "cyclic", "cyclicAMI"}
 
-    def _fix_boundary_types(self, case_dir: Path, patch_types: Dict[str, str]) -> None:
+    def _fix_boundary_types(
+        self, case_dir: Path, patch_types: Dict[str, str], axisymmetric: bool = False
+    ) -> None:
         bnd = case_dir / "constant" / "polyMesh" / "boundary"
         if not bnd.is_file():
             return
         text = bnd.read_text()
-        targets = {"frontAndBack": "empty", **patch_types}
+        base = (
+            {"wedge_front": "wedge", "wedge_back": "wedge"}
+            if axisymmetric
+            else {"frontAndBack": "empty"}
+        )
+        targets = {**base, **patch_types}
 
         def patch_block(m: re.Match) -> str:
             name, inner = m.group(1), m.group(2)
@@ -248,6 +255,8 @@ class OpenFoamAdapter(SolverAdapter):
         # Reduced 2D cases use one uniform cell across a nominal 0.1 m span.
         # Keep this aligned with foam/functions.py force-reference defaults.
         span = float(config.get("span", 0.1)) or 0.1
+        axisymmetric = bool(config.get("axisymmetric"))
+        wedge_angle = float(config.get("wedgeAngleDeg", AXISYM_WEDGE_ANGLE_DEG)) or AXISYM_WEDGE_ANGLE_DEG
 
         yield {"type": "log", "line": f"[OpenCFD] Case: {case}"}
         yield {"type": "log", "line": f"[OpenCFD] Solver: foamRun -solver {module}"}
@@ -257,7 +266,9 @@ class OpenFoamAdapter(SolverAdapter):
         mesh = config.get("mesh")
         if mesh and mesh.get("nodes"):
             try:
-                summary = write_foam_msh(mesh, msh, span=span)
+                summary = write_foam_msh(
+                    mesh, msh, span=span, axisymmetric=axisymmetric, wedge_angle_deg=wedge_angle
+                )
                 yield {"type": "log",
                        "line": f"[mesh] extruded {summary['cells']} cells, patches: {', '.join(summary['patches'])}"}
             except Exception as e:  # noqa: BLE001
@@ -300,8 +311,13 @@ class OpenFoamAdapter(SolverAdapter):
             return
 
         # 4. patch boundary types, then checkMesh (warnings are non-fatal)
-        self._fix_boundary_types(case, patch_types)
-        _summary = ", ".join(f"{k}={v}" for k, v in {"frontAndBack": "empty", **patch_types}.items())
+        self._fix_boundary_types(case, patch_types, axisymmetric=axisymmetric)
+        _base = (
+            {"wedge_front": "wedge", "wedge_back": "wedge"}
+            if axisymmetric
+            else {"frontAndBack": "empty"}
+        )
+        _summary = ", ".join(f"{k}={v}" for k, v in {**_base, **patch_types}.items())
         yield {"type": "log", "line": f"[mesh] patch types: {_summary}"}
         try:
             async for ev in self._stream("checkMesh -constant || true", "checkMesh"):

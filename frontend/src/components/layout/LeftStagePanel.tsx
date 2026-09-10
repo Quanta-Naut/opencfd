@@ -38,7 +38,8 @@ import {
   BOUNDARY_COLORS,
   GeometryBBox,
 } from '../../types/cadWorkflow';
-import { Blocking, EdgeLaw, propagateNodeCounts, splitBlock, deleteBlock, applyTargetCellSize, currentCellSize } from '../../types/blocking';
+import { Blocking, EdgeLaw, propagateNodeCounts, splitBlock, deleteBlock, applyTargetCellSize, currentCellSize, edgeLength } from '../../types/blocking';
+import { computeFallbackYPlus } from '../../utils/api';
 
 interface LeftStagePanelProps {
   activeStage: StageId;
@@ -121,6 +122,8 @@ interface LeftStagePanelProps {
   onGenerateStructuredMesh?: () => void;
   ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
   onWrapBody?: (bodyIndex: number) => void;
+  ogridParams?: { offsetFactor: number; radialNodes: number; radialRatio: number };
+  onUpdateOgridParams?: (p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>) => void;
   structuredHint?: 'hgrid' | 'ogrid' | 'cgrid';
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
@@ -242,11 +245,31 @@ const StructuredMeshPanel: React.FC<{
   onUpdateBlocking?: (bk: Blocking | null) => void;
   ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
   onWrapBody?: (bodyIndex: number) => void;
+  ogridParams?: { offsetFactor: number; radialNodes: number; radialRatio: number };
+  onUpdateOgridParams?: (p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>) => void;
   structuredHint?: 'hgrid' | 'ogrid' | 'cgrid';
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
   field: string;
-}> = ({ blocking, onBuildBlocks, onUpdateBlocking, ogridBodies, onWrapBody, structuredHint, structuredSmooth, setStructuredSmooth, field }) => {
+  state: CFDProjectState;
+  updateYPlus: (p: any) => void;
+  onApplyYPlusToMesh?: () => void;
+}> = ({
+  blocking,
+  onBuildBlocks,
+  onUpdateBlocking,
+  ogridBodies,
+  onWrapBody,
+  ogridParams,
+  onUpdateOgridParams,
+  structuredHint,
+  structuredSmooth,
+  setStructuredSmooth,
+  field,
+  state,
+  updateYPlus,
+  onApplyYPlusToMesh,
+}) => {
   const hasBlocks = !!blocking && blocking.blocks.length > 0;
   const recommended: 'hgrid' | 'ogrid' | 'cgrid' = structuredHint ?? 'hgrid';
   const [kind, setKind] = useState<'hgrid' | 'ogrid' | 'cgrid'>(recommended);
@@ -261,11 +284,17 @@ const StructuredMeshPanel: React.FC<{
   }, [recommended, hasBlocks]);
   useEffect(() => { if (hasBlocks) setOpenStep(2); }, [hasBlocks]);
 
+  const currentOffset = ogridParams?.offsetFactor ?? 0.25;
+  const [sliderDraft, setSliderDraft] = useState(currentOffset);
+  useEffect(() => {
+    setSliderDraft(currentOffset);
+  }, [currentOffset]);
+
   const pick = (k: 'hgrid' | 'ogrid' | 'cgrid') => { kindRef.current = k; setKind(k); };
 
   const kindBlurb: Record<'hgrid' | 'ogrid' | 'cgrid', string> = {
     hgrid: 'One block per vertical strip of the domain. Ramps become slanted-floor blocks; floor / ceiling steps split automatically.',
-    ogrid: 'Blocks the domain, then wraps every body in an 8-sector ring - fine and orthogonal at the wall, seams on the flow axes. The rest stays a clean H-grid.',
+    ogrid: 'Blocks the domain, then wraps every body in an O-grid ring - fine and orthogonal at the wall, with a clean H-grid in the far field.',
     cgrid: 'Airfoil grid that fills the whole domain. A C-shaped far-field (semicircle + wake) gets a true wrap C-grid whose lines curve around the nose; a rectangular domain gets a C-H grid instead. Set the domain shape to "C-grid" for the best airfoil mesh.',
   };
 
@@ -367,6 +396,81 @@ const StructuredMeshPanel: React.FC<{
           )}
         </>
       )}
+
+      {(kind === 'ogrid' || ogridBodies?.some((b) => b.wrapped)) && (
+        <div className="border-t border-[#E1E4E8] pt-2.5 space-y-2">
+          <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
+            O-grid ring
+          </span>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-[#69717D]">Ring thickness</span>
+              <span className="text-[10px] font-mono text-[#171A1F]">
+                {sliderDraft.toFixed(2)} x body
+              </span>
+            </div>
+            <input
+              type="range"
+              min={0.06}
+              max={1.2}
+              step={0.02}
+              value={sliderDraft}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                setSliderDraft(v);
+                if (!ogridBodies?.some((b) => b.wrapped)) {
+                  onUpdateOgridParams?.({ offsetFactor: v });
+                }
+              }}
+              onPointerUp={(e) => {
+                const v = parseFloat((e.target as HTMLInputElement).value);
+                onUpdateOgridParams?.({ offsetFactor: v });
+              }}
+              onMouseUp={(e) => {
+                const v = parseFloat((e.target as HTMLInputElement).value);
+                onUpdateOgridParams?.({ offsetFactor: v });
+              }}
+              onKeyUp={(e) => {
+                const v = parseFloat((e.target as HTMLInputElement).value);
+                onUpdateOgridParams?.({ offsetFactor: v });
+              }}
+              className="w-full accent-[#2563EB] cursor-pointer"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label>
+              <span className="text-[10px] text-[#69717D] block mb-1">Radial nodes</span>
+              <NumberField
+                value={ogridParams?.radialNodes ?? 26}
+                integer
+                min={4}
+                max={400}
+                fallback={26}
+                onChange={(n) => onUpdateOgridParams?.({ radialNodes: n })}
+                className={field}
+              />
+            </label>
+            <label>
+              <Tooltip content="Higher = finer first cell at the wall (like y+ clustering).">
+                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                  Wall clustering
+                </span>
+              </Tooltip>
+              <NumberField
+                value={ogridParams?.radialRatio ?? 10}
+                min={1}
+                max={100}
+                fallback={10}
+                onChange={(n) => onUpdateOgridParams?.({ radialRatio: n })}
+                className={field}
+              />
+            </label>
+          </div>
+          <p className="text-[10px] text-[#69717D] leading-relaxed">
+            Thicker ring = better cell angles where the radial cuts meet the wall. Thinner = sharper H-grid transition. Rebuilds the O-grid.
+          </p>
+        </div>
+      )}
     </div>
   );
 
@@ -400,6 +504,84 @@ const StructuredMeshPanel: React.FC<{
         edges: blocking.edges.map((e) => (ids.includes(e.id) ? { ...e, ...patch } : e)),
       }));
     };
+    // First-cell height for the current target y+. `state.yplus.first_layer_height_mm`
+    // is kept live by the auto-y+ effect in App.tsx (recomputes on target change).
+    // Fall back to a client-side estimate from the physics if it is missing - the
+    // saved yplus blob does NOT carry the velocity/length/density/viscosity inputs.
+    const liveFirstCellMm = (() => {
+      const v = state.yplus.first_layer_height_mm;
+      if (typeof v === 'number' && isFinite(v) && v > 0) return v;
+      try {
+        const r = computeFallbackYPlus({
+          velocity: state.physics.inletVelocity || state.boundaries?.inletVelocity || 1,
+          length: state.geometry.chord || state.geometry.domainLength || 1,
+          density: state.physics.density || 1.225,
+          viscosity: (state.physics.density || 1.225) * (state.physics.kinematicViscosity || 1.5e-5),
+          target_yplus: state.yplus.target_yplus || 30,
+          expansion_ratio: state.yplus.expansion_ratio ?? 1.2,
+          flow_regime: state.physics.regime === 'laminar' ? 'laminar' : 'turbulent',
+        });
+        const fc = r.first_layer_height_mm;
+        return typeof fc === 'number' && isFinite(fc) && fc > 0 ? fc : null;
+      } catch { return null; }
+    })();
+
+    // Cluster genuinely wall-normal block edges toward their wall end. An edge
+    // qualifies only if it touches a `wall` patch at exactly one endpoint AND
+    // runs roughly perpendicular (within 45 deg) to that wall edge - so an edge
+    // that merely clips a wall corner while running along the domain is left
+    // alone. Drawing units are metres. The grading is capped: an H-grid on a
+    // slanted / curved wall can't hold an extreme y+ without shearing, so this
+    // gives a strong-but-safe boundary-layer grade, not an exact y+.
+    const growth = Math.max(1.05, Math.min(state.yplus.expansion_ratio ?? 1.2, 1.4));
+    const RATIO_CAP = 40;    // strongest last/first cell we allow
+    const N_CAP = 45;        // most cells we put on a wall-normal edge
+    const wallCount = blocking.edges.filter((e) => e.patch === 'wall').length;
+    const vpt = (id: string) => blocking.vertices.find((v) => v.id === id)?.pt;
+    const applyYPlusClustering = () => {
+      if (!onUpdateBlocking || !(liveFirstCellMm && liveFirstCellMm > 0)) return;
+      const h1 = liveFirstCellMm / 1000;
+      const wallEdges = blocking.edges.filter((e) => e.patch === 'wall');
+      const wallVids = new Set<string>();
+      for (const e of wallEdges) { wallVids.add(e.v0); wallVids.add(e.v1); }
+      const dirOf = (e: { v0: string; v1: string }) => {
+        const a = vpt(e.v0), b = vpt(e.v1);
+        if (!a || !b) return null;
+        const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+        return { x: (b.x - a.x) / d, y: (b.y - a.y) / d };
+      };
+      const perpToWallAt = (edge: { v0: string; v1: string }, wallVid: string): boolean => {
+        const ed = dirOf(edge);
+        if (!ed) return false;
+        for (const w of wallEdges) {
+          if (w.v0 !== wallVid && w.v1 !== wallVid) continue;
+          const wd = dirOf(w);
+          if (!wd) continue;
+          const dot = Math.abs(ed.x * wd.x + ed.y * wd.y);   // |cos angle|
+          if (dot < Math.cos(Math.PI / 4)) return true;      // within 45 deg of perpendicular
+        }
+        return false;
+      };
+      const edges = blocking.edges.map((e) => {
+        const w0 = wallVids.has(e.v0), w1 = wallVids.has(e.v1);
+        if (w0 === w1) return e;
+        const wallVid = w0 ? e.v0 : e.v1;
+        if (!perpToWallAt(e, wallVid)) return e;
+        const L = edgeLength(blocking, e);
+        if (L <= 0) return e;
+        const nCellsRaw = Math.ceil(Math.log(1 + (L * (growth - 1)) / h1) / Math.log(growth));
+        const nCells = Math.max(10, Math.min(nCellsRaw, N_CAP));
+        let lo = 1.0, hi = 3.0;
+        const sum = (q: number) => (Math.abs(q - 1) < 1e-9 ? h1 * nCells : (h1 * (Math.pow(q, nCells) - 1)) / (q - 1));
+        while (sum(hi) < L && hi < 20) hi *= 1.5;
+        for (let it = 0; it < 60; it++) { const m = 0.5 * (lo + hi); if (sum(m) < L) lo = m; else hi = m; }
+        let rTotal = Math.min(Math.max(Math.pow(0.5 * (lo + hi), nCells - 1), 1), RATIO_CAP);
+        if (rTotal <= 1.0001) return e;
+        const ratio = Number((w0 ? rTotal : 1 / rTotal).toPrecision(4));
+        return { ...e, nodes: Math.max(e.nodes, nCells + 1), law: 'geometric' as EdgeLaw, ratio };
+      });
+      onUpdateBlocking(propagateNodeCounts({ ...blocking, edges }));
+    };
 
     const bkNow = blocking;
     step2 = (
@@ -432,6 +614,58 @@ const StructuredMeshPanel: React.FC<{
             <input type="checkbox" checked={structuredSmooth !== false} onChange={(ev) => setStructuredSmooth(ev.target.checked)} className="accent-[#2563EB]" />
           </label>
         )}
+
+        <div className="p-2.5 bg-blue-50/60 border border-blue-100 rounded-md space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-[#171A1F]">Wall resolution (y+)</span>
+            <span className="text-[10px] text-[#69717D]">near-wall clustering</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            <label>
+              <Tooltip content="Target y+ for the first cell at the wall.">
+                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Target y+</span>
+              </Tooltip>
+              <NumberField
+                value={state.yplus.target_yplus ?? 30}
+                min={0.1}
+                step="1"
+                fallback={30}
+                onChange={(n) => updateYPlus({ target_yplus: n })}
+                className={`${field} bg-white border-blue-200`}
+              />
+            </label>
+            <div>
+              <Tooltip content="First cell height for the current target y+ (live).">
+                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">First cell</span>
+              </Tooltip>
+              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-[#171A1F]">
+                {liveFirstCellMm != null ? `${liveFirstCellMm.toFixed(4)} mm` : '-'}
+              </div>
+            </div>
+            <div>
+              <Tooltip content="Wall-tagged block edges found in the current blocking.">
+                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">Wall edges</span>
+              </Tooltip>
+              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-[#171A1F]">
+                {wallCount}
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={applyYPlusClustering}
+            disabled={wallCount === 0}
+            className="w-full py-1.5 px-2 rounded-md bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-medium transition-colors"
+          >
+            Cluster wall-normal edges to y+
+          </button>
+          <p className="text-[10px] text-[#69717D] leading-relaxed">
+            {wallCount === 0
+              ? 'Tag a block edge as wall first (Geometry - Boundary patches).'
+              : 'Geometric grading on edges that run into a wall - a strong boundary-layer grade toward the target y+ (capped for cell quality; use an O-grid for an exact y+ on a curved wall).'}
+          </p>
+        </div>
 
         <p className="text-[10px] text-[#69717D] leading-relaxed pt-1 border-t border-[#E1E4E8]">
           Each group below is one direction of the grid. Opposite and shared block edges stay equal automatically.
@@ -579,6 +813,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   onGenerateStructuredMesh,
   ogridBodies,
   onWrapBody,
+  ogridParams,
+  onUpdateOgridParams,
   structuredHint,
   structuredSmooth,
   setStructuredSmooth,
@@ -957,7 +1193,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       : 'Pick a tag, then click canvas edges to apply it'}
                   </span>
                   <div className="grid grid-cols-2 gap-1.5">
-                    {(['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic'] as BoundaryTag[]).map((tag) => {
+                    {/* 'axis' is always offered - tagging an edge with it is what turns
+                        the case axisymmetric, manually, no separate toggle. */}
+                    {(['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic', 'axis'] as BoundaryTag[]).map((tag) => {
                       const conf = BOUNDARY_COLORS[tag];
                       const isSel = activeTagTool === tag;
                       return (
@@ -1052,10 +1290,15 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               onUpdateBlocking={onUpdateBlocking}
               ogridBodies={ogridBodies}
               onWrapBody={onWrapBody}
+              ogridParams={ogridParams}
+              onUpdateOgridParams={onUpdateOgridParams}
               structuredHint={structuredHint}
               structuredSmooth={structuredSmooth}
               setStructuredSmooth={setStructuredSmooth}
               field={field}
+              state={state}
+              updateYPlus={updateYPlus}
+              onApplyYPlusToMesh={onApplyYPlusToMesh}
             />
           ) : (
             <>

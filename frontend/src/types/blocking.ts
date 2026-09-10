@@ -19,6 +19,8 @@ export interface BlockEdge {
   law: EdgeLaw;
   /** Growth ratio: last cell / first cell along the edge. 1 = uniform. */
   ratio: number;
+  /** CadEntity.id whose closed outline this edge follows. Undefined = straight or unassociated. */
+  curveId?: string;
 }
 
 export interface Block {
@@ -107,6 +109,34 @@ function resampleClosed(poly: Point2D[], n: number): Point2D[] {
   return out;
 }
 
+/** Resample an open polyline to `n` points spaced evenly by arc length. */
+export function resampleOpen(pts: Point2D[], n: number): Point2D[] {
+  if (pts.length < 2) return pts.map((p) => ({ ...p }));
+  const seg: number[] = [];
+  let total = 0;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const d = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    seg.push(d);
+    total += d;
+  }
+  if (total < 1e-9) return pts.map((p) => ({ ...p }));
+  const out: Point2D[] = [];
+  for (let k = 0; k < n; k++) {
+    let target = (k / (n - 1)) * total;
+    let si = 0;
+    let accumulated = 0;
+    while (si < seg.length - 1 && accumulated + seg[si] < target) {
+      accumulated += seg[si];
+      si += 1;
+    }
+    const a = pts[si], b = pts[si + 1];
+    const rem = target - accumulated;
+    const f = seg[si] > 1e-9 ? Math.max(0, Math.min(1, rem / seg[si])) : 0;
+    out.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+  }
+  return out;
+}
+
 /** First intersection of the ray o -> target with polygon poly. */
 function rayPolygonHit(o: Point2D, target: Point2D, poly: Point2D[]): Point2D | null {
   const dx = target.x - o.x, dy = target.y - o.y;
@@ -142,11 +172,129 @@ function poly(entity: CadEntity): Point2D[] {
       y: c.y + entity.radius! * Math.sin((2 * Math.PI * i) / 64),
     }));
   }
+  if (entity.type === 'ellipse' && entity.rx != null && entity.ry != null && entity.pts[0]) {
+    const c = entity.pts[0];
+    const rx = entity.rx;
+    const ry = entity.ry;
+    const rot = entity.rotation || 0;
+    const cosR = Math.cos(rot);
+    const sinR = Math.sin(rot);
+    return Array.from({ length: 64 }, (_, i) => {
+      const a = (2 * Math.PI * i) / 64;
+      const lx = rx * Math.cos(a);
+      const ly = ry * Math.sin(a);
+      return {
+        x: c.x + lx * cosR - ly * sinR,
+        y: c.y + lx * sinR + ly * cosR,
+      };
+    });
+  }
   return entity.pts.map((p) => ({ ...p }));
 }
 
 /** Point ring for any closed entity (circle sampled, polyline/rect as-is). */
 export const entityRing = (entity: CadEntity): Point2D[] => poly(entity);
+
+/**
+ * Reproject a curved block edge onto its associated CAD entity outline
+ * after an endpoint moved. Returns the new interior path points.
+ */
+export function reprojectEdgePath(
+  edge: BlockEdge,
+  v0pt: Point2D,
+  v1pt: Point2D,
+  entities: CadEntity[],
+): Point2D[] {
+  if (!edge.curveId) return [];
+  const entity = entities.find((e) => e.id === edge.curveId);
+  if (!entity) return [];
+  const ring = entityRing(entity);
+  const cleanRing = dedupeClose(ring);
+  if (cleanRing.length < 3) return [];
+  if (near(v0pt, v1pt, 1e-6)) return [];
+
+  // Find the ring index nearest v0pt and nearest v1pt
+  let i0 = 0, d0Min = Infinity;
+  let i1 = 0, d1Min = Infinity;
+  for (let i = 0; i < cleanRing.length; i++) {
+    const p = cleanRing[i];
+    const d0 = Math.hypot(p.x - v0pt.x, p.y - v0pt.y);
+    if (d0 < d0Min) { d0Min = d0; i0 = i; }
+    const d1 = Math.hypot(p.x - v1pt.x, p.y - v1pt.y);
+    if (d1 < d1Min) { d1Min = d1; i1 = i; }
+  }
+
+  if (i0 === i1) return [];
+
+  const N = cleanRing.length;
+  // Walk the ring both ways between those indices
+  const arcFwd: Point2D[] = [cleanRing[i0]];
+  let cur = i0;
+  while (cur !== i1) {
+    cur = (cur + 1) % N;
+    arcFwd.push(cleanRing[cur]);
+  }
+
+  const arcBwd: Point2D[] = [cleanRing[i0]];
+  cur = i0;
+  while (cur !== i1) {
+    cur = (cur - 1 + N) % N;
+    arcBwd.push(cleanRing[cur]);
+  }
+
+  const arcLen = (pts: Point2D[]) => {
+    let len = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      len += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    }
+    return len;
+  };
+
+  const lenFwd = arcLen(arcFwd);
+  const lenBwd = arcLen(arcBwd);
+  const chosenArc = lenFwd <= lenBwd ? arcFwd : arcBwd;
+  if (Math.min(lenFwd, lenBwd) < 1e-6) return [];
+
+  // Resample that arc to ~24 evenly spaced points and return interior points only
+  const resampled = resampleOpen(chosenArc, 26);
+  return resampled.slice(1, -1);
+}
+
+/**
+ * Move a block vertex and recompute paths for all incident curved edges.
+ */
+export function applyVertexMove(
+  bk: Blocking,
+  vertexId: string,
+  newPt: Point2D,
+  entities: CadEntity[],
+): Blocking {
+  const vertices = bk.vertices.map((v) =>
+    v.id === vertexId ? { ...v, pt: { ...newPt } } : { ...v, pt: { ...v.pt } },
+  );
+  const vmap = new Map(vertices.map((v) => [v.id, v.pt] as const));
+  const edges = bk.edges.map((e) => {
+    if (e.v0 === vertexId || e.v1 === vertexId) {
+      const p0 = vmap.get(e.v0)!;
+      const p1 = vmap.get(e.v1)!;
+      const path = reprojectEdgePath(e, p0, p1, entities);
+      return {
+        ...e,
+        path,
+      };
+    }
+    return {
+      ...e,
+      path: e.path.map((p) => ({ ...p })),
+    };
+  });
+  return {
+    vertices,
+    edges,
+    blocks: bk.blocks.map((b) => ({ id: b.id, edges: [...b.edges] })),
+    links: bk.links ? bk.links.map((grp) => [...grp]) : undefined,
+  };
+}
 
 /** Merge every domain-boundary / geometry outline entity into one ordered ring. */
 export function outlineRing(entities: CadEntity[]): Point2D[] {
@@ -155,7 +303,7 @@ export function outlineRing(entities: CadEntity[]): Point2D[] {
   const use = domain.length ? domain : src;
 
   // Single closed entity - just use its points.
-  const closed = use.find((e) => (e.isClosed || e.type === 'rectangle') && e.pts.length >= 3);
+  const closed = use.find((e) => (e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse') && (e.pts.length >= 3 || e.type === 'circle' || e.type === 'ellipse'));
   if (closed) return poly(closed);
 
   // Stitch loose segments end to end.
@@ -192,7 +340,7 @@ function makeTagLookup(entities: CadEntity[], edgeTagMap: Record<string, Boundar
     let best: BoundaryTag | undefined;
     let bd = span * 0.06 + 1e-6;
     for (const e of entities) {
-      if (e.layer === 'construction' || e.type === 'circle') continue;
+      if (e.layer === 'construction' || e.type === 'circle' || e.type === 'ellipse') continue;
       const n = e.pts.length;
       const count = e.isClosed || e.type === 'rectangle' ? n : n - 1;
       for (let i = 0; i < count; i++) {
@@ -229,19 +377,28 @@ export function autoBlockingFromOutline(
   entities: CadEntity[],
   edgeTagMap: Record<string, BoundaryTag>,
 ): Blocking | null {
+  const src = entities.filter((e) => e.layer !== 'construction' && (e.role === 'domain_boundary' || !e.role));
+  const domain = src.filter((e) => e.role === 'domain_boundary');
+  const use = domain.length ? domain : src;
+
+  // Single closed entity - just use its points.
+  const closed = use.find((e) => (e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse') && (e.pts.length >= 3 || e.type === 'circle' || e.type === 'ellipse'));
+  const singleEntityId = closed ? closed.id : undefined;
+
   const ring = outlineRing(entities);
   if (ring.length < 4) return null;
   const tag = makeTagLookup(entities, edgeTagMap);
 
-  const strips = stripDecomposition(ring, tag);
+  const strips = stripDecomposition(ring, tag, singleEntityId);
   if (strips) return strips;
-  return singleBlockFromOutline(ring, tag);
+  return singleBlockFromOutline(ring, tag, singleEntityId);
 }
 
-/** Old behaviour: one block, four bounding-box corners, sides follow the outline. */
-function singleBlockFromOutline(
+/** One block, four bounding-box corners, sides follow the outline. */
+export function singleBlockFromOutline(
   ring: Point2D[],
   tag: (a: Point2D, b: Point2D) => BoundaryTag | undefined,
+  curveId?: string,
 ): Blocking | null {
   const xs = ring.map((p) => p.x), ys = ring.map((p) => p.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -270,14 +427,15 @@ function singleBlockFromOutline(
     for (const p of [...path, vb.pt]) { const t = tag(prev, p); if (t) counts.set(t, (counts.get(t) ?? 0) + 1); prev = p; }
     let patch: BoundaryTag | undefined; let pc = 0;
     counts.forEach((c, t) => { if (c > pc) { pc = c; patch = t; } });
-    edges.push({ id: uid(), v0: va.id, v1: vb.id, path, patch, nodes: 40, law: 'uniform', ratio: 1 });
+    edges.push({ id: uid(), v0: va.id, v1: vb.id, path, patch, nodes: 40, law: 'uniform', ratio: 1, curveId });
   }
   return { vertices: verts, edges, blocks: [{ id: uid(), edges: [edges[0].id, edges[1].id, edges[2].id, edges[3].id] }] };
 }
 
-function stripDecomposition(
+export function stripDecomposition(
   ringRaw: Point2D[],
   tag: (a: Point2D, b: Point2D) => BoundaryTag | undefined,
+  curveId?: string,
 ): Blocking | null {
   // clean: drop repeats and a duplicated closing point
   const R: Point2D[] = [];
@@ -303,14 +461,27 @@ function stripDecomposition(
   const arcA = walk(iL, iR);
   const arcB = walk(iR, iL).reverse();
   const meanY = (a: Point2D[]) => a.reduce((s, p) => s + p.y, 0) / a.length;
-  const lower = meanY(arcA) <= meanY(arcB) ? arcA : arcB;
-  const upper = lower === arcA ? arcB : arcA;
+  // Snap chain x-coords to the RKEY grid FIRST. Two "coincident" hand-drawn
+  // points (e.g. a nozzle exit lip and the far-field inflow that meet there)
+  // can differ by a micron; `chainYAt` matches on x within 1e-6, so without
+  // this the exit-lip vertex is invisible to the strip boundary and the
+  // diverging section collapses into a diagonal to the far-field corner.
+  const snapChain = (a: Point2D[]): Point2D[] => {
+    const out: Point2D[] = [];
+    for (const p of a) {
+      const q = { x: RKEY(p.x), y: p.y };
+      if (!out.length || Math.hypot(out[out.length - 1].x - q.x, out[out.length - 1].y - q.y) > 1e-7) out.push(q);
+    }
+    return out;
+  };
+  const lower = snapChain(meanY(arcA) <= meanY(arcB) ? arcA : arcB);
+  const upper = snapChain(meanY(arcA) <= meanY(arcB) ? arcB : arcA);
 
   const mono = (a: Point2D[]) => a.every((p, i) => i === 0 || p.x >= a[i - 1].x - 1e-6);
   if (!mono(lower) || !mono(upper)) return null;
 
   const xmap = new Map<number, number>();
-  for (const p of [...lower, ...upper]) xmap.set(RKEY(p.x), p.x);
+  for (const p of [...lower, ...upper]) xmap.set(RKEY(p.x), RKEY(p.x));
   const X = [...xmap.values()].sort((a, b) => a - b);
   if (X.length < 2) return null;
 
@@ -357,8 +528,12 @@ function stripDecomposition(
       const levels = new Set<number>();
       const add = (y: number) => { if (y > lo + 1e-6 && y < hi - 1e-6) levels.add(RKEY(y)); };
       const L = strips[i - 1], Rn = strips[i + 1];
-      if (L && flat(L)) { add(L.b0); add(L.t0); }
-      if (Rn && flat(Rn)) { add(Rn.b0); add(Rn.t0); }
+      // Split at the neighbour's floor/ceiling level AT THE SHARED EDGE, whether
+      // the neighbour is flat or a ramp. A CD nozzle exit lip is a ramp strip
+      // whose ceiling ends well below the far-field top - without this the
+      // far-field strip stays one block and the nozzle exit plane is lost.
+      if (L) { add(L.b1); add(L.t1); }
+      if (Rn) { add(Rn.b0); add(Rn.t0); }
       const ys = [lo, ...[...levels].sort((a, b) => a - b), hi];
       for (let k = 0; k + 1 < ys.length; k++) {
         quads.push([
@@ -375,13 +550,14 @@ function stripDecomposition(
     }
   });
 
-  return blockingFromQuads(quads, tag);
+  return blockingFromQuads(quads, tag, curveId);
 }
 
 /** Assemble a Blocking from a list of corner quads (BL, BR, TR, TL), de-duping shared edges. */
 function blockingFromQuads(
   quads: [Point2D, Point2D, Point2D, Point2D][],
   tag: (a: Point2D, b: Point2D) => BoundaryTag | undefined,
+  curveId?: string,
 ): Blocking | null {
   const vByKey = new Map<string, string>();
   const vertices: BlockVertex[] = [];
@@ -418,7 +594,13 @@ function blockingFromQuads(
   }
   if (!blocks.length) return null;
   // an edge shared by two blocks is interior: it carries no patch
-  for (const e of edges) if ((refs.get(e.id) ?? 0) >= 2) e.patch = undefined;
+  for (const e of edges) {
+    if ((refs.get(e.id) ?? 0) >= 2) {
+      e.patch = undefined;
+    } else if (curveId) {
+      e.curveId = curveId;
+    }
+  }
 
   return { vertices, edges, blocks };
 }
@@ -631,7 +813,7 @@ export function bodiesForOgrid(
   const out: { index: number; name: string; blockId: string | null; wrapped: boolean }[] = [];
   entities.forEach((e, index) => {
     if (e.layer === 'construction' || e.role === 'domain_boundary') return;
-    const closed = e.isClosed || e.type === 'rectangle' || e.type === 'circle';
+    const closed = e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse';
     if (!closed) return;
     const ring = resampleClosed(entityRing(e), 72);
     if (ring.length < 8) return;
@@ -660,7 +842,18 @@ export function wrapBodyOgrid(
   bk: Blocking,
   bodyRaw: Point2D[],
   patch?: BoundaryTag,
+  opts?: {
+    bodyEntityId?: string;
+    offsetFactor?: number;
+    radialNodes?: number;
+    radialRatio?: number;
+  },
 ): Blocking | null {
+  const bodyEntityId = opts?.bodyEntityId;
+  const offsetFactor = Math.max(0.06, Math.min(1.2, opts?.offsetFactor ?? 0.25));
+  const radialNodes = Math.max(4, Math.min(400, Math.round(opts?.radialNodes ?? 26)));
+  const radialRatio = Math.max(1, Math.min(100, opts?.radialRatio ?? 10));
+
   let body = resampleClosed(bodyRaw.map((p) => ({ x: p.x, y: p.y })), 72);
   if (body.length < 8) return null;
   if (signedArea(body) < 0) body.reverse();
@@ -684,12 +877,15 @@ export function wrapBodyOgrid(
   const gapL = bb.minX - hb0.minX, gapR = hb0.maxX - bb.maxX;
   const gapB = bb.minY - hb0.minY, gapT = hb0.maxY - bb.maxY;
   const minGap = Math.min(gapL, gapR, gapB, gapT);
-  const hostTooBig = hb0.maxX - hb0.minX > bw * 1.7 || hb0.maxY - hb0.minY > bh * 1.7;
-  if (minGap > bw * 0.04 && hostTooBig) {
-    // ring reaches ~0.3 * body size out from the wall
-    const off = Math.max(bw, bh) * 0.3;
-    const padX = Math.max(Math.min(off, gapL * 0.9, gapR * 0.9), bw * 0.05);
-    const padY = Math.max(Math.min(off, gapB * 0.9, gapT * 0.9), bh * 0.05);
+  const hostTooBig =
+    hb0.maxX - hb0.minX > bw * (1 + offsetFactor) ||
+    hb0.maxY - hb0.minY > bh * (1 + offsetFactor);
+  if (minGap > Math.min(bw, bh) * 0.04 && hostTooBig) {
+    // ring reaches offsetFactor * body size out from the wall per-axis
+    const clampPad = (val: number, minPad: number, maxPad: number) =>
+      maxPad < minPad ? maxPad : Math.max(minPad, Math.min(val, maxPad));
+    const padX = clampPad(offsetFactor * bw, bw * 0.05, Math.min(gapL * 0.9, gapR * 0.9));
+    const padY = clampPad(offsetFactor * bh, bh * 0.05, Math.min(gapB * 0.9, gapT * 0.9));
     for (const [ax, v] of [
       ['x', bb.minX - padX], ['x', bb.maxX + padX],
       ['y', bb.minY - padY], ['y', bb.maxY + padY],
@@ -735,13 +931,21 @@ export function wrapBodyOgrid(
     const radialIds: string[] = [];
     const arcIds: string[] = [];
     for (let k = 0; k < N; k++) {
-      // strong wall clustering by default - visibly fine right at the body,
-      // coarsening out to the H-grid. Count is kept by applyTargetCellSize.
-      const rad: BlockEdge = { id: uid(), v0: innerIds[k], v1: attachIds[k], path: [], nodes: 26, law: 'geometric', ratio: 10 };
+      // Wall clustering grading ratio: 1 = uniform, >1 = geometric
+      const rad: BlockEdge = {
+        id: uid(),
+        v0: innerIds[k],
+        v1: attachIds[k],
+        path: [],
+        nodes: radialNodes,
+        law: radialRatio === 1 ? 'uniform' : 'geometric',
+        ratio: radialRatio,
+      };
       const arc: BlockEdge = {
         id: uid(), v0: innerIds[k], v1: innerIds[(k + 1) % N],
         path: arcs[k].slice(1, -1).map((p) => ({ ...p })),
         patch, nodes: N === 8 ? 18 : 30, law: 'uniform', ratio: 1,
+        curveId: bodyEntityId,
       };
       edges.push(rad, arc);
       radialIds.push(rad.id);
@@ -838,7 +1042,7 @@ export function airfoilsForCGrid(
   const out: { index: number; name: string; aspect: number }[] = [];
   entities.forEach((e, index) => {
     if (e.layer === 'construction' || e.role === 'domain_boundary') return;
-    if (e.type === 'circle') return;
+    if (e.type === 'circle' || e.type === 'ellipse') return;
     if (!(e.isClosed || e.type === 'rectangle')) return;
     const ring = resampleClosed(entityRing(e), 64);
     if (ring.length < 8) return;
@@ -861,6 +1065,8 @@ function cGridWrap(
   iTE: number,
   dom: Point2D[],
   patch?: BoundaryTag,
+  airfoilEntityId?: string,
+  domainEntityId?: string,
 ): Blocking | null {
   const TE = { ...A[iTE] };
   let iLE = 0;
@@ -941,8 +1147,17 @@ function cGridWrap(
     return id;
   };
   const edges: BlockEdge[] = [];
-  const mk = (v0: string, v1: string, path: Point2D[], p: BoundaryTag | undefined, nodes: number, law: EdgeLaw = 'uniform', ratio = 1): string => {
-    edges.push({ id: uid(), v0, v1, path: path.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes, law, ratio });
+  const mk = (
+    v0: string,
+    v1: string,
+    path: Point2D[],
+    p: BoundaryTag | undefined,
+    nodes: number,
+    law: EdgeLaw = 'uniform',
+    ratio = 1,
+    curveId?: string,
+  ): string => {
+    edges.push({ id: uid(), v0, v1, path: path.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes, law, ratio, curveId });
     return edges[edges.length - 1].id;
   };
   const vLE = vid(LE), vTE = vid(TE), vFront = vid(oFront), vWB = vid(WB), vWT = vid(WT);
@@ -953,13 +1168,13 @@ function cGridWrap(
   const teRadU = mk(vTE, vWT, [], undefined, NORMAL, 'geometric', 2.2);
   const teRadL = mk(vTE, vWB, [], undefined, NORMAL, 'geometric', 2.2);
   // circumferential edges cluster nodes toward the leading and trailing edges
-  const afU = mk(vLE, vTE, upper.slice(1, -1), patch ?? 'wall', AROUND, 'bump', 0.22);
-  const afL = mk(vLE, vTE, lower.slice(1, -1), patch ?? 'wall', AROUND, 'bump', 0.22);
-  const ocU = mk(vFront, vWT, upWrapOuter, 'farfield', AROUND, 'bump', 0.35);
-  const ocL = mk(vFront, vWB, loWrapOuter, 'farfield', AROUND, 'bump', 0.35);
+  const afU = mk(vLE, vTE, upper.slice(1, -1), patch ?? 'wall', AROUND, 'bump', 0.22, airfoilEntityId);
+  const afL = mk(vLE, vTE, lower.slice(1, -1), patch ?? 'wall', AROUND, 'bump', 0.22, airfoilEntityId);
+  const ocU = mk(vFront, vWT, upWrapOuter, 'farfield', AROUND, 'bump', 0.35, domainEntityId);
+  const ocL = mk(vFront, vWB, loWrapOuter, 'farfield', AROUND, 'bump', 0.35, domainEntityId);
   const wcut = mk(vTE, vWakeOut, [], undefined, WAKE, 'geometric', 3);     // shared wake cut
-  const wlU = mk(vWT, vHi0, upTailMid, 'farfield', WAKE, 'geometric', 3);
-  const wlL = mk(vWB, vLo0, loTailMid, 'farfield', WAKE, 'geometric', 3);
+  const wlU = mk(vWT, vHi0, upTailMid, 'farfield', WAKE, 'geometric', 3, domainEntityId);
+  const wlL = mk(vWB, vLo0, loTailMid, 'farfield', WAKE, 'geometric', 3, domainEntityId);
   const outEU = mk(vWakeOut, vHi0, [], 'outlet', NORMAL, 'geometric', 4);
   const outEL = mk(vWakeOut, vLo0, [], 'outlet', NORMAL, 'geometric', 4);
 
@@ -992,6 +1207,8 @@ export function cGridFromAirfoil(
   airfoilRaw: Point2D[],
   domainRing: Point2D[],
   patch?: BoundaryTag,
+  airfoilEntityId?: string,
+  domainEntityId?: string,
 ): Blocking | null {
   let A = resampleClosed(airfoilRaw.map((p) => ({ x: p.x, y: p.y })), 220);
   if (A.length < 20) return null;
@@ -1020,7 +1237,7 @@ export function cGridFromAirfoil(
   const bboxArea = (xR - xL) * (yT - yB);
   const ringArea = Math.abs(signedArea(dom));
   if (bboxArea > 0 && ringArea < 0.95 * bboxArea) {
-    const wrap = cGridWrap(A, iTE, dom, patch);
+    const wrap = cGridWrap(A, iTE, dom, patch, airfoilEntityId, domainEntityId);
     if (wrap) return wrap;
     // fall through to the rectangular H-C grid if the wrap could not be built
   }
@@ -1059,8 +1276,8 @@ export function cGridFromAirfoil(
     const e: BlockEdge = { id: uid(), v0: ia, v1: ib, path: [], patch: p, nodes: 40, law, ratio };
     edges.push(e); eKey.set(k, e.id); return e.id;
   };
-  const curved = (a: Point2D, b: Point2D, mid: Point2D[], p: BoundaryTag | undefined): string => {
-    const e: BlockEdge = { id: uid(), v0: vid(a), v1: vid(b), path: mid.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes: 40, law: 'uniform', ratio: 1 };
+  const curved = (a: Point2D, b: Point2D, mid: Point2D[], p: BoundaryTag | undefined, curveId?: string): string => {
+    const e: BlockEdge = { id: uid(), v0: vid(a), v1: vid(b), path: mid.map((q) => ({ x: q.x, y: q.y })), patch: p, nodes: 40, law: 'uniform', ratio: 1, curveId };
     edges.push(e); return e.id;
   };
 
@@ -1086,8 +1303,8 @@ export function cGridFromAirfoil(
   const tvU = straight(TE, nTE_T, undefined);                  // TE vertical, upper
   const tvL = straight(nTE_B, TE, undefined);                  // TE vertical, lower
   // airfoil surface (wall) - the two halves share LE and TE but different paths
-  const afU = curved(LE, TE, upper.slice(1, -1), patch ?? 'wall');
-  const afL = curved(LE, TE, lower.slice(1, -1), patch ?? 'wall');
+  const afU = curved(LE, TE, upper.slice(1, -1), patch ?? 'wall', airfoilEntityId);
+  const afL = curved(LE, TE, lower.slice(1, -1), patch ?? 'wall', airfoilEntityId);
 
   const scratch: Blocking = { vertices: verts, edges, blocks: [], links: [] };
   const B = (ids: string[]) => orderBlockEdges(scratch, ids);
@@ -1154,7 +1371,7 @@ export function propagateNodeCounts(bk: Blocking): Blocking {
 }
 
 /** Arc length of a block edge (through its path points). */
-function edgeLength(bk: Blocking, e: BlockEdge): number {
+export function edgeLength(bk: Blocking, e: BlockEdge): number {
   const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
   const a = vm.get(e.v0), b = vm.get(e.v1);
   if (!a || !b) return 0;
@@ -1231,10 +1448,16 @@ export function toStructuredRequest(bk: Blocking): StructuredMeshRequest {
     edges: bk.edges.map((e) => {
       const a = vmap.get(e.v0)!;
       const b = vmap.get(e.v1)!;
+      let pathPts = e.path;
+      if (e.curveId && e.path.length > 0) {
+        const fullChain = [a, ...e.path, b];
+        const resampled = resampleOpen(fullChain, 50);
+        pathPts = resampled.slice(1, -1);
+      }
       return {
         p0: [a.x, a.y] as [number, number],
         p1: [b.x, b.y] as [number, number],
-        path: e.path.map((p) => [p.x, p.y] as [number, number]),
+        path: pathPts.map((p) => [p.x, p.y] as [number, number]),
         nodes: Math.max(2, Math.round(e.nodes)),
         law: e.law,
         ratio: e.ratio,

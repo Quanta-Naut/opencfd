@@ -1,6 +1,10 @@
 """functionObjects: force coefficients, surface reports, point probes.
 Returned as a ``functions { ... }`` block appended to controlDict."""
+import math
 from typing import Any, Dict, List
+
+# Must match solver/mesh_bridge.py::AXISYM_WEDGE_ANGLE_DEG.
+_AXISYM_WEDGE_ANGLE_DEG = 5.0
 
 
 def _vec(v) -> str:
@@ -26,6 +30,14 @@ def build_functions(
         rho = float(phys.get("density", 1.225))
         L = forces.get("refLength") or ref_length or 1.0
         A = forces.get("refArea") or (L * 0.1)  # 2D: nominal span = 0.1 m
+        if phys.get("axisymmetric"):
+            # The mesh is only a 5 degree wedge slice, so libforces integrates
+            # pressure/shear over ~1/72 of the full body. Shrinking Aref by the
+            # same wedge fraction makes the reported Cd/Cl (force / Aref) come
+            # out as the correct full-revolution value - the fraction cancels
+            # between the (slice-scale) force and the (slice-scale) area. The
+            # raw Fx/Fy/Fz components in the log/force files stay slice-scale.
+            A *= math.radians(_AXISYM_WEDGE_ANGLE_DEG) / (2 * math.pi)
         compressible = phys.get("compressibility") == "compressible"
         # Incompressible: pressure is kinematic, so `rho rhoInf` tells libforces to
         # multiply by rhoInf. Compressible: pressure is in Pa and libforces reads
