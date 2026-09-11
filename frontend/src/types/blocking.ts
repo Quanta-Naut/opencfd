@@ -543,7 +543,16 @@ export function stripDecomposition(
     });
   }
   if (!strips.length) return null;
-  const flat = (s: Strip) => Math.abs(s.b0 - s.b1) < 1e-6 && Math.abs(s.t0 - s.t1) < 1e-6;
+  // A hand-closed axis (or wall) is almost never exactly flat - clicking to close
+  // the loop a fraction of a pixel off gives it a barely-there slope (fractions of
+  // a millimetre over metres of length). A fixed 1e-6 tolerance is tighter than
+  // that on any real-world-scale sketch, so the strip right after a farfield step
+  // reads as a "ramp" instead of a flat strip, the step-split below never runs,
+  // and the block that should sit flush against the nozzle exit instead has its
+  // near edge cut short of the far edge - a sliver gap at the exit/farfield seam.
+  // Scale the tolerance to the domain's own vertical extent instead.
+  const flatTol = Math.max(1e-6, (Math.max(...R.map((p) => p.y)) - Math.min(...R.map((p) => p.y))) * 1e-4);
+  const flat = (s: Strip) => Math.abs(s.b0 - s.b1) < flatTol && Math.abs(s.t0 - s.t1) < flatTol;
 
   // build sub-block corner quads, splitting flat strips at neighbour step levels
   const quads: [Point2D, Point2D, Point2D, Point2D][] = [];
@@ -551,7 +560,11 @@ export function stripDecomposition(
     if (flat(s)) {
       const lo = s.b0, hi = s.t0;
       const levels = new Set<number>();
-      const add = (y: number) => { if (y > lo + 1e-6 && y < hi - 1e-6) levels.add(RKEY(y)); };
+      // Use the same relative tolerance as `flat()` above - a step level that's
+      // really just the axis's (or wall's) own hand-drawn noise sitting right on
+      // lo/hi would otherwise slip through this tighter absolute check and add a
+      // near-zero-height sliver block right at the strip's edge.
+      const add = (y: number) => { if (y > lo + flatTol && y < hi - flatTol) levels.add(RKEY(y)); };
       const L = strips[i - 1], Rn = strips[i + 1];
       // Split at the neighbour's floor/ceiling level AT THE SHARED EDGE, whether
       // the neighbour is flat or a ramp. A CD nozzle exit lip is a ramp strip

@@ -5180,59 +5180,100 @@ boundary
 
 
 
-      {/* ════════════════════ BOTTOM STATUS BAR ═════════════════════════════════ */}
-      <div className={`${displayOnly && !showMesh ? 'hidden' : 'shrink-0 h-6'} bg-[#F5F6F8] border-t border-[#E1E4E8] px-3 flex items-center justify-between text-[11px] font-mono text-[#69717D]`}>
-        {/* Bottom Left: Live Cursor Position & Google Maps Style Scale Indicator */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2.5">
-            <span>X: <strong className="text-[#171A1F]">{hud.x}</strong></span>
-            <span>Y: <strong className="text-[#171A1F]">{hud.y}</strong></span>
-          </div>
-
-          <div className="h-3 w-px bg-[#D0D4DC]" />
-
-          {/* Google Maps Style Scale Indicator */}
-          <div className="flex items-center gap-1.5 select-none" title={`Scale: ${scaleInfo.label}`}>
-            <span className="text-[10px] font-bold text-[#171A1F] leading-none">{scaleInfo.label}</span>
-            <div className="flex items-end h-2">
-              <div
-                className="h-1.5 border-l-2 border-r-2 border-b border-[#171A1F] bg-black/5"
-                style={{ width: `${scaleInfo.barWidthPx}px` }}
-              />
+      {/* ════════════════════ FLOATING STATUS READOUTS ═════════════════════════════════ */}
+      {!(displayOnly && !showMesh) && (
+        <>
+          {/* Bottom Left: Live Cursor Position & Google Maps Style Scale Indicator */}
+          <div
+            className="absolute left-3 z-20 flex items-center gap-3 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
+          >
+            <div className="flex items-center gap-2.5">
+              <span>X: <strong className="text-[#171A1F]">{hud.x}</strong></span>
+              <span>Y: <strong className="text-[#171A1F]">{hud.y}</strong></span>
             </div>
+
+            <div className="h-3 w-px bg-[#D0D4DC]" />
+
+            {/* Google Maps Style Scale Indicator */}
+            <div className="flex items-center gap-1.5" title={`Scale: ${scaleInfo.label}`}>
+              <span className="text-[10px] font-bold text-[#171A1F] leading-none">{scaleInfo.label}</span>
+              <div className="flex items-end h-2">
+                <div
+                  className="h-1.5 border-l-2 border-r-2 border-b border-[#171A1F] bg-black/5"
+                  style={{ width: `${scaleInfo.barWidthPx}px` }}
+                />
+              </div>
+            </div>
+
+            {tool !== 'select' && snap.type !== 'grid' && (
+              <>
+                <div className="h-3 w-px bg-[#D0D4DC]" />
+                <span className="text-[10px] text-[#16A34A] uppercase font-bold">[{snap.type}]</span>
+              </>
+            )}
           </div>
 
-          {tool !== 'select' && snap.type !== 'grid' && (
-            <>
-              <div className="h-3 w-px bg-[#D0D4DC]" />
-              <span className="text-[10px] text-[#16A34A] uppercase font-bold">[{snap.type}]</span>
-            </>
-          )}
-        </div>
+          {/* Bottom Right: mesh summary in Mesh view; otherwise the live length/angle/
+              diameter of the shape being drawn, or the position of a hovered vertex. */}
+          {(() => {
+            if (showMesh && meshData?.num_elements) {
+              const elements = Array.isArray(meshData.elements) ? meshData.elements : [];
+              const triangles = elements.filter((element: number[]) => element.length === 3).length;
+              const quads = elements.filter((element: number[]) => element.length === 4).length;
+              const minAngle = meshData.quality?.min_angle_degrees;
+              const skew = meshData.quality?.max_skewness;
+              return (
+                <div
+                  className="absolute right-3 z-20 flex items-center gap-3 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
+                >
+                  <span><strong className="text-[#171A1F]">{meshData.num_nodes}</strong> nodes</span>
+                  <span><strong className="text-[#171A1F]">{meshData.num_elements}</strong> cells</span>
+                  <span><strong className="text-[#171A1F]">{triangles}</strong> tri · <strong className="text-[#171A1F]">{quads}</strong> quad</span>
+                  {minAngle !== undefined && <span className={minAngle < 15 ? 'text-amber-600' : 'text-[#16A34A]'}><strong>{minAngle.toFixed(0)}°</strong> min</span>}
+                  {skew !== undefined && <span>skew <strong className="text-[#171A1F]">{skew.toFixed(2)}</strong></span>}
+                </div>
+              );
+            }
 
-        {/* Bottom Right: Mesh summary in Mesh view, zoom otherwise */}
-        <div className="flex items-center gap-3 shrink-0">
-          {showMesh && meshData?.num_elements ? (() => {
-            const elements = Array.isArray(meshData.elements) ? meshData.elements : [];
-            const triangles = elements.filter((element: number[]) => element.length === 3).length;
-            const quads = elements.filter((element: number[]) => element.length === 4).length;
-            const minAngle = meshData.quality?.min_angle_degrees;
-            const skew = meshData.quality?.max_skewness;
-            return (
-              <>
-                <span><strong className="text-[#171A1F]">{meshData.num_nodes}</strong> nodes</span>
-                <span><strong className="text-[#171A1F]">{meshData.num_elements}</strong> cells</span>
-                <span><strong className="text-[#171A1F]">{triangles}</strong> tri · <strong className="text-[#171A1F]">{quads}</strong> quad</span>
-                {minAngle !== undefined && <span className={minAngle < 15 ? 'text-amber-600' : 'text-[#16A34A]'}><strong>{minAngle.toFixed(0)}°</strong> min</span>}
-                {skew !== undefined && <span>skew <strong className="text-[#171A1F]">{skew.toFixed(2)}</strong></span>}
-              </>
-            );
-          })() : null}
-          <span className="text-[10px] text-[#69717D]">
-            Zoom: <strong className="text-[#171A1F]">{(zoom / INITIAL_ZOOM * 100).toFixed(0)}%</strong>
-          </span>
-        </div>
-      </div>
+            if (isDrawing && tempPts.length > 0) {
+              const isCircular = tool === 'circle_center_radius' || tool === 'ellipse_center';
+              return (
+                <div
+                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
+                >
+                  {isCircular ? (
+                    <span>⌀: <strong className="text-[#171A1F]">{(parseFloat(hud.length) * 2).toFixed(3)}</strong> m</span>
+                  ) : (
+                    <>
+                      <span>L: <strong className="text-[#171A1F]">{hud.length}</strong> m</span>
+                      <div className="h-3 w-px bg-[#D0D4DC]" />
+                      <span>∠: <strong className="text-[#171A1F]">{hud.angle}</strong>°</span>
+                    </>
+                  )}
+                </div>
+              );
+            }
+
+            if (hoveredVertex) {
+              return (
+                <div
+                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
+                >
+                  <span className="text-[10px] uppercase font-bold text-[#69717D]">Vertex</span>
+                  <span>X: <strong className="text-[#171A1F]">{hoveredVertex.x.toFixed(4)}</strong></span>
+                  <span>Y: <strong className="text-[#171A1F]">{hoveredVertex.y.toFixed(4)}</strong></span>
+                </div>
+              );
+            }
+
+            return null;
+          })()}
+        </>
+      )}
 
       {meshToastVisible && (
         <div className="absolute right-4 bottom-10 z-40 w-72 rounded-lg border border-[#D9E2F2] bg-white/95 backdrop-blur px-3.5 py-3 pointer-events-none">
