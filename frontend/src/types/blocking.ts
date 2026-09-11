@@ -572,11 +572,22 @@ export function stripDecomposition(
       // far-field strip stays one block and the nozzle exit plane is lost.
       if (L) { add(L.b1); add(L.t1); }
       if (Rn) { add(Rn.b0); add(Rn.t0); }
-      const ys = [lo, ...[...levels].sort((a, b) => a - b), hi];
-      for (let k = 0; k + 1 < ys.length; k++) {
+      const sorted = [...levels].sort((a, b) => a - b);
+      // "Flat" only means b0~=b1 and t0~=t1 within flatTol, not that they're
+      // identical - a hand-drawn axis nearly always has a hairline residual
+      // slope. Using `lo`/`hi` (the LEFT-side values) for both sides of every
+      // sub-quad snaps the right edge to a value the neighbouring block never
+      // computed for its own left edge, so the two land in different RKEY
+      // buckets and never merge into one shared vertex - a duplicated seam the
+      // renderer then draws as a phantom boundary line. Keep each side's own
+      // true value at the strip's actual edges; only the interior split levels
+      // (already shared with the neighbour that produced them) are common.
+      const ysLeft = [lo, ...sorted, hi];
+      const ysRight = [s.b1, ...sorted, s.t1];
+      for (let k = 0; k + 1 < ysLeft.length; k++) {
         quads.push([
-          { x: s.x0, y: ys[k] }, { x: s.x1, y: ys[k] },
-          { x: s.x1, y: ys[k + 1] }, { x: s.x0, y: ys[k + 1] },
+          { x: s.x0, y: ysLeft[k] }, { x: s.x1, y: ysRight[k] },
+          { x: s.x1, y: ysRight[k + 1] }, { x: s.x0, y: ysLeft[k + 1] },
         ]);
       }
     } else {
