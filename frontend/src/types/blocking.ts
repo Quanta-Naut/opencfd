@@ -445,11 +445,36 @@ export function stripDecomposition(
   if (m < 4) return null;
 
   // leftmost / rightmost vertices
-  let iL = 0, iR = 0;
-  for (let i = 1; i < m; i++) {
-    if (R[i].x < R[iL].x - 1e-9 || (Math.abs(R[i].x - R[iL].x) < 1e-9 && R[i].y < R[iL].y)) iL = i;
-    if (R[i].x > R[iR].x + 1e-9 || (Math.abs(R[i].x - R[iR].x) < 1e-9 && R[i].y > R[iR].y)) iR = i;
-  }
+  const findExtrema = (): [number, number] => {
+    let bl = 0, br = 0;
+    for (let i = 1; i < m; i++) {
+      if (R[i].x < R[bl].x - 1e-9 || (Math.abs(R[i].x - R[bl].x) < 1e-9 && R[i].y < R[bl].y)) bl = i;
+      if (R[i].x > R[br].x + 1e-9 || (Math.abs(R[i].x - R[br].x) < 1e-9 && R[i].y > R[br].y)) br = i;
+    }
+    return [bl, br];
+  };
+  let [iL, iR] = findExtrema();
+
+  // A hand-drawn inlet/outlet cap is meant to be vertical, but a mouse-drawn edge is
+  // rarely pixel-perfect - a few degrees off plumb gives its two ends slightly different
+  // x. The exact-tie check above then treats only the more extreme end as the domain
+  // corner, so the OTHER end of that same cap edge gets walked into the wrong chain
+  // (axis/floor or wall/ceiling) as an ordinary interior point, and that chain jumps
+  // straight from the cap's near end to its far end - a diagonal into the axis (or from
+  // the wall down to the axis) right at the inlet/outlet. Snap a cap edge that is close
+  // to vertical (small dx relative to its dy) onto its extremal neighbour's x first, so
+  // it ties cleanly like a truly vertical cap and splits through the tie-break below.
+  const snapNearVerticalCap = (idx: number) => {
+    for (const nb of [(idx + 1) % m, (idx - 1 + m) % m]) {
+      const a = R[idx], b = R[nb];
+      const dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+      if (dx > 1e-9 && dx < dy * 0.1) b.x = a.x;
+    }
+  };
+  snapNearVerticalCap(iL);
+  snapNearVerticalCap(iR);
+  [iL, iR] = findExtrema();
+
   if (Math.abs(R[iL].x - R[iR].x) < 1e-6) return null;
 
   const walk = (from: number, to: number) => {
