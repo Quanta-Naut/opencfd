@@ -389,6 +389,20 @@ class OpenFoamAdapter(SolverAdapter):
             proc.kill()
             raise
 
+        # Emit the final written time snapshot so the live viewer and run
+        # persistence reflect the completed state even if the periodic ~3s
+        # preview cadence had not just fired.
+        if preview_mesh:
+            try:
+                fp = await loop.run_in_executor(
+                    None, read_field_preview, str(case), preview_mesh, None
+                )
+                if fp and fp.get("time") != last_preview_time:
+                    last_preview_time = fp["time"]
+                    yield {"type": "field", "data": fp}
+            except Exception:
+                pass
+
         # Always try to make the latest written time usable for the Results tab -
         # even a diverged run leaves partial fields the user will want to inspect.
         try:

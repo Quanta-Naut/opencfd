@@ -45,8 +45,9 @@ void main() {
 
 const EDGE_FRAG = `
 precision mediump float;
+uniform vec4 u_color;
 void main() {
-  gl_FragColor = vec4(0.07, 0.09, 0.13, 0.85);
+  gl_FragColor = u_color;
 }
 `;
 
@@ -109,12 +110,12 @@ function triangulateFan(el: number[]): number[] {
 }
 
 function boundaryEdges(elems: number[][], nNodes: number): Uint32Array {
-  const map = new Map<string, {a:number;b:number;n:number}>();
+  const map = new Map<bigint, {a:number;b:number;n:number}>();
   for (const el of elems) {
     for (let i = 0; i < el.length; i++) {
       const a = el[i], b = el[(i+1)%el.length];
       if (a >= nNodes || b >= nNodes) continue;
-      const k = a < b ? `${a}:${b}` : `${b}:${a}`;
+      const k = a < b ? (BigInt(a) << 32n) | BigInt(b) : (BigInt(b) << 32n) | BigInt(a);
       const e = map.get(k); if (e) e.n++; else map.set(k, {a,b,n:1});
     }
   }
@@ -123,13 +124,32 @@ function boundaryEdges(elems: number[][], nNodes: number): Uint32Array {
   return new Uint32Array(r);
 }
 
+function allMeshEdges(elems: number[][], nNodes: number): Uint32Array {
+  const set = new Set<bigint>();
+  const r: number[] = [];
+  for (let e = 0; e < elems.length; e++) {
+    const el = elems[e];
+    const len = el.length;
+    for (let i = 0; i < len; i++) {
+      const a = el[i], b = el[(i + 1) % len];
+      if (a >= nNodes || b >= nNodes) continue;
+      const k = a < b ? (BigInt(a) << 32n) | BigInt(b) : (BigInt(b) << 32n) | BigInt(a);
+      if (!set.has(k)) {
+        set.add(k);
+        r.push(a, b);
+      }
+    }
+  }
+  return new Uint32Array(r);
+}
+
 interface GPU {
   gl: WebGLRenderingContext;
   prog: WebGLProgram; edgeProg: WebGLProgram;
   posBuf: WebGLBuffer; valBuf: WebGLBuffer;
-  idxBuf: WebGLBuffer; edgeIdxBuf: WebGLBuffer;
+  idxBuf: WebGLBuffer; edgeIdxBuf: WebGLBuffer; wireIdxBuf: WebGLBuffer;
   cmTex: WebGLTexture;
-  triCount: number; edgeCount: number;
+  triCount: number; edgeCount: number; wireCount: number;
   curColormap: string;
   norm: Float32Array; nNodes: number;
 }
@@ -138,6 +158,7 @@ export interface WebGLFieldRenderOpts {
   vals: number[]; lo: number; hi: number; colormap: string;
   pan: {x:number;y:number}; zoom: number;
   canvasWidth: number; canvasHeight: number; visible: boolean;
+  showMeshWireframe?: boolean;
 }
 
 export function useWebGLField() {
@@ -150,7 +171,7 @@ export function useWebGLField() {
     try {
       const {gl} = g;
       gl.deleteBuffer(g.posBuf); gl.deleteBuffer(g.valBuf);
-      gl.deleteBuffer(g.idxBuf); gl.deleteBuffer(g.edgeIdxBuf);
+      gl.deleteBuffer(g.idxBuf); gl.deleteBuffer(g.edgeIdxBuf); gl.deleteBuffer(g.wireIdxBuf);
       gl.deleteTexture(g.cmTex);
       gl.deleteProgram(g.prog); gl.deleteProgram(g.edgeProg);
     } catch {}
@@ -160,7 +181,9 @@ export function useWebGLField() {
   const updateGeometry = useCallback((nodes: [number,number][], elems: number[][]): boolean => {
     const canvas = canvasRef.current;
     if (!canvas || nodes.length < 3 || !elems.length) return false;
-    const key = `${nodes.length}:${elems.length}`;
+    const n0 = nodes[0];
+    const nLast = nodes[nodes.length - 1];
+    const key = `${nodes.length}:${elems.length}:${n0 ? n0[0] + ',' + n0[1] : ''}:${nLast ? nLast[0] + ',' + nLast[1] : ''}`;
     if (key === meshKeyRef.current && gpuRef.current) return true;
     meshKeyRef.current = key;
     destroy();
@@ -199,11 +222,16 @@ export function useWebGLField() {
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, edgeIdxBuf);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, edgeData, gl.STATIC_DRAW);
 
+      const wireData = allMeshEdges(elems, nodes.length);
+      const wireIdxBuf = gl.createBuffer()!;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wireIdxBuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, wireData, gl.STATIC_DRAW);
+
       const cmTex = buildCmTex(gl, 'coolwarm');
 
       gpuRef.current = {
-        gl, prog, edgeProg, posBuf, valBuf, idxBuf, edgeIdxBuf, cmTex,
-        triCount: idxData.length, edgeCount: edgeData.length,
+        gl, prog, edgeProg, posBuf, valBuf, idxBuf, edgeIdxBuf, wireIdxBuf, cmTex,
+        triCount: idxData.length, edgeCount: edgeData.length, wireCount: wireData.length,
         curColormap: 'coolwarm', norm, nNodes: nodes.length,
       };
       return true;
@@ -275,6 +303,19 @@ export function useWebGLField() {
     gl.uniform1i(gl.getUniformLocation(prog, 'u_colormap'), 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.idxBuf);
     gl.drawElements(gl.TRIANGLES, g.triCount, gl.UNSIGNED_INT, 0);
+
+    // Draw wireframe overlay if enabled
+    if (opts.showMeshWireframe && g.wireCount > 0) {
+      gl.useProgram(edgeProg);
+      const aPosEdge = gl.getAttribLocation(edgeProg, 'a_pos');
+      gl.bindBuffer(gl.ARRAY_BUFFER, g.posBuf);
+      gl.enableVertexAttribArray(aPosEdge);
+      gl.vertexAttribPointer(aPosEdge, 2, gl.FLOAT, false, 0, 0);
+      gl.uniformMatrix3fv(gl.getUniformLocation(edgeProg, 'u_transform'), false, mat);
+      gl.uniform4f(gl.getUniformLocation(edgeProg, 'u_color'), 1.0, 1.0, 1.0, 0.35);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, g.wireIdxBuf);
+      gl.drawElements(gl.LINES, g.wireCount, gl.UNSIGNED_INT, 0);
+    }
   }, []);
 
   useEffect(() => () => { destroy(); }, [destroy]);

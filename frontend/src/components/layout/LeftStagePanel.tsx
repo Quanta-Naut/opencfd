@@ -27,6 +27,7 @@ import {
   Wind,
   Thermometer,
   Lock,
+  Plus,
 } from 'lucide-react';
 import {
   CadWorkflowStep,
@@ -38,7 +39,7 @@ import {
   BOUNDARY_COLORS,
   GeometryBBox,
 } from '../../types/cadWorkflow';
-import { Blocking, EdgeLaw, propagateNodeCounts, splitBlock, deleteBlock, applyTargetCellSize, currentCellSize, edgeLength } from '../../types/blocking';
+import { Blocking, BlockEdge, EdgeLaw, propagateNodeCounts, splitBlock, deleteBlock, applyTargetCellSize, currentCellSize, edgeLength } from '../../types/blocking';
 import { computeFallbackYPlus } from '../../utils/api';
 
 interface LeftStagePanelProps {
@@ -132,6 +133,7 @@ interface LeftStagePanelProps {
   width?: number;
   onWidthChange?: (w: number) => void;
   projectId?: string;
+  onCreatePlot?: () => void;
 }
 
 /**
@@ -544,21 +546,61 @@ const StructuredMeshPanel: React.FC<{
       const wallEdges = blocking.edges.filter((e) => e.patch === 'wall');
       const wallVids = new Set<string>();
       for (const e of wallEdges) { wallVids.add(e.v0); wallVids.add(e.v1); }
-      const dirOf = (e: { v0: string; v1: string }) => {
+      const edgeDirLeaving = (e: BlockEdge, vid: string): { x: number; y: number } | null => {
+        const a = vpt(e.v0), b = vpt(e.v1);
+        if (!a || !b) return null;
+        const pts = [a, ...(e.path ?? []), b];
+        if (e.v0 === vid) {
+          for (let i = 1; i < pts.length; i++) {
+            const d = Math.hypot(pts[i].x - pts[0].x, pts[i].y - pts[0].y);
+            if (d > 1e-6) return { x: (pts[i].x - pts[0].x) / d, y: (pts[i].y - pts[0].y) / d };
+          }
+        } else if (e.v1 === vid) {
+          const last = pts.length - 1;
+          for (let i = last - 1; i >= 0; i--) {
+            const d = Math.hypot(pts[last].x - pts[i].x, pts[last].y - pts[i].y);
+            if (d > 1e-6) return { x: (pts[last].x - pts[i].x) / d, y: (pts[last].y - pts[i].y) / d };
+          }
+        }
+        return null;
+      };
+      const chordDirOf = (e: BlockEdge): { x: number; y: number } | null => {
         const a = vpt(e.v0), b = vpt(e.v1);
         if (!a || !b) return null;
         const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
         return { x: (b.x - a.x) / d, y: (b.y - a.y) / d };
       };
-      const perpToWallAt = (edge: { v0: string; v1: string }, wallVid: string): boolean => {
-        const ed = dirOf(edge);
+      const perpToWallAt = (edge: BlockEdge, wallVid: string): boolean => {
+        // 1. Topological check: In a quad block containing a wall edge meeting wallVid,
+        // the edges adjacent to the wall edge in the 4-edge cycle are wall-normal.
+        for (const blk of blocking.blocks) {
+          const idx = blk.edges.indexOf(edge.id);
+          if (idx === -1) continue;
+          const adj1 = blocking.edges.find((x) => x.id === blk.edges[(idx + 1) % 4]);
+          const adj2 = blocking.edges.find((x) => x.id === blk.edges[(idx + 3) % 4]);
+          if (
+            (adj1?.patch === 'wall' && (adj1.v0 === wallVid || adj1.v1 === wallVid)) ||
+            (adj2?.patch === 'wall' && (adj2.v0 === wallVid || adj2.v1 === wallVid))
+          ) {
+            return true;
+          }
+        }
+
+        // 2. Geometric check: Roughly perpendicular to the local tangent or chord of the wall edge.
+        const ed = edgeDirLeaving(edge, wallVid);
         if (!ed) return false;
         for (const w of wallEdges) {
           if (w.v0 !== wallVid && w.v1 !== wallVid) continue;
-          const wd = dirOf(w);
-          if (!wd) continue;
-          const dot = Math.abs(ed.x * wd.x + ed.y * wd.y);   // |cos angle|
-          if (dot < Math.cos(Math.PI / 4)) return true;      // within 45 deg of perpendicular
+          const wt = edgeDirLeaving(w, wallVid);
+          if (wt) {
+            const dot = Math.abs(ed.x * wt.x + ed.y * wt.y);
+            if (dot <= Math.cos(Math.PI / 4) + 1e-4) return true;
+          }
+          const wd = chordDirOf(w);
+          if (wd) {
+            const dot = Math.abs(ed.x * wd.x + ed.y * wd.y);
+            if (dot <= Math.cos(Math.PI / 4) + 1e-4) return true;
+          }
         }
         return false;
       };
@@ -823,6 +865,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   width = 280,
   onWidthChange,
   projectId,
+  onCreatePlot,
 }) => {
   // Drag the right edge to resize; the width is shared across every stage.
   const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -933,7 +976,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   return (
     <aside
       style={{ width }}
-      className={`relative h-full bg-white border-r border-[#E1E4E8] flex flex-col select-none shrink-0 ${activeStage === 'mesh' ? 'overflow-hidden' : 'overflow-y-auto'}`}
+      className={`relative h-full bg-white border-r border-[#E1E4E8] flex flex-col select-none shrink-0 ${activeStage === 'mesh' || activeStage === 'results' ? 'overflow-hidden' : 'overflow-y-auto'}`}
     >
       <div
         onMouseDown={startResize}
@@ -1656,51 +1699,69 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
       )}
 
       {activeStage === 'results' && !stageStatus?.results?.locked && (
-        <div className="p-4 space-y-4 text-xs text-[#171A1F]">
-          <div>
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
-              Scalar Field Variable
-            </span>
-            <select
-              value={state.postprocess.activeField}
-              onChange={(e) => updatePostProcess({ activeField: e.target.value as any })}
-              className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-md font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
-            >
-              <option value="U_mag">Velocity Magnitude (|U|)</option>
-              <option value="p">Static Pressure (p)</option>
-              <option value="k">Turbulent Kinetic Energy (k)</option>
-              <option value="omega">Specific Dissipation (ω)</option>
-              <option value="vorticity">Vorticity (∇×U)</option>
-            </select>
-          </div>
+        <div className="flex-1 min-h-0 flex flex-col justify-between">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 text-xs text-[#171A1F]">
+            <div>
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+                Scalar Field Variable
+              </span>
+              <select
+                value={state.postprocess.activeField}
+                onChange={(e) => updatePostProcess({ activeField: e.target.value as any })}
+                className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-md font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+              >
+                <option value="U_mag">Velocity Magnitude (|U|)</option>
+                <option value="p">Static Pressure (p)</option>
+                <option value="k">Turbulent Kinetic Energy (k)</option>
+                <option value="omega">Specific Dissipation (ω)</option>
+                <option value="vorticity">Vorticity (∇×U)</option>
+              </select>
+            </div>
 
-          <div className="border-t border-[#E1E4E8] pt-3 space-y-1.5">
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1">
-              Scientific Colormap
-            </span>
-            <div className="grid grid-cols-3 gap-1">
-              {(['viridis', 'coolwarm', 'turbo'] as const).map((map) => (
-                <button
-                  key={map}
-                  onClick={() => updatePostProcess({ colormap: map })}
-                  className={`py-1 rounded capitalize text-xs font-medium border transition-colors ${
-                    state.postprocess.colormap === map
-                      ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                      : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
-                  }`}
-                >
-                  {map}
-                </button>
-              ))}
+            <div className="border-t border-[#E1E4E8] pt-3 space-y-1.5">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1">
+                Scientific Colormap
+              </span>
+              <div className="grid grid-cols-3 gap-1">
+                {(['viridis', 'coolwarm', 'turbo'] as const).map((map) => (
+                  <button
+                    key={map}
+                    onClick={() => updatePostProcess({ colormap: map })}
+                    className={`py-1 rounded capitalize text-xs font-medium border transition-colors ${
+                      state.postprocess.colormap === map
+                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                    }`}
+                  >
+                    {map}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Line Plot Probe */}
+            <div className="border-t border-[#E1E4E8] pt-3 space-y-2">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+                Line Plot Probe
+              </span>
+              <button
+                type="button"
+                onClick={onCreatePlot}
+                className="w-full py-2 px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Create Plot</span>
+              </button>
+              <p className="text-[10px] text-[#69717D] leading-relaxed">
+                Sample flow variables along a 2D line probe and visualize XY convergence or field profiles.
+              </p>
             </div>
           </div>
 
-          {/* ─── ParaView Integration ─── */}
-          <div className="border-t border-[#E1E4E8] pt-3 space-y-2">
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
-              Advanced Visualization
-            </span>
+          {/* Pinned ParaView Footer */}
+          <div className="p-3 border-t border-[#E1E4E8] bg-[#FAFBFC] shrink-0">
             <button
+              type="button"
               onClick={async () => {
                 const { launchParaview, checkParaviewStatus } = await import('../../utils/api');
                 const status = await checkParaviewStatus();
@@ -1713,13 +1774,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   alert(`Failed to launch ParaView: ${res.detail}`);
                 }
               }}
-              className="w-full py-2 px-3 rounded-lg border border-[#2563EB] bg-blue-50 text-[#1D4ED8] hover:bg-blue-100 font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors"
+              className="w-full py-2 px-3 rounded-lg border border-[#2563EB] bg-blue-50 text-[#1D4ED8] hover:bg-blue-100 font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <span>Open in ParaView</span>
             </button>
-            <p className="text-[10px] text-[#69717D] leading-relaxed">
-              Launch full 3D post-processing, streamline slices, and vector arrows in ParaView.
-            </p>
           </div>
         </div>
       )}

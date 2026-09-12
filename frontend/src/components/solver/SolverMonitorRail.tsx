@@ -46,7 +46,7 @@ function useRafState<T>(initial: T): [T, (v: T) => void] {
   return [value, set];
 }
 
-export const SolverMonitorRail: React.FC<SolverMonitorRailProps> = ({
+const SolverMonitorRailComponent: React.FC<SolverMonitorRailProps> = ({
   residuals,
   executionStatus,
   open,
@@ -250,4 +250,5 @@ export const SolverMonitorRail: React.FC<SolverMonitorRailProps> = ({
   );
 };
 
+export const SolverMonitorRail = React.memo(SolverMonitorRailComponent);
 export default SolverMonitorRail;

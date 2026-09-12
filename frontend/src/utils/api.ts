@@ -542,3 +542,128 @@ export async function launchParaview(projectId?: string): Promise<{ success: boo
     return { success: false, detail: err?.message || 'Failed to connect to backend' };
   }
 }
+
+export interface SolverRunFieldSnapshot {
+  time?: string | number;
+  fields: Record<string, number[]>;
+  ranges: Record<string, [number, number]>;
+  mesh: {
+    nodes: number[][];
+    elements: number[][];
+    boundaries?: Record<string, number[]>;
+  };
+  streamlines?: number[][][];
+  source?: string;
+}
+
+export async function fetchRunField(
+  projectId: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<{ data: SolverRunFieldSnapshot | null; detail?: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/solver/runs/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}/field`,
+      {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+      },
+    );
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return { data: null, detail: j.detail || `HTTP ${res.status}` };
+    if (j.success === false) return { data: null, detail: j.detail || 'no stored field for this run' };
+    const payload = j.data ?? (j.fields ? j : null);
+    return payload ? { data: payload } : { data: null, detail: j.detail || 'no field data' };
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return { data: null, detail: '__aborted__' };
+    return { data: null, detail: e?.message || 'request failed' };
+  }
+}
+
+export async function fetchRunStream(
+  projectId: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<{ data: any[] | null; detail?: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/solver/runs/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}/stream`,
+      {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+      },
+    );
+    const j = await res.json().catch(() => null);
+    if (!res.ok) return { data: null, detail: j?.detail || `HTTP ${res.status}` };
+    if (j && j.success === false) return { data: null, detail: j.detail || 'stream not found' };
+    const items = Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : null);
+    return items ? { data: items } : { data: null, detail: j?.detail || 'no stream data' };
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return { data: null, detail: '__aborted__' };
+    return { data: null, detail: e?.message || 'request failed' };
+  }
+}
+
+export async function deleteSolverRun(
+  projectId: string,
+  runId: string,
+): Promise<{ success: boolean; detail?: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/solver/runs/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}`,
+      {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return { success: false, detail: j.detail || `HTTP ${res.status}` };
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, detail: e?.message || 'request failed' };
+  }
+}
+
+export interface SampleLineResponseData {
+  distance: number[];
+  fields: {
+    U_mag: number[];
+    p: number[];
+    k: number[];
+    omega: number[];
+    vorticity: number[];
+    [key: string]: number[];
+  };
+}
+
+export async function sampleSolverRunLine(
+  projectId: string,
+  runId: string,
+  p1: [number, number],
+  p2: [number, number],
+  samples: number = 100,
+  signal?: AbortSignal,
+): Promise<{ data: SampleLineResponseData | null; detail?: string }> {
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/solver/runs/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}/sample-line`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p1, p2, samples }),
+        signal,
+      },
+    );
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return { data: null, detail: j.detail || `HTTP ${res.status}` };
+    if (j.success === false) return { data: null, detail: j.detail || 'Failed to sample line' };
+    return { data: j.data ?? null };
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return { data: null, detail: '__aborted__' };
+    return { data: null, detail: e?.message || 'request failed' };
+  }
+}
+
+

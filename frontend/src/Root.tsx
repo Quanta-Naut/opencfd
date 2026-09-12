@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useState, useEffect, type ReactNode } from 'react';
 import App from './App';
 import { HomeScreen } from './components/home/HomeScreen';
 import { SetupGate } from './components/setup/SetupGate';
@@ -30,6 +30,13 @@ export function Root() {
       setOpening(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const q = new URLSearchParams(window.location.search).get('project');
+      if (q && !open) handleOpen(q);
+    }
+  }, [handleOpen, open]);
 
   const route = typeof window !== 'undefined'
     ? (window.location.pathname.replace(/\/+$/, '') || window.location.hash.replace(/^#\/?/, ''))

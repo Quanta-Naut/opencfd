@@ -232,6 +232,33 @@ export interface SolverRunRecord {
   iterationsRun?: number;
 }
 
+export type FlowVariable = 'U_mag' | 'p' | 'k' | 'omega' | 'vorticity';
+
+export interface PlotLine {
+  p1: [number, number];
+  p2: [number, number];
+  samples: number;
+}
+
+export interface PlotSampleData {
+  distance: number[];
+  values: number[];
+  fields?: Record<string, number[]>;
+}
+
+export interface PlotDefinition {
+  id: string;
+  name: string;              // user-editable label, default like "Plot 1", "Plot 2"
+  runId: string | null;      // which solver run this was sampled from
+  variable: FlowVariable;
+  line: PlotLine;
+  colormap: 'coolwarm' | 'viridis' | 'turbo' | 'jet' | 'rainbow' | string;
+  rangeMin: number | null;   // null = auto/full range
+  rangeMax: number | null;
+  data: PlotSampleData | null;  // cached sampled result
+  createdAt: number;
+}
+
 export interface CFDProjectState {
   geometry: GeometryConfig;
   physics: PhysicsConfig;
@@ -245,5 +272,7 @@ export interface CFDProjectState {
   executionStatus: 'idle' | 'meshing' | 'running' | 'completed' | 'error';
   residuals: ResidualDataPoint[];
   solverRuns: SolverRunRecord[];
+  plots: PlotDefinition[];
   terminalLogs: string[];
 }
+

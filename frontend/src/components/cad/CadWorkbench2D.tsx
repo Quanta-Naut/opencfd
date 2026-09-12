@@ -52,6 +52,7 @@ import {
   FileCode,
   Check,
   HelpCircle,
+  Loader2,
 } from 'lucide-react';
 import { requestOffset, requestFillet, requestMeshFromSketch, uploadAndParseAirfoil, uploadAndParseDxf, fetchAndParseAirfoilFromUrl } from '../../utils/api';
 import { toast } from '../ui/Toast';
@@ -872,9 +873,19 @@ interface CadWorkbenchProps {
   onSelectTransientFrame?: (index: number) => void;
   onToggleTransientPlay?: () => void;
   onSelectTransientSpeed?: (speed: number) => void;
+  historicalStatus?: {
+    runLabel?: string;
+    loading?: boolean;
+    error?: string | null;
+  };
+  onRestoreLive?: () => void;
+  activePlotLine?: { p1: [number, number]; p2: [number, number]; label?: string } | null;
+  isPickingPlotPoints?: boolean;
+  onPickPlotPoint?: (pt: [number, number]) => void;
+  plotPickPreviewP1?: [number, number] | null;
 }
 
-export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
+const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   onApplySketchMesh,
   domainLength,
   domainHeight,
@@ -934,6 +945,12 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   onSelectTransientFrame,
   onToggleTransientPlay,
   onSelectTransientSpeed,
+  historicalStatus,
+  onRestoreLive,
+  activePlotLine = null,
+  isPickingPlotPoints = false,
+  onPickPlotPoint,
+  plotPickPreviewP1 = null,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1022,6 +1039,12 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   // Declared early - the fit / render logic reads it.
   const [canvasMode, setCanvasMode] = useState<'cad' | 'mesh'>('cad');
   const panning = useRef(false);
+  const panRafRef = useRef<number | null>(null);
+  const pendingPanRef = useRef<Point2D | null>(null);
+
+  useEffect(() => () => {
+    if (panRafRef.current) cancelAnimationFrame(panRafRef.current);
+  }, []);
 
   // ── Undo/redo: routed to whichever - CAD entities or the blocking - was last edited.
   //    Refs are declared up by the CAD history stack; the recording effect lives here
@@ -1328,13 +1351,16 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     if (c > 0 && wasEmpty && !meshOnly && showMesh) setCanvasMode('mesh');
   }, [meshData, meshOnly, showMesh]);
 
+  const [showMeshWireframe, setShowMeshWireframe] = useState(false); // toggle mesh overlay in Results
+
   // ── WebGL render: fires on any visual change (pan/zoom/field/colormap) ───────
   useEffect(() => {
     if (!glReady || !glCanvasRef.current) return;
     const canvas = glCanvasRef.current;
     const vals: number[] | undefined = showField && fieldData?.fields?.[activeField]
       ? fieldData.fields[activeField] : undefined;
-    const haveField = Array.isArray(vals) && vals.length > 0;
+    const haveField = Array.isArray(vals) && vals.length > 0 &&
+      (!meshData?.nodes?.length || vals.length === meshData.nodes.length);
     const r = fieldData?.ranges?.[activeField];
     let lo = 0, hi = 1;
     if (haveField && Array.isArray(r) && r.length === 2 && r[0] !== r[1]) {
@@ -1350,8 +1376,9 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       canvasWidth: canvas.clientWidth || (containerRef.current?.clientWidth ?? 800),
       canvasHeight: canvas.clientHeight || (containerRef.current?.clientHeight ?? 600),
       visible: !!(displayOnly && showMesh && canvasMode === 'mesh' && haveField),
+      showMeshWireframe: !!(displayOnly && showMesh && canvasMode === 'mesh' && haveField && showMeshWireframe),
     });
-  }, [glReady, pan, zoom, showField, fieldData, activeField, colormap, displayOnly, showMesh, canvasMode, glRender, glCanvasRef, viewport.w, viewport.h]);
+  }, [glReady, pan, zoom, showField, fieldData, activeField, colormap, displayOnly, showMesh, canvasMode, glRender, glCanvasRef, viewport.w, viewport.h, meshData?.nodes?.length, showMeshWireframe]);
 
   const handleAuxClick = useCallback((e: React.MouseEvent) => {
     userInteractedRef.current = true;
@@ -1385,16 +1412,20 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
   }, [cadState.entities, canvasMode, fitBoundingBox, meshData, showMesh]);
   const [showConstruction, setShowConstruction] = useState(true);
   const [constructionMode, setConstructionMode] = useState(false); // draw to construction layer
-  const [showMeshWireframe, setShowMeshWireframe] = useState(false); // toggle mesh overlay in Results
   const [showResultsStreamlines, setShowResultsStreamlines] = useState(true); // toggle streamlines overlay in Results
   const [showMeshQuality, setShowMeshQuality] = useState(false); // colour cells by skewness in the Mesh tab
-  const [liveField, setLiveField] = useState<'mesh' | 'U_mag' | 'p' | 'k'>('U_mag'); // solver live preview
+  const [liveField, setLiveField] = useState<'U_mag' | 'p' | 'k' | null>('U_mag'); // solver live preview - null means no field colouring
+  const [liveMeshOn, setLiveMeshOn] = useState(true); // solver live preview - independent mesh wireframe toggle
 
+  const liveContext = meshOnly && !showField && !!livePreview;
   const liveVals =
-    meshOnly && !showField && livePreview && liveField !== 'mesh' && Array.isArray(livePreview.fields[liveField])
-      ? livePreview.fields[liveField]
+    liveContext && liveField !== null && Array.isArray(livePreview!.fields[liveField])
+      ? livePreview!.fields[liveField]
       : null;
   const liveRange = livePreview?.ranges?.[liveField as string] ?? [0, 1];
+  // In the live-preview context, nothing is drawn at all once both the mesh
+  // wireframe and the field colouring are switched off.
+  const liveHasContent = !liveContext || liveMeshOn || liveField !== null;
 
   // Per-cell skewness, computed once per mesh (parallel to meshData.elements).
   const meshSkew = useMemo<number[] | null>(() => {
@@ -1406,6 +1437,34 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
         ? cellSkewness(el.map((i) => [nodes[i][0], nodes[i][1]] as [number, number]))
         : 0,
     );
+  }, [meshData?.nodes, meshData?.elements]);
+
+  // Precompute exterior boundary edges once per mesh change.
+  // Exterior edges (count === 1) represent domain and obstacle boundaries.
+  const meshBoundaryEdges = useMemo<[number, number][]>(() => {
+    const nodes: number[][] | undefined = meshData?.nodes;
+    const elements: number[][] | undefined = meshData?.elements;
+    if (!Array.isArray(nodes) || !Array.isArray(elements) || elements.length === 0) return [];
+    const nNodes = nodes.length;
+    const map = new Map<bigint, { a: number; b: number; n: number }>();
+    for (let e = 0; e < elements.length; e++) {
+      const el = elements[e];
+      const len = el.length;
+      for (let i = 0; i < len; i++) {
+        const a = el[i];
+        const b = el[(i + 1) % len];
+        if (a >= nNodes || b >= nNodes) continue;
+        const k = a < b ? (BigInt(a) << 32n) | BigInt(b) : (BigInt(b) << 32n) | BigInt(a);
+        const entry = map.get(k);
+        if (entry) entry.n++;
+        else map.set(k, { a, b, n: 1 });
+      }
+    }
+    const boundary: [number, number][] = [];
+    for (const { a, b, n } of map.values()) {
+      if (n === 1) boundary.push([a, b]);
+    }
+    return boundary;
   }, [meshData?.nodes, meshData?.elements]);
 
   const meshSkewStats = useMemo(() => {
@@ -2029,7 +2088,8 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     const ws = (wx: number, wy: number) => ({ x: o.x + wx * zoom, y: o.y - wy * zoom });
     const SCALE = zoom;
 
-    const glHaveField = glReady && showField && Array.isArray(fieldData?.fields?.[activeField]);
+    const glHaveField = glReady && showField && Array.isArray(fieldData?.fields?.[activeField]) &&
+      (!meshData?.nodes?.length || fieldData.fields[activeField].length === meshData.nodes.length);
 
     // Background
     if (glHaveField) {
@@ -2094,16 +2154,9 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
 
     // Mesh mode reuses this CAD canvas, including its camera, pan and zoom.
     // Only the backend mesh is drawn; fields and streamlines are intentionally absent.
-    if (displayOnly && showMesh && canvasMode === 'mesh' && meshData?.nodes?.length && meshData?.elements?.length) {
+    if (displayOnly && showMesh && liveHasContent && canvasMode === 'mesh' && meshData?.nodes?.length && meshData?.elements?.length) {
       const nodes = meshData.nodes;
       const elements = meshData.elements;
-      const edgeCounts = new Map<string, [number, number, number]>();
-      const addEdge = (a: number, b: number) => {
-        const key = a < b ? `${a}:${b}` : `${b}:${a}`;
-        const existing = edgeCounts.get(key);
-        if (existing) existing[2] += 1;
-        else edgeCounts.set(key, [a, b, 1]);
-      };
 
       // Field overlay (Results): colour each element by the mean of its nodes'
       // scalar values, normalised to the field range.
@@ -2132,102 +2185,90 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.18)' : '#CBD5E1';
       ctx.lineWidth = haveField ? 0.45 : 0.65;
 
-      elements.forEach((element: number[], elIdx: number) => {
-        if (element.length < 3) return;
-        if (element.some((ni: number) => !nodes[ni])) return; // guard: out-of-range node refs
-        const points = element.map((nodeIndex: number) => ws(nodes[nodeIndex][0], nodes[nodeIndex][1]));
+      // In Results mode with active WebGL field, colour fill and wireframe are
+      // rendered directly by the GPU. Skip the per-element JS loop entirely.
+      if (!glHaveField) {
+        elements.forEach((element: number[], elIdx: number) => {
+          if (element.length < 3) return;
+          if (element.some((ni: number) => !nodes[ni])) return; // guard: out-of-range node refs
+          const points = element.map((nodeIndex: number) => ws(nodes[nodeIndex][0], nodes[nodeIndex][1]));
 
-        if (liveMode) {
-          // flat per-cell fill, mesh wireframe kept on
-          const t = (liveVals![elIdx] - liveLo) / liveSpan;
-          ctx.fillStyle = colormapRGB(t, colormap);
-          ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-          ctx.lineWidth = 0.35;
-          ctx.beginPath();
-          ctx.moveTo(points[0].x, points[0].y);
-          for (let index = 1; index < points.length; index += 1) {
-            ctx.lineTo(points[index].x, points[index].y);
-          }
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        } else if (qualityMode) {
-          const sk = meshSkew![elIdx] ?? 0;
-          ctx.fillStyle = colormapRGB(sk, 'quality');
-          ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-          ctx.lineWidth = 0.4;
-          ctx.beginPath();
-          ctx.moveTo(points[0].x, points[0].y);
-          for (let index = 1; index < points.length; index += 1) {
-            ctx.lineTo(points[index].x, points[index].y);
-          }
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        } else if (glHaveField) {
-          // Smooth continuous field is always rendered underneath by GPU.
-          // When "Mesh" is toggled ON, overlay the crisp white wireframe grid lines directly on top of the smooth flow!
-          if (showMeshWireframe) {
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-            ctx.lineWidth = 0.55;
+          if (liveMode) {
+            // flat per-cell fill; mesh wireframe stroke is independently toggled
+            const t = (liveVals![elIdx] - liveLo) / liveSpan;
+            ctx.fillStyle = colormapRGB(t, colormap);
             ctx.beginPath();
             ctx.moveTo(points[0].x, points[0].y);
             for (let index = 1; index < points.length; index += 1) {
               ctx.lineTo(points[index].x, points[index].y);
             }
             ctx.closePath();
+            ctx.fill();
+            if (liveMeshOn) {
+              ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+              ctx.lineWidth = 0.35;
+              ctx.stroke();
+            }
+          } else if (qualityMode) {
+            const sk = meshSkew![elIdx] ?? 0;
+            ctx.fillStyle = colormapRGB(sk, 'quality');
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            ctx.lineWidth = 0.4;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let index = 1; index < points.length; index += 1) {
+              ctx.lineTo(points[index].x, points[index].y);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          } else if (haveField) {
+            let s = 0;
+            for (const ni of element) s += (vals as number[])[ni] ?? 0;
+            const t = (s / element.length - lo) / (hi - lo);
+            const col = colormapRGB(t, colormap);
+            ctx.fillStyle = col;
+            ctx.strokeStyle = shouldDrawWireframe ? 'rgba(255,255,255,0.30)' : col;
+            ctx.lineWidth = shouldDrawWireframe ? 0.5 : 0.6;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let index = 1; index < points.length; index += 1) {
+              ctx.lineTo(points[index].x, points[index].y);
+            }
+            ctx.closePath();
+            ctx.fill();
+            if (shouldDrawWireframe) ctx.stroke();
+          } else {
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = '#CBD5E1';
+            ctx.lineWidth = 0.65;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let index = 1; index < points.length; index += 1) {
+              ctx.lineTo(points[index].x, points[index].y);
+            }
+            ctx.closePath();
+            ctx.fill();
             ctx.stroke();
           }
-        } else if (haveField) {
-          let s = 0;
-          for (const ni of element) s += (vals as number[])[ni] ?? 0;
-          const t = (s / element.length - lo) / (hi - lo);
-          const col = colormapRGB(t, colormap);
-          ctx.fillStyle = col;
-          ctx.strokeStyle = shouldDrawWireframe ? 'rgba(255,255,255,0.30)' : col;
-          ctx.lineWidth = shouldDrawWireframe ? 0.5 : 0.6;
-          ctx.beginPath();
-          ctx.moveTo(points[0].x, points[0].y);
-          for (let index = 1; index < points.length; index += 1) {
-            ctx.lineTo(points[index].x, points[index].y);
-          }
-          ctx.closePath();
-          ctx.fill();
-          if (shouldDrawWireframe) ctx.stroke();
-        } else {
-          ctx.fillStyle = '#FFFFFF';
-          ctx.strokeStyle = '#CBD5E1';
-          ctx.lineWidth = 0.65;
-          ctx.beginPath();
-          ctx.moveTo(points[0].x, points[0].y);
-          for (let index = 1; index < points.length; index += 1) {
-            ctx.lineTo(points[index].x, points[index].y);
-          }
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        }
-
-        for (let index = 0; index < element.length; index += 1) {
-          addEdge(element[index], element[(index + 1) % element.length]);
-        }
-      });
+        });
+      }
 
       // Exterior edges explicitly show both the airfoil hole and domain edge.
       ctx.strokeStyle = '#111827';
       ctx.lineWidth = 1.7;
-      for (const [a, b, count] of edgeCounts.values()) {
-        if (count !== 1) continue;
+      ctx.beginPath();
+      for (let i = 0; i < meshBoundaryEdges.length; i++) {
+        const [a, b] = meshBoundaryEdges[i];
         if (!nodes[a] || !nodes[b]) continue; // guard: out-of-range node refs
         const p0 = ws(nodes[a][0], nodes[a][1]);
         const p1 = ws(nodes[b][0], nodes[b][1]);
-        ctx.beginPath();
         ctx.moveTo(p0.x, p0.y);
         ctx.lineTo(p1.x, p1.y);
-        ctx.stroke();
       }
+      ctx.stroke();
 
-      // Streamlines overlay (Results) — only when showResultsStreamlines is toggled on
+      // Streamlines overlay (Results) - only when showResultsStreamlines is toggled on
       if (showField && showResultsStreamlines && Array.isArray(fieldData?.streamlines) && fieldData.streamlines.length > 0) {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.lineWidth = 1.4;
@@ -2929,7 +2970,64 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       ctx.restore();
     }
 
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, hoveredVertex, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines, showMeshQuality, meshSkew, viewport.w, viewport.h, livePreview, liveField]);
+    // ─── Plots probe line overlay (Results stage) ─────────────────────────
+    if (activePlotLine || plotPickPreviewP1) {
+      ctx.save();
+      const p1 = activePlotLine ? activePlotLine.p1 : plotPickPreviewP1!;
+      const p2 = activePlotLine ? activePlotLine.p2 : null;
+
+      const s1 = ws(p1[0], p1[1]);
+
+      if (p2) {
+        const s2 = ws(p2[0], p2[1]);
+        // Draw probe line
+        ctx.strokeStyle = '#2563EB';
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(s1.x, s1.y);
+        ctx.lineTo(s2.x, s2.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Point 2 marker
+        ctx.fillStyle = '#16A34A';
+        ctx.beginPath();
+        ctx.arc(s2.x, s2.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.font = 'bold 11px Inter, sans-serif';
+        ctx.fillStyle = '#16A34A';
+        ctx.fillText('P2', s2.x + 8, s2.y - 4);
+      }
+
+      // Point 1 marker
+      ctx.fillStyle = '#2563EB';
+      ctx.beginPath();
+      ctx.arc(s1.x, s1.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.font = 'bold 11px Inter, sans-serif';
+      ctx.fillStyle = '#2563EB';
+      ctx.fillText('P1', s1.x + 8, s1.y - 4);
+
+      if (activePlotLine?.label) {
+        const midX = p2 ? (s1.x + ws(p2[0], p2[1]).x) / 2 : s1.x;
+        const midY = p2 ? (s1.y + ws(p2[0], p2[1]).y) / 2 : s1.y;
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.fillStyle = '#1E293B';
+        ctx.fillText(activePlotLine.label, midX + 8, midY - 8);
+      }
+      ctx.restore();
+    }
+
+  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, hoveredVertex, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines, showMeshQuality, meshSkew, viewport.w, viewport.h, livePreview, liveField, liveMeshOn, activePlotLine, plotPickPreviewP1]);
 
 
 
@@ -3178,7 +3276,15 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
     if (panning.current) {
       const dx = e.clientX - panStart.current.x;
       const dy = e.clientY - panStart.current.y;
-      setPan({ x: panOrigin.current.x + dx, y: panOrigin.current.y + dy });
+      pendingPanRef.current = { x: panOrigin.current.x + dx, y: panOrigin.current.y + dy };
+      if (!panRafRef.current) {
+        panRafRef.current = requestAnimationFrame(() => {
+          panRafRef.current = null;
+          if (pendingPanRef.current) {
+            setPan(pendingPanRef.current);
+          }
+        });
+      }
       return;
     }
 
@@ -3272,6 +3378,14 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       }
     }
 
+    // Point picking for Plot Line probe (active in Results stage)
+    if (isPickingPlotPoints && onPickPlotPoint && e.button === 0) {
+      const raw = toWorld(e.clientX, e.clientY);
+      onPickPlotPoint([raw.x, raw.y]);
+      e.preventDefault();
+      return;
+    }
+
     if (displayOnly) return;
 
     if (e.button === 0 && tool === 'select') {
@@ -3332,10 +3446,18 @@ export const CadWorkbench2D: React.FC<CadWorkbenchProps> = ({
       dragSelecting.current = true;
       setMarquee(null);
     }
-  }, [pan, tool, currentStep, hoveredDomainHandle, displayOnly, toWorld, cadState.entities, zoom, findEntityAt, showBlocking, blocking, onUpdateBlocking]);
+  }, [pan, tool, currentStep, hoveredDomainHandle, displayOnly, toWorld, cadState.entities, zoom, findEntityAt, showBlocking, blocking, onUpdateBlocking, isPickingPlotPoints, onPickPlotPoint]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     panning.current = false;
+    if (panRafRef.current) {
+      cancelAnimationFrame(panRafRef.current);
+      panRafRef.current = null;
+    }
+    if (pendingPanRef.current) {
+      setPan(pendingPanRef.current);
+      pendingPanRef.current = null;
+    }
 
     if (blockDrag.current) {
       const moved = Boolean(blockDrag.current.recorded);
@@ -4766,7 +4888,9 @@ boundary
         ref={containerRef}
         className="flex-1 relative overflow-hidden outline-none focus:outline-none"
         style={{
-          cursor: draggingDomainHandle
+          cursor: isPickingPlotPoints
+            ? 'crosshair'
+            : draggingDomainHandle
             ? (draggingDomainHandle === 'top' || draggingDomainHandle === 'bottom' ? 'ns-resize' : 'ew-resize')
             : hoveredDomainHandle
             ? (hoveredDomainHandle === 'top' || hoveredDomainHandle === 'bottom' ? 'ns-resize' : 'ew-resize')
@@ -4777,10 +4901,10 @@ boundary
             : 'crosshair',
         }}
       >
-        {/* Top Controls Bar — only when it actually has controls (blocks/mesh
+        {/* Top Controls Bar - only when it actually has controls (blocks/mesh
             toggle in CAD/mesh stages, overlay toggles in Results). The solver
             stage has neither, so no empty pill. */}
-        {displayOnly && (!meshOnly || showField || !!livePreview) && (
+        {displayOnly && (!meshOnly || showField) && (
           <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-lg px-2 py-1 text-xs select-none">
             {!meshOnly ? (
               <>
@@ -4869,30 +4993,42 @@ boundary
                   <span>Streamlines</span>
                 </button>
               </div>
-            ) : livePreview ? (
-              /* Solver stage: live cell-based field preview */
-              <div className="flex items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide text-[#DC2626] bg-[#FEE2E2]">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#DC2626] animate-pulse" />
-                  Live
-                </span>
-                {(['mesh', 'U_mag', 'p', 'k'] as const)
-                  .filter((f) => f === 'mesh' || Array.isArray(livePreview.fields[f]))
-                  .map((f) => (
-                    <button
-                      key={f}
-                      onClick={() => setLiveField(f)}
-                      className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                        liveField === f
-                          ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
-                          : 'text-[#69717D] hover:text-[#171A1F]'
-                      }`}
-                    >
-                      {f === 'U_mag' ? '|U|' : f === 'mesh' ? 'Mesh' : f}
-                    </button>
-                  ))}
-              </div>
             ) : null}
+          </div>
+        )}
+
+        {/* Solver stage: live cell-based field preview controls - mesh
+            wireframe and field colouring are independent toggles, not a
+            single radio group, and each field button re-clicks off. */}
+        {displayOnly && meshOnly && !showField && livePreview && (
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-lg px-2 py-1 text-xs select-none">
+            <button
+              onClick={() => setLiveMeshOn((m) => !m)}
+              title="Toggle mesh wireframe overlay"
+              className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+                liveMeshOn
+                  ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
+                  : 'text-[#69717D] hover:text-[#171A1F]'
+              }`}
+            >
+              Mesh
+            </button>
+            {(['U_mag', 'p', 'k'] as const)
+              .filter((f) => Array.isArray(livePreview.fields[f]))
+              .map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setLiveField((cur) => (cur === f ? null : f))}
+                  title={liveField === f ? 'Click to hide this field' : undefined}
+                  className={`px-2 py-0.5 rounded text-[11px] font-medium ${
+                    liveField === f
+                      ? 'bg-[#2563EB] text-white font-semibold'
+                      : 'text-[#69717D] hover:text-[#171A1F]'
+                  }`}
+                >
+                  {f === 'U_mag' ? '[U]' : f}
+                </button>
+              ))}
           </div>
         )}
 
@@ -4979,7 +5115,7 @@ boundary
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
             <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
-              {liveField === 'U_mag' ? '|U| m/s' : liveField === 'p' ? 'p Pa' : 'k m²/s²'}
+              {liveField === 'U_mag' ? '[U] m/s' : liveField === 'p' ? 'p Pa' : 'k m²/s²'}
               {livePreview?.time ? ` · t=${livePreview.time}` : ''}
             </div>
             <div className="flex items-stretch justify-end h-44">
@@ -5098,13 +5234,43 @@ boundary
           </div>
         )}
 
-        {showField && meshData?.nodes?.length && (
-          <div className={`absolute left-3 top-3 bg-white/90 border border-[#E1E4E8] rounded-md px-2 py-1 text-[10px] pointer-events-none ${
-            fieldData?.source === 'openfoam' ? 'text-[#16A34A]' : 'text-[#69717D]'
-          }`}>
-            {fieldData?.source === 'openfoam'
-              ? `Solver field${fieldData?.time ? ` · t=${fieldData.time}s` : ''}`
-              : 'No results yet - run the solver'}
+        {/* --- Historical field loading overlay --- */}
+        {showField && historicalStatus?.loading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-30 pointer-events-none">
+            <div className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E1E4E8] rounded-lg text-xs font-medium text-[#171A1F]">
+              <Loader2 className="w-4 h-4 animate-spin text-[#2563EB]" />
+              <span>Loading flow field snapshot...</span>
+            </div>
+          </div>
+        )}
+
+        {/* --- Historical field error overlay (e.g. 404 / no field stored) --- */}
+        {showField && historicalStatus?.error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-[#FAFAFA]/90 z-30 pointer-events-auto">
+            <div className="max-w-sm bg-white border border-[#E1E4E8] rounded-lg p-5 text-center space-y-3">
+              <div className="w-9 h-9 rounded-full bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-xs font-semibold text-[#171A1F]">
+                  No flow field stored for this run
+                </h3>
+                <p className="text-[11px] text-[#69717D] leading-relaxed">
+                  {historicalStatus.error.toLowerCase().includes('404') || historicalStatus.error.toLowerCase().includes('no stored')
+                    ? 'This solver run has no stored field snapshot on disk. It may have errored or stopped before fields were written.'
+                    : historicalStatus.error}
+                </p>
+              </div>
+              {onRestoreLive && (
+                <button
+                  type="button"
+                  onClick={onRestoreLive}
+                  className="px-3 py-1.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Back to Latest Run
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -5290,3 +5456,6 @@ boundary
     </div>
   );
 };
+
+export const CadWorkbench2D = React.memo(CadWorkbench2DComponent);
+

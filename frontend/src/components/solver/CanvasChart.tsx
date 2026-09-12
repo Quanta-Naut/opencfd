@@ -12,6 +12,7 @@ interface CanvasChartProps {
   series: ChartSeries[];
   yScale?: 'linear' | 'log';
   yFormat?: (n: number) => string;
+  xFormat?: (n: number) => string;
   /** hard cap on points drawn per line - LTTB keeps the shape */
   maxDrawPoints?: number;
 }
@@ -65,12 +66,13 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
   series,
   yScale = 'linear',
   yFormat = (n) => (Math.abs(n) >= 1000 || (n !== 0 && Math.abs(n) < 0.01) ? n.toExponential(1) : n.toFixed(2)),
+  xFormat,
   maxDrawPoints = 800,
 }) => {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef({ data, xKey, series, yScale, yFormat, maxDrawPoints });
-  stateRef.current = { data, xKey, series, yScale, yFormat, maxDrawPoints };
+  const stateRef = useRef({ data, xKey, series, yScale, yFormat, xFormat, maxDrawPoints });
+  stateRef.current = { data, xKey, series, yScale, yFormat, xFormat, maxDrawPoints };
 
   const dirtyRef = useRef(true);
   const hoverRef = useRef<{ x: number; y: number } | null>(null);
@@ -78,7 +80,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
 
   useEffect(() => {
     dirtyRef.current = true;
-  }, [data, series, yScale]);
+  }, [data, series, yScale, xFormat]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -97,7 +99,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       if (!dirtyRef.current) return;
       dirtyRef.current = false;
 
-      const { data: rows, xKey: xk, series: ser, yScale: ys, yFormat: yf, maxDrawPoints: cap } =
+      const { data: rows, xKey: xk, series: ser, yScale: ys, yFormat: yf, xFormat: xf, maxDrawPoints: cap } =
         stateRef.current;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = wrap.clientWidth;
@@ -127,9 +129,10 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         const pts: XY[] = [];
         for (const r of rows) {
           const y = r[s.key];
-          if (typeof y === 'number' && isFinite(y)) pts.push([r[xk], y]);
+          if (typeof y === 'number') pts.push([r[xk], isFinite(y) ? y : NaN]);
         }
-        return { s, pts: lttb(pts, cap) };
+        const hasGaps = pts.some(([_, y]) => !isFinite(y));
+        return { s, pts: hasGaps && pts.length <= cap ? pts : lttb(pts.filter(([_, y]) => isFinite(y)), cap) };
       });
 
       let xMin = Infinity;
@@ -203,7 +206,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       for (let i = 0; i <= xTickN; i += 1) {
         const xv = xMin + (i / xTickN) * (xMax - xMin);
         const x = sx(xv);
-        ctx.fillText(String(Math.round(xv)), x, cssH - PAD.b + 6);
+        ctx.fillText(xf ? xf(xv) : String(Math.round(xv)), x, cssH - PAD.b + 6);
       }
 
       // Series lines (clipped to the plot rect)
@@ -217,11 +220,20 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         if (pts.length < 2) continue;
         ctx.strokeStyle = s.color;
         ctx.beginPath();
-        pts.forEach(([x, y], i) => {
+        let inSeg = false;
+        pts.forEach(([x, y]) => {
+          if (!isFinite(y)) {
+            inSeg = false;
+            return;
+          }
           const px = sx(x);
           const py = sy(y);
-          if (i === 0) ctx.moveTo(px, py);
-          else ctx.lineTo(px, py);
+          if (!inSeg) {
+            ctx.moveTo(px, py);
+            inSeg = true;
+          } else {
+            ctx.lineTo(px, py);
+          }
         });
         ctx.stroke();
       }
@@ -281,7 +293,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         ctx.stroke();
         ctx.fillStyle = '#171A1F';
         ctx.textAlign = 'left';
-        ctx.fillText(`${xk} ${Math.round(best[xk])}`, bx + 6, by + 8);
+        ctx.fillText(`${xk} ${xf ? xf(best[xk]) : Math.round(best[xk])}`, bx + 6, by + 8);
         items.forEach((it, i) => {
           ctx.fillStyle = it.s.color;
           ctx.fillRect(bx + 6, by + 18 + i * 13, 6, 6);

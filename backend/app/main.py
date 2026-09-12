@@ -1,20 +1,22 @@
 import io
+import math
 import os
 import json
 import asyncio
+import platform
 import zipfile
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from app.services.yplus_service import calculate_yplus, calculate_inflow_turbulence
 from app.services.gmsh_service import generate_mesh_data, generate_structured_mesh
 from app.services.foam import generate_openfoam_case_files
 from app.services.solver import detect_environment, select_adapter, resolve_case_dir
-from app.services.solver.results import read_field_results
+from app.services.solver.results import read_field_results, sample_field_along_line
 from app.services import setup as solver_setup
 from app.services.postprocess_service import generate_field_solution
 from app.services.cad2d_service import (
@@ -24,7 +26,7 @@ from app.services.cad2d_service import (
     compute_2d_fillet,
     generate_mesh_from_cad_loop
 )
-from app.services import project_service
+from app.services import project_service, run_service
 
 app = FastAPI(title="OpenCFD Backend API", version="1.0.0")
 
@@ -261,18 +263,53 @@ class ParaviewLaunchRequest(BaseModel):
     project_id: str | None = None
 
 
+def _find_paraview() -> str | None:
+    """Locate the ParaView executable. shutil.which() alone only finds it if
+    it is on PATH, which is the default on Linux (apt/snap put it there) but
+    NOT on Windows or macOS - both installers drop it in an app-specific
+    folder without touching PATH, so a real install still comes back empty
+    there unless we also check the standard install locations."""
+    import shutil
+    pv = shutil.which("paraview") or shutil.which("paraFoam")
+    if pv:
+        return pv
+
+    import glob
+
+    if os.name == "nt":
+        roots = [
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+        ]
+        candidates = []
+        for root in roots:
+            if root:
+                candidates += glob.glob(os.path.join(root, "ParaView*", "bin", "paraview.exe"))
+        candidates.sort(reverse=True)  # prefer the newest version if several are installed
+        if candidates:
+            return candidates[0]
+    elif platform.system() == "Darwin":
+        candidates = []
+        for root in ("/Applications", os.path.expanduser("~/Applications")):
+            candidates += glob.glob(os.path.join(root, "ParaView*.app", "Contents", "MacOS", "paraview"))
+        candidates.sort(reverse=True)
+        if candidates:
+            return candidates[0]
+
+    return None
+
+
 @app.get("/api/solver/paraview/status")
 async def paraview_status_endpoint():
-    import shutil
-    pv_path = shutil.which("paraview") or shutil.which("paraFoam")
+    pv_path = _find_paraview()
     return {"success": True, "available": bool(pv_path), "path": pv_path}
 
 
 @app.post("/api/solver/paraview/launch")
 async def paraview_launch_endpoint(req: ParaviewLaunchRequest):
-    import shutil
     import subprocess
-    pv_path = shutil.which("paraview") or shutil.which("paraFoam")
+    pv_path = _find_paraview()
     if not pv_path:
         return {"success": False, "detail": "ParaView is not installed or not in PATH"}
     try:
@@ -281,7 +318,14 @@ async def paraview_launch_endpoint(req: ParaviewLaunchRequest):
         if not os.path.exists(foam_file):
             with open(foam_file, "w") as f:
                 f.write("")
-        subprocess.Popen([pv_path, foam_file], start_new_session=True)
+        # start_new_session (setsid) is POSIX-only - passing it on Windows
+        # raises ValueError before the process even launches, which is why
+        # this failed unconditionally there regardless of the PATH lookup.
+        if os.name == "nt":
+            detach_kwargs = {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
+        else:
+            detach_kwargs = {"start_new_session": True}
+        subprocess.Popen([pv_path, foam_file], **detach_kwargs)
         return {"success": True, "detail": f"Launched ParaView for {foam_file}"}
     except Exception as e:
         return {"success": False, "detail": str(e)}
@@ -455,21 +499,157 @@ async def delete_project_endpoint(pid: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+
+# -- Run persistence (~/.OpenCFD/projects/<pid>/runs/<rid>) --------------------
+@app.get("/api/solver/runs/{project_id}/{run_id}/field")
+async def get_solver_run_field_endpoint(project_id: str, run_id: str):
+    data = run_service.get_run_field(project_id, run_id)
+    if data is None:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "detail": f"Field data not found for run '{run_id}'"},
+        )
+    return {"success": True, "data": data}
+
+
+class SampleLineRequest(BaseModel):
+    p1: Optional[Any] = None
+    p2: Optional[Any] = None
+    samples: Optional[Any] = 100
+
+
+@app.post("/api/solver/runs/{project_id}/{run_id}/sample-line")
+async def sample_solver_run_line_endpoint(
+    project_id: str,
+    run_id: str,
+    req: SampleLineRequest,
+):
+    if req.p1 is None or req.p2 is None:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "detail": "Missing p1 or p2 coordinate"},
+        )
+
+    if (
+        not isinstance(req.p1, (list, tuple))
+        or len(req.p1) != 2
+        or not isinstance(req.p2, (list, tuple))
+        or len(req.p2) != 2
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "detail": "p1 and p2 must each be 2-element coordinates [x, y]"},
+        )
+
+    try:
+        x1, y1 = float(req.p1[0]), float(req.p1[1])
+        x2, y2 = float(req.p2[0]), float(req.p2[1])
+    except (ValueError, TypeError):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "detail": "p1 and p2 coordinates must be numeric"},
+        )
+
+    if math.hypot(x2 - x1, y2 - y1) <= 1e-12:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "detail": "p1 and p2 must not be equal (zero-length line)"},
+        )
+
+    if req.samples is None:
+        samples = 100
+    elif not isinstance(req.samples, int) or isinstance(req.samples, bool):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "detail": "samples must be an integer"},
+        )
+    else:
+        samples = req.samples
+
+    if samples < 2 or samples > 2000:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "detail": f"samples must be between 2 and 2000, got {samples}"},
+        )
+
+    field_snapshot = run_service.get_run_field(project_id, run_id)
+    if field_snapshot is None:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "detail": f"Field data not found for run '{run_id}'"},
+        )
+
+    try:
+        data = sample_field_along_line(field_snapshot, (x1, y1), (x2, y2), samples)
+        return {"success": True, "data": data}
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "detail": str(e)},
+        )
+
+
+@app.get("/api/solver/runs/{project_id}/{run_id}/stream")
+async def get_solver_run_stream_endpoint(project_id: str, run_id: str):
+    data = run_service.get_run_stream(project_id, run_id)
+    if data is None:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "detail": f"Stream data not found for run '{run_id}'"},
+        )
+    return {"success": True, "data": data}
+
+
+@app.delete("/api/solver/runs/{project_id}/{run_id}")
+async def delete_solver_run_endpoint(project_id: str, run_id: str):
+    run_service.delete_run(project_id, run_id)
+    return {"success": True}
+
+
 @app.websocket("/ws/solver")
 async def websocket_solver_stream(websocket: WebSocket):
     await websocket.accept()
     try:
         msg = await websocket.receive_text()
         config = json.loads(msg)
+        project_id = config.get("project_id") or "scratch"
+        run_id = config.get("run_id")
+        if not run_id:
+            import uuid
+            run_id = str(uuid.uuid4())
+            config["run_id"] = run_id
+        config["project_id"] = project_id
+
         mode = config.get("mode", "auto")
         adapter = select_adapter(mode, config)
-        case_dir = str(resolve_case_dir(config.get("project_id")))
-        await websocket.send_json(
-            {"type": "log", "line": f"[OpenCFD] solver backend: {adapter.name}"}
-        )
-        async for item in adapter.run(case_dir, config):
-            await websocket.send_json(item)
+        case_dir = str(resolve_case_dir(project_id))
+
+        recorder = run_service.RunRecorder(project_id, run_id, config)
+        recorder.open()
+        try:
+            init_log = {"type": "log", "line": f"[OpenCFD] solver backend: {adapter.name}"}
+            await recorder.record_event(init_log)
+            await websocket.send_json(init_log)
+
+            async for item in adapter.run(case_dir, config):
+                await recorder.record_event(item)
+                await websocket.send_json(item)
+
+            await recorder.finish(case_dir)
+        except WebSocketDisconnect:
+            await recorder.finish(case_dir)
+            raise
+        except Exception as e:
+            err_event = {"type": "error", "message": str(e)}
+            await recorder.record_event(err_event)
+            await recorder.finish(case_dir)
+            await websocket.send_json(err_event)
+        finally:
+            recorder.close()
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        await websocket.send_json({"type": "error", "message": str(e)})
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass

@@ -8,6 +8,10 @@ import { RightContextInspector } from './components/layout/RightContextInspector
 import { BottomSolverDrawer } from './components/layout/BottomSolverDrawer';
 import { SolverMonitorRail } from './components/solver/SolverMonitorRail';
 import { RunHistoryRail } from './components/results/RunHistoryRail';
+import { ResultsRightRail } from './components/results/ResultsRightRail';
+import { CreatePlotModal } from './components/results/CreatePlotModal';
+import { PlotViewDialog } from './components/results/PlotViewDialog';
+import { Crosshair } from 'lucide-react';
 import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { StatusBar } from './components/layout/StatusBar';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
@@ -24,6 +28,7 @@ import {
   PostProcessConfig,
   ResidualDataPoint,
   SolverRunRecord,
+  PlotDefinition,
 } from './types/cfd';
 import {
   fetchYPlus,
@@ -34,6 +39,10 @@ import {
   fetchSolverResults,
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
+  fetchRunField,
+  fetchRunStream,
+  deleteSolverRun,
+  SolverRunFieldSnapshot,
   WS_BASE,
 } from './utils/api';
 import { saveProjectSession, renameProject } from './utils/projectsApi';
@@ -111,7 +120,13 @@ export function App({
   const savedSession = initialSession;
 
   // Active workflow stage
-  const [activeStage, setActiveStage] = useState<StageId>('geometry');
+  const [activeStage, setActiveStage] = useState<StageId>(() => {
+    if (typeof window !== 'undefined') {
+      const st = new URLSearchParams(window.location.search).get('stage') as StageId;
+      if (st && ['geometry', 'mesh', 'caseSetup', 'solver', 'results'].includes(st)) return st;
+    }
+    return 'geometry';
+  });
   const [selectedBoundary, setSelectedBoundary] = useState<string>('inlet');
   const [pendingImportFile, setPendingImportFile] = useState<
     | { type: 'parsed'; name: string; points: Point2D[] }
@@ -483,6 +498,7 @@ export function App({
         ? { ...r, status: 'stopped' as const, finishedAt: r.startedAt }
         : r,
     ),
+    plots: savedSession?.state?.plots ?? [],
     terminalLogs: savedSession?.state?.terminalLogs ?? ['OpenCFD ready.'],
   }));
 
@@ -496,6 +512,21 @@ export function App({
   const wsRef = useRef<WebSocket | null>(null);
   const activeRunIdRef = useRef<string | null>(null);
   const runLogStartRef = useRef(0);
+
+  // Historical solver run visualization state and cache
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [historicalFieldData, setHistoricalFieldData] = useState<SolverRunFieldSnapshot | null>(null);
+  const [historicalFieldStatus, setHistoricalFieldStatus] = useState<{
+    loading: boolean;
+    error: string | null;
+    runId: string | null;
+  }>({ loading: false, error: null, runId: null });
+  const historicalCacheRef = useRef<Map<string, SolverRunFieldSnapshot>>(new Map());
+  const historicalAbortRef = useRef<AbortController | null>(null);
+
+  // High-frequency residual batching (flushed on interval to cut re-render churn)
+  const pendingResidualsRef = useRef<ResidualDataPoint[]>([]);
+  const residualBatchTimerRef = useRef<number | null>(null);
 
   // Derive axisymmetric directly from the boundary patches: when any edge is tagged
   // 'axis', the case is assumed axisymmetric.
@@ -607,6 +638,7 @@ export function App({
         residuals: r.residuals.length > 4000 ? r.residuals.slice(-4000) : r.residuals,
         logs: r.logs.length > 500 ? r.logs.slice(-500) : r.logs,
       })),
+      plots: (state.plots ?? []).slice(-50),
     },
     cadEntities,
     edgeTagMap,
@@ -801,7 +833,10 @@ export function App({
       missing: meshGate.missing,
     },
     solver: { locked: !meshReady, reason: 'Generate a mesh first' },
-    results: { locked: !meshReady, reason: 'Generate a mesh first' },
+    results: {
+      locked: !meshReady && !(state.solverRuns?.length),
+      reason: 'Generate a mesh or select a previous run first',
+    },
   };
 
   const handleGenerateMesh = async () => {
@@ -908,6 +943,12 @@ export function App({
 
   // ── Structured meshing (H-block transfinite) ──────────────────────────────
   const bodyPatchFor = (entId: string): any => {
+    const ent = cadEntities.find((e) => e.id === entId);
+    if (ent && ent.role !== 'domain_boundary') {
+      const keys = Object.keys(edgeTagMap).filter((k) => k.startsWith(`${entId}_`));
+      const explicit = keys.map((k) => edgeTagMap[k]).find(Boolean);
+      return explicit || 'wall';
+    }
     const keys = Object.keys(edgeTagMap).filter((k) => k.startsWith(`${entId}_`));
     return (keys.map((k) => edgeTagMap[k]).find(Boolean) as any) || 'wall';
   };
@@ -1207,8 +1248,23 @@ export function App({
 
   const [resultsLoading, setResultsLoading] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false); // right-hand residuals/forces rail
-  const [runsRailOpen, setRunsRailOpen] = useState(false); // right-hand run history rail on Results tab
+  const [runsRailOpen, setRunsRailOpen] = useState(true); // right-hand plots & runs rail on Results tab
+  const [selectedPlotId, setSelectedPlotId] = useState<string | null>(null);
+  const [activeDialogPlot, setActiveDialogPlot] = useState<PlotDefinition | null>(null);
+  const [createPlotModalOpen, setCreatePlotModalOpen] = useState(false);
+  const [pickingPointsState, setPickingPointsState] = useState<{ step: 1 | 2; p1?: [number, number] } | null>(null);
+  const [pickedP1, setPickedP1] = useState<[number, number] | null>(null);
+  const [pickedP2, setPickedP2] = useState<[number, number] | null>(null);
   const [caseFilesOpen, setCaseFilesOpen] = useState(false); // OpenFOAM dicts modal
+
+  useEffect(() => {
+    if (activeDialogPlot) {
+      const updated = (state.plots ?? []).find((p) => p.id === activeDialogPlot.id);
+      if (updated && updated !== activeDialogPlot) {
+        setActiveDialogPlot(updated);
+      }
+    }
+  }, [state.plots, activeDialogPlot]);
   // Live cell-based field streamed from the solver while it runs (Solver stage).
   const [livePreview, setLivePreview] = useState<
     { time: string; fields: Record<string, number[]>; ranges: Record<string, [number, number]> } | null
@@ -1243,7 +1299,7 @@ export function App({
   // In-flight AbortController for the current fetch (cancelled when a newer request starts)
   const fetchAbortRef = useRef<AbortController | null>(null);
 
-  // Scrub debounce timer — delays actual fetch by 80ms so rapid slider movement
+  // Scrub debounce timer - delays actual fetch by 80ms so rapid slider movement
   // doesn't fire multiple overlapping requests
   const scrubDebounceRef = useRef<number | null>(null);
 
@@ -1278,7 +1334,7 @@ export function App({
     projectIdRef.current = projectId;
   }, [projectId]);
 
-  // Core fetch — always cancels any previous in-flight request first.
+  // Core fetch - always cancels any previous in-flight request first.
   // Returns true if data was loaded (not aborted/errored).
   const fetchFrame = async (
     time: number,
@@ -1288,7 +1344,7 @@ export function App({
     const mesh = meshDataRef.current;
     if (!mesh?.nodes?.length) return false;
 
-    // Cache hit — apply immediately, no network call
+    // Cache hit - apply immediately, no network call
     if (frameCacheRef.current.has(frameIdx)) {
       const cached = frameCacheRef.current.get(frameIdx)!;
       setFieldData(cached);
@@ -1448,7 +1504,7 @@ export function App({
     [prefetchAdjacent],
   );
 
-  // Single stable interval/timeout loop — calibrated to actual physical simulation time
+  // Single stable interval/timeout loop - calibrated to actual physical simulation time
   const playTimeoutRef = useRef<number | null>(null);
   const stopPlayback = useCallback(() => {
     if (playTimeoutRef.current !== null) {
@@ -1518,9 +1574,29 @@ export function App({
       if (playTimeoutRef.current) window.clearTimeout(playTimeoutRef.current);
       if (fetchAbortRef.current) fetchAbortRef.current.abort();
       if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
+      if (residualBatchTimerRef.current !== null) window.clearInterval(residualBatchTimerRef.current);
+      if (historicalAbortRef.current) historicalAbortRef.current.abort();
     },
     [],
   );
+
+  // High-frequency residual batching helpers
+  const flushResiduals = useCallback(() => {
+    if (pendingResidualsRef.current.length === 0) return;
+    const batch = pendingResidualsRef.current;
+    pendingResidualsRef.current = [];
+    setState((prev) => ({
+      ...prev,
+      residuals: [...prev.residuals, ...batch],
+    }));
+  }, []);
+
+  const stopResidualBatching = useCallback(() => {
+    if (residualBatchTimerRef.current !== null) {
+      window.clearInterval(residualBatchTimerRef.current);
+      residualBatchTimerRef.current = null;
+    }
+  }, []);
 
   const finalizeRun = (
     status: 'completed' | 'error' | 'stopped',
@@ -1530,17 +1606,23 @@ export function App({
     if (!targetId) return;
     activeRunIdRef.current = null;
 
+    stopResidualBatching();
+    const finalPending = pendingResidualsRef.current;
+    pendingResidualsRef.current = [];
+
     setState((prev) => {
-      const last = prev.residuals.length > 0 ? prev.residuals[prev.residuals.length - 1] : undefined;
+      const allResiduals = finalPending.length > 0 ? [...prev.residuals, ...finalPending] : prev.residuals;
+      const last = allResiduals.length > 0 ? allResiduals[allResiduals.length - 1] : undefined;
       const finalCd = typeof last?.cd === 'number' ? last.cd : undefined;
       const finalCl = typeof last?.cl === 'number' ? last.cl : undefined;
       const iterationsRun = extra?.iterations ?? last?.iteration;
       const logs = prev.terminalLogs.slice(runLogStartRef.current);
-      const residuals = [...prev.residuals];
+      const residuals = [...allResiduals];
       const finishedAt = Date.now();
 
       return {
         ...prev,
+        residuals: allResiduals,
         solverRuns: (prev.solverRuns ?? []).map((r) => {
           if (r.id !== targetId) return r;
           return {
@@ -1558,6 +1640,264 @@ export function App({
     });
   };
 
+  // Historical run selection and field snapshot loading
+  const handleSelectRun = useCallback(
+    async (runId: string | null) => {
+      if (historicalAbortRef.current) {
+        historicalAbortRef.current.abort();
+        historicalAbortRef.current = null;
+      }
+
+      if (!runId) {
+        setSelectedRunId(null);
+        setHistoricalFieldData(null);
+        setHistoricalFieldStatus({ loading: false, error: null, runId: null });
+        return;
+      }
+
+      setSelectedRunId(runId);
+
+      // In-memory cache hit
+      if (historicalCacheRef.current.has(runId)) {
+        const cached = historicalCacheRef.current.get(runId)!;
+        setHistoricalFieldData(cached);
+        setHistoricalFieldStatus({ loading: false, error: null, runId });
+        return;
+      }
+
+      const aborter = new AbortController();
+      historicalAbortRef.current = aborter;
+      setHistoricalFieldStatus({ loading: true, error: null, runId });
+
+      let res = await fetchRunField(projectId, runId, aborter.signal);
+      for (let attempt = 0; !res.data && attempt < 3 && !aborter.signal.aborted; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
+        if (aborter.signal.aborted) break;
+        res = await fetchRunField(projectId, runId, aborter.signal);
+      }
+      if (aborter.signal.aborted || res.detail === '__aborted__') return;
+
+      if (!res.data) {
+        setHistoricalFieldData(null);
+        setHistoricalFieldStatus({
+          loading: false,
+          error: res.detail || 'No stored field snapshot found for this run.',
+          runId,
+        });
+        return;
+      }
+
+      const snap = res.data;
+      if (
+        !snap.mesh ||
+        !Array.isArray(snap.mesh.nodes) ||
+        !Array.isArray(snap.mesh.elements) ||
+        snap.mesh.nodes.length === 0
+      ) {
+        setHistoricalFieldData(null);
+        setHistoricalFieldStatus({
+          loading: false,
+          error: 'Historical mesh geometry missing or invalid in snapshot.',
+          runId,
+        });
+        return;
+      }
+
+      // Guard explicitly against field-to-mesh node mismatch
+      const nodeCount = snap.mesh.nodes.length;
+      let mismatch = false;
+      if (snap.fields && typeof snap.fields === 'object') {
+        for (const arr of Object.values(snap.fields)) {
+          if (Array.isArray(arr) && arr.length > 0 && arr.length !== nodeCount) {
+            mismatch = true;
+            break;
+          }
+        }
+      }
+      if (mismatch) {
+        setHistoricalFieldData(null);
+        setHistoricalFieldStatus({
+          loading: false,
+          error: 'Field data length does not match historical mesh node count.',
+          runId,
+        });
+        return;
+      }
+
+      historicalCacheRef.current.set(runId, snap);
+      setHistoricalFieldData(snap);
+      setHistoricalFieldStatus({ loading: false, error: null, runId });
+    },
+    [projectId],
+  );
+
+  const handleDeleteRun = useCallback(
+    async (id: string) => {
+      const wasSelected = selectedRunId === id;
+      let remaining: SolverRunRecord[] = [];
+      setState((prev) => {
+        remaining = (prev.solverRuns ?? []).filter((r) => r.id !== id);
+        return { ...prev, solverRuns: remaining };
+      });
+
+      if (wasSelected) {
+        const finishedRemaining = remaining.filter((r) => r.status !== 'running');
+        const latest = finishedRemaining.length
+          ? [...finishedRemaining].sort((a, b) => b.startedAt - a.startedAt)[0]
+          : null;
+        if (latest) {
+          handleSelectRun(latest.id);
+        } else {
+          setSelectedRunId(null);
+          setHistoricalFieldData(null);
+          setHistoricalFieldStatus({ loading: false, error: null, runId: null });
+        }
+      }
+      historicalCacheRef.current.delete(id);
+
+      if (projectId) {
+        const res = await deleteSolverRun(projectId, id);
+        if (!res.success) {
+          toast(`Failed to delete run on server: ${res.detail || 'unknown error'}`, 'error');
+        }
+      }
+    },
+    [projectId, selectedRunId, handleSelectRun],
+  );
+
+  useEffect(() => {
+    if (activeStage !== 'results' || selectedRunId !== null) return;
+    const finished = (state.solverRuns ?? []).filter((r) => r.status !== 'running');
+    if (finished.length === 0) return;
+    const latest = [...finished].sort((a, b) => b.startedAt - a.startedAt)[0];
+    handleSelectRun(latest.id);
+  }, [activeStage, selectedRunId, state.solverRuns, handleSelectRun]);
+
+  const selectLatestFinishedRun = useCallback(() => {
+    const finished = (state.solverRuns ?? []).filter((r) => r.status !== 'running');
+    if (finished.length === 0) {
+      handleSelectRun(null);
+      return;
+    }
+    const latest = [...finished].sort((a, b) => b.startedAt - a.startedAt)[0];
+    handleSelectRun(latest.id);
+  }, [state.solverRuns, handleSelectRun]);
+
+  const handleClearPendingImport = useCallback(() => setPendingImportFile(null), []);
+  const handleCadNameChange = useCallback(
+    (name: string) => setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name } })),
+    [],
+  );
+  const handleToggleTransientPlay = useCallback(() => {
+    if (transientPlayingRef.current) stopPlayback();
+    else startPlayback();
+  }, [stopPlayback, startPlayback]);
+
+  const isViewingHistorical = activeStage === 'results' && selectedRunId !== null;
+  const selectedRunRecord = isViewingHistorical
+    ? (state.solverRuns ?? []).find((r) => r.id === selectedRunId)
+    : null;
+
+  const effectiveMesh = isViewingHistorical
+    ? (historicalFieldData?.mesh
+        ? {
+            nodes: historicalFieldData.mesh.nodes,
+            elements: historicalFieldData.mesh.elements,
+            num_nodes: historicalFieldData.mesh.nodes.length,
+            num_elements: historicalFieldData.mesh.elements.length,
+            boundaries: historicalFieldData.mesh.boundaries || {},
+          }
+        : null)
+    : meshData;
+
+  const effectiveFieldData = isViewingHistorical
+    ? (historicalFieldData
+        ? {
+            ...historicalFieldData,
+            source: 'openfoam',
+            streamlines: historicalFieldData.streamlines || [],
+          }
+        : null)
+    : fieldData;
+
+  const targetRunForPlot = useMemo(() => {
+    if (selectedRunId) {
+      const rec = (state.solverRuns ?? []).find((r) => r.id === selectedRunId);
+      return { id: selectedRunId, label: rec?.label || `Run ${selectedRunId.slice(0, 6)}` };
+    }
+    const finished = (state.solverRuns ?? []).filter((r) => r.status !== 'running');
+    if (finished.length > 0) {
+      const latest = [...finished].sort((a, b) => b.startedAt - a.startedAt)[0];
+      return { id: latest.id, label: latest.label || `Run ${latest.id.slice(0, 6)}` };
+    }
+    return { id: null, label: undefined };
+  }, [selectedRunId, state.solverRuns]);
+
+  const handleStartPickPoints = useCallback(() => {
+    setCreatePlotModalOpen(false);
+    setPickingPointsState({ step: 1 });
+  }, []);
+
+  const handlePickPlotPoint = useCallback((pt: [number, number]) => {
+    setPickingPointsState((prev) => {
+      if (!prev || prev.step === 1) {
+        return { step: 2, p1: pt };
+      }
+      const p1 = prev.p1!;
+      const p2 = pt;
+      setPickedP1(p1);
+      setPickedP2(p2);
+      setCreatePlotModalOpen(true);
+      return null;
+    });
+  }, []);
+
+  const handleCreatePlot = useCallback((newPlot: PlotDefinition) => {
+    setState((prev) => ({
+      ...prev,
+      plots: [newPlot, ...(prev.plots ?? [])],
+    }));
+    setSelectedPlotId(newPlot.id);
+    setActiveDialogPlot(newPlot);
+  }, []);
+
+  const handleSelectPlot = useCallback((plot: PlotDefinition) => {
+    setSelectedPlotId(plot.id);
+    setActiveDialogPlot(plot);
+  }, []);
+
+  const handleUpdatePlot = useCallback((updated: PlotDefinition) => {
+    setState((prev) => ({
+      ...prev,
+      plots: (prev.plots ?? []).map((p) => (p.id === updated.id ? updated : p)),
+    }));
+    setActiveDialogPlot(updated);
+  }, []);
+
+  const handleDeletePlot = useCallback(
+    (id: string) => {
+      setState((prev) => ({
+        ...prev,
+        plots: (prev.plots ?? []).filter((p) => p.id !== id),
+      }));
+      if (selectedPlotId === id) setSelectedPlotId(null);
+      if (activeDialogPlot?.id === id) setActiveDialogPlot(null);
+    },
+    [selectedPlotId, activeDialogPlot],
+  );
+
+  const activePlotLineForCanvas = useMemo(() => {
+    if (activeStage !== 'results') return null;
+    if (activeDialogPlot) {
+      return { p1: activeDialogPlot.line.p1, p2: activeDialogPlot.line.p2, label: activeDialogPlot.name };
+    }
+    if (selectedPlotId) {
+      const sp = (state.plots ?? []).find((p) => p.id === selectedPlotId);
+      if (sp) return { p1: sp.line.p1, p2: sp.line.p2, label: sp.name };
+    }
+    return null;
+  }, [activeStage, activeDialogPlot, selectedPlotId, state.plots]);
+
   const handleRunSolver = async () => {
     if (activeRunIdRef.current) {
       finalizeRun('stopped');
@@ -1566,6 +1906,11 @@ export function App({
     setMonitorOpen(true); // reveal the residuals / forces rail for the run
     setLivePreview(null); // start the live field preview fresh
     clearResultsCache(); // the previous run's frames must not survive a new solve
+    setSelectedRunId(null);
+    setHistoricalFieldData(null);
+    setHistoricalFieldStatus({ loading: false, error: null, runId: null });
+    stopResidualBatching();
+    pendingResidualsRef.current = [];
 
     const n = (state.solverRuns?.length ?? 0) + 1;
     const runId =
@@ -1627,6 +1972,7 @@ export function App({
         JSON.stringify({
           mode: 'auto',
           project_id: projectId,
+          run_id: record.id,
           physics: state.physics,
           mesh: meshData
             ? {
@@ -1667,10 +2013,10 @@ export function App({
           terminalLogs: [...prev.terminalLogs, msg.line],
         }));
       } else if (msg.type === 'residual') {
-        setState((prev) => ({
-          ...prev,
-          residuals: [...prev.residuals, msg.data],
-        }));
+        pendingResidualsRef.current.push(msg.data);
+        if (residualBatchTimerRef.current === null) {
+          residualBatchTimerRef.current = window.setInterval(flushResiduals, 200);
+        }
       } else if (msg.type === 'field') {
         setLivePreview(msg.data);
       } else if (msg.type === 'status' && msg.status === 'completed') {
@@ -1896,6 +2242,7 @@ export function App({
           boundaryValidation={boundaryValidation}
           boundaryEdgesCount={boundaryEdges.length}
           geometryEntitiesCount={geometryEntitiesCount}
+          onCreatePlot={() => setCreatePlotModalOpen(true)}
         />
 
         {/* Center Canvas + Floating Bottom Console Area */}
@@ -1905,7 +2252,7 @@ export function App({
             <div className="w-full h-full">
               <CadWorkbench2D
                 displayOnly={activeStage !== 'geometry'}
-                meshData={meshData}
+                meshData={effectiveMesh}
                 meshStale={meshStale}
                 blocking={blocking}
                 blocksBuiltTick={blocksBuiltTick}
@@ -1919,7 +2266,7 @@ export function App({
                 meshOnly={activeStage === 'solver' || activeStage === 'results'}
                 showField={activeStage === 'results'}
                 livePreview={activeStage === 'solver' ? livePreview : null}
-                fieldData={fieldData}
+                fieldData={effectiveFieldData}
                 activeField={state.postprocess.activeField}
                 colormap={state.postprocess.colormap}
                 initialEntities={cadEntities}
@@ -1929,7 +2276,7 @@ export function App({
                 resolution={state.geometry.meshResolution}
                 firstLayerMm={state.geometry.firstLayerHeightMm}
                 pendingImportFile={pendingImportFile}
-                onClearPendingImport={() => setPendingImportFile(null)}
+                onClearPendingImport={handleClearPendingImport}
                 // ── 6-Step Workflow Props (Canvas Visuals & Edge Tagging) ──
                 currentStep={cadWorkflowStep}
                 flowType={flowType}
@@ -1957,18 +2304,50 @@ export function App({
                 onRequestMeshHandoffRef={requestMeshHandoffRef}
                 onRequestDownloadBlockMeshDictRef={requestDownloadBlockMeshDictRef}
                 cadName={state.geometry.name}
-                onCadNameChange={(name) =>
-                  setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name } }))
-                }
+                onCadNameChange={handleCadNameChange}
                 isTransient={state.physics.timeFormulation === 'transient'}
                 transientTimes={transientTimes}
                 transientFrameIndex={transientFrameIndex}
                 transientPlaying={transientPlaying}
                 transientSpeed={transientSpeed}
                 onSelectTransientFrame={selectTransientFrame}
-                onToggleTransientPlay={() => (transientPlaying ? stopPlayback() : startPlayback())}
+                onToggleTransientPlay={handleToggleTransientPlay}
                 onSelectTransientSpeed={setTransientSpeed}
+                historicalStatus={
+                  isViewingHistorical
+                    ? {
+                        runLabel: selectedRunRecord?.label || 'Past Run',
+                        loading: historicalFieldStatus.loading,
+                        error: historicalFieldStatus.error,
+                      }
+                    : undefined
+                }
+                onRestoreLive={selectLatestFinishedRun}
+                activePlotLine={activePlotLineForCanvas}
+                isPickingPlotPoints={!!pickingPointsState}
+                onPickPlotPoint={handlePickPlotPoint}
+                plotPickPreviewP1={pickingPointsState?.p1 ?? null}
               />
+              {pickingPointsState && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-[#1E293B] text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-3 text-xs font-medium border border-white/10">
+                  <Crosshair className="w-4 h-4 text-[#38BDF8] animate-pulse" />
+                  <span>
+                    {pickingPointsState.step === 1
+                      ? 'Click Point 1 on the geometry canvas'
+                      : `Point 1 set (${pickingPointsState.p1![0].toFixed(3)}m, ${pickingPointsState.p1![1].toFixed(3)}m). Click Point 2...`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickingPointsState(null);
+                      setCreatePlotModalOpen(true);
+                    }}
+                    className="px-2.5 py-0.5 rounded-full bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
           </main>
 
@@ -1995,13 +2374,19 @@ export function App({
           />
         )}
 
-        {/* Right rail: solver run history on the Results tab. */}
+        {/* Right rail: solver run history and plots stacked on the Results tab. */}
         {activeStage === 'results' && (
-          <RunHistoryRail
+          <ResultsRightRail
+            plots={state.plots ?? []}
+            selectedPlotId={selectedPlotId}
+            onSelectPlot={handleSelectPlot}
             runs={state.solverRuns ?? []}
             executionStatus={state.executionStatus}
             open={runsRailOpen}
             onOpenChange={setRunsRailOpen}
+            selectedRunId={selectedRunId}
+            onSelectRun={handleSelectRun}
+            historicalFieldStatus={historicalFieldStatus}
             onRelabelRun={(id, label) =>
               setState((prev) => ({
                 ...prev,
@@ -2010,12 +2395,7 @@ export function App({
                 ),
               }))
             }
-            onDeleteRun={(id) =>
-              setState((prev) => ({
-                ...prev,
-                solverRuns: (prev.solverRuns ?? []).filter((r) => r.id !== id),
-              }))
-            }
+            onDeleteRun={handleDeleteRun}
           />
         )}
       </div>
@@ -2029,6 +2409,28 @@ export function App({
         caseFiles={caseFiles}
         projectId={projectId}
         projectName={projectName}
+      />
+
+      <CreatePlotModal
+        open={createPlotModalOpen}
+        onClose={() => setCreatePlotModalOpen(false)}
+        projectId={projectId}
+        targetRunId={targetRunForPlot.id}
+        targetRunLabel={targetRunForPlot.label}
+        defaultName={`Plot ${(state.plots?.length ?? 0) + 1}`}
+        pickedP1={pickedP1}
+        pickedP2={pickedP2}
+        onStartPickPoints={handleStartPickPoints}
+        onCreatePlot={handleCreatePlot}
+      />
+
+      <PlotViewDialog
+        plot={activeDialogPlot}
+        open={!!activeDialogPlot}
+        onClose={() => setActiveDialogPlot(null)}
+        onUpdatePlot={handleUpdatePlot}
+        onDeletePlot={handleDeletePlot}
+        projectId={projectId}
       />
     </div>
   );

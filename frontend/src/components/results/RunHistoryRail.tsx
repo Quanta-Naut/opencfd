@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronRight, ChevronDown, History, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, History, X, Loader2 } from 'lucide-react';
 import { SolverRunRecord } from '../../types/cfd';
 import { CanvasChart, ChartSeries } from '../solver/CanvasChart';
 
@@ -10,6 +10,14 @@ export interface RunHistoryRailProps {
   onOpenChange: (open: boolean) => void;
   onRelabelRun: (id: string, label: string) => void;
   onDeleteRun: (id: string) => void;
+  selectedRunId?: string | null;
+  onSelectRun?: (id: string | null) => void;
+  historicalFieldStatus?: {
+    loading: boolean;
+    error: string | null;
+    runId: string | null;
+  };
+  embedded?: boolean;
 }
 
 const MIN_W = 300;
@@ -71,6 +79,10 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
   onOpenChange,
   onRelabelRun,
   onDeleteRun,
+  selectedRunId = null,
+  onSelectRun,
+  historicalFieldStatus,
+  embedded = false,
 }) => {
   const [width, setWidth] = useRafState<number>(
     Number(typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_runs_rail_w')) >= MIN_W
@@ -90,6 +102,7 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
   wRef.current = width;
 
   useEffect(() => {
+    if (embedded) return;
     const onMove = (e: MouseEvent) => {
       if (dragRef.current) {
         const maxW = Math.max(MIN_W, window.innerWidth - 360);
@@ -116,7 +129,7 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [setWidth]);
+  }, [setWidth, embedded]);
 
   const startDrag = (e: React.MouseEvent) => {
     dragRef.current = { startX: e.clientX, startW: wRef.current };
@@ -138,7 +151,7 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
     () =>
       pinnedRuns.map((r, i) => ({
         key: `run_${r.id}`,
-        name: r.label,
+        name: r.label || `Run ${r.id.slice(0, 6)}`,
         color: COMPARE_COLORS[i % COMPARE_COLORS.length],
       })),
     [pinnedRuns],
@@ -147,14 +160,34 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
   const cdCompareData = useMemo(() => {
     const map = new Map<number, Record<string, number>>();
     pinnedRuns.forEach((r) => {
-      const key = `run_${r.id}`;
       for (const pt of r.residuals) {
-        if (typeof pt.cd === 'number' && isFinite(pt.cd)) {
-          if (!map.has(pt.iteration)) {
-            map.set(pt.iteration, { iteration: pt.iteration });
-          }
-          map.get(pt.iteration)![key] = pt.cd;
-        }
+        if (typeof pt.cd !== 'number') continue;
+        const row = map.get(pt.iteration) || { iteration: pt.iteration };
+        row[`run_${r.id}`] = pt.cd;
+        map.set(pt.iteration, row);
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.iteration - b.iteration);
+  }, [pinnedRuns]);
+
+  const clCompareSeries: ChartSeries[] = useMemo(
+    () =>
+      pinnedRuns.map((r, i) => ({
+        key: `run_${r.id}`,
+        name: r.label || `Run ${r.id.slice(0, 6)}`,
+        color: COMPARE_COLORS[i % COMPARE_COLORS.length],
+      })),
+    [pinnedRuns],
+  );
+
+  const clCompareData = useMemo(() => {
+    const map = new Map<number, Record<string, number>>();
+    pinnedRuns.forEach((r) => {
+      for (const pt of r.residuals) {
+        if (typeof pt.cl !== 'number') continue;
+        const row = map.get(pt.iteration) || { iteration: pt.iteration };
+        row[`run_${r.id}`] = pt.cl;
+        map.set(pt.iteration, row);
       }
     });
     return Array.from(map.values()).sort((a, b) => a.iteration - b.iteration);
@@ -164,7 +197,7 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
     () =>
       pinnedRuns.map((r, i) => ({
         key: `run_${r.id}`,
-        name: r.label,
+        name: r.label || `Run ${r.id.slice(0, 6)}`,
         color: COMPARE_COLORS[i % COMPARE_COLORS.length],
       })),
     [pinnedRuns],
@@ -173,20 +206,17 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
   const pCompareData = useMemo(() => {
     const map = new Map<number, Record<string, number>>();
     pinnedRuns.forEach((r) => {
-      const key = `run_${r.id}`;
       for (const pt of r.residuals) {
-        if (typeof pt.p === 'number' && isFinite(pt.p)) {
-          if (!map.has(pt.iteration)) {
-            map.set(pt.iteration, { iteration: pt.iteration });
-          }
-          map.get(pt.iteration)![key] = Math.max(pt.p, FLOOR);
-        }
+        if (typeof pt.p !== 'number') continue;
+        const row = map.get(pt.iteration) || { iteration: pt.iteration };
+        row[`run_${r.id}`] = Math.max(pt.p, FLOOR);
+        map.set(pt.iteration, row);
       }
     });
     return Array.from(map.values()).sort((a, b) => a.iteration - b.iteration);
   }, [pinnedRuns]);
 
-  if (!open) {
+  if (!embedded && !open) {
     return (
       <button
         onClick={() => onOpenChange(true)}
@@ -206,14 +236,20 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
 
   return (
     <div
-      className="relative h-full shrink-0 border-l border-[#E1E4E8] bg-white flex flex-col select-none"
-      style={{ width }}
+      className={
+        embedded
+          ? 'relative w-full h-full min-h-0 bg-white flex flex-col select-none'
+          : 'relative h-full shrink-0 border-l border-[#E1E4E8] bg-white flex flex-col select-none'
+      }
+      style={embedded ? undefined : { width }}
     >
-      <div
-        onMouseDown={startDrag}
-        title="Drag to resize"
-        className="absolute left-0 top-0 bottom-0 -ml-1 w-2 cursor-col-resize z-10 hover:bg-[#2563EB]/30 transition-colors"
-      />
+      {!embedded && (
+        <div
+          onMouseDown={startDrag}
+          title="Drag to resize"
+          className="absolute left-0 top-0 bottom-0 -ml-1 w-2 cursor-col-resize z-10 hover:bg-[#2563EB]/30 transition-colors"
+        />
+      )}
 
       <div className="h-9 px-3 flex items-center justify-between border-b border-[#E1E4E8] bg-[#F5F6F8] shrink-0">
         <div className="flex items-center gap-2">
@@ -239,13 +275,15 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
           >
             Compare
           </button>
-          <button
-            onClick={() => onOpenChange(false)}
-            title="Collapse"
-            className="p-1 rounded text-[#69717D] hover:bg-[#E1E4E8]"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
+          {!embedded && (
+            <button
+              onClick={() => onOpenChange(false)}
+              title="Collapse"
+              className="p-1 rounded text-[#69717D] hover:bg-[#E1E4E8]"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -341,7 +379,10 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
               <div key={run.id} className="flex flex-col">
                 {/* Collapsed Row */}
                 <div
-                  onClick={() => setExpandedId(isExpanded ? null : run.id)}
+                  onClick={() => {
+                    setExpandedId(isExpanded ? null : run.id);
+                    onSelectRun?.(run.id);
+                  }}
                   className={`group px-3 py-2 flex items-center justify-between gap-2 cursor-pointer transition-colors ${
                     isExpanded ? 'bg-[#F0F5FF]' : 'hover:bg-[#F5F6F8]'
                   }`}
@@ -423,6 +464,11 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2 shrink-0">
+                    {selectedRunId === run.id && (
+                      <span className="text-[10px] font-semibold text-[#2563EB] bg-blue-100/70 px-1.5 py-0.5 rounded">
+                        Viewing
+                      </span>
+                    )}
                     <span className="text-[10px] text-[#8A929E] font-mono">
                       {shortDateStr}
                     </span>
@@ -489,6 +535,45 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
                       <span className="text-[11px] font-mono text-[#69717D]">
                         {formatDuration(durationMs)}
                       </span>
+                    </div>
+
+                    {/* Flow field in viewport control */}
+                    <div className="flex items-center justify-between gap-2 p-2 bg-white border border-[#EDEFF3] rounded">
+                      <div className="flex items-center gap-1.5 text-[11px]">
+                        <span className="text-[#69717D]">Flow field:</span>
+                        {historicalFieldStatus?.runId === run.id && historicalFieldStatus.loading ? (
+                          <span className="text-[#2563EB] font-mono text-[10px] flex items-center gap-1">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Loading snapshot...
+                          </span>
+                        ) : historicalFieldStatus?.runId === run.id && historicalFieldStatus.error ? (
+                          <span className="text-[#DC2626] font-mono text-[10px]">
+                            No stored field
+                          </span>
+                        ) : selectedRunId === run.id ? (
+                          <span className="text-[#16A34A] font-semibold text-[10px]">
+                            Active in viewport
+                          </span>
+                        ) : (
+                          <span className="text-[#8A929E] text-[10px]">Stored snapshot</span>
+                        )}
+                      </div>
+                      {selectedRunId === run.id ? (
+                        <span className="px-2 py-0.5 bg-[#F5F6F8] text-[#8A929E] rounded text-[10px] font-medium">
+                          Viewing
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectRun?.(run.id);
+                          }}
+                          className="px-2 py-0.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded text-[10px] font-medium transition-colors cursor-pointer"
+                        >
+                          View in Viewport
+                        </button>
+                      )}
                     </div>
 
                     {/* 2. Config chips */}
@@ -613,9 +698,9 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
                       )}
                     </div>
 
-                    {/* 6. Muted note */}
+                    {/* 6. Viewport note */}
                     <div className="text-[10px] text-[#8A929E] italic leading-tight">
-                      Result fields for past runs are not stored - only the most recent run's fields load in the viewport.
+                      Selecting this run renders its captured mesh and velocity/pressure contours in the viewport.
                     </div>
                   </div>
                 )}
