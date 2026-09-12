@@ -37,9 +37,45 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   const [reSampling, setReSampling] = useState(false);
   const [reSampleError, setReSampleError] = useState<string | null>(null);
 
-  if (!open || !plot) return null;
+  // Hooks must run unconditionally on every render, so the chart data/series
+  // memos (and their null-safe inputs) live here, above the early return
+  // below - do not move them after the `if (!open || !plot)` guard.
+  const distances = plot?.data?.distance ?? [];
+  const rawValues = plot?.data?.values ?? [];
 
-  const activeThemeColor = COLORMAP_COLORS[plot.colormap] || '#2563EB';
+  const chartData = useMemo(() => {
+    const rows: Array<Record<string, number>> = [];
+    for (let i = 0; i < distances.length; i++) {
+      let v = rawValues[i];
+      if (typeof v !== 'number' || !isFinite(v)) {
+        v = NaN;
+      } else {
+        if (plot?.rangeMin != null && v < plot.rangeMin) v = NaN;
+        if (plot?.rangeMax != null && v > plot.rangeMax) v = NaN;
+      }
+      rows.push({
+        distance: distances[i],
+        [plot?.variable ?? 'value']: v,
+      });
+    }
+    return rows;
+  }, [distances, rawValues, plot?.variable, plot?.rangeMin, plot?.rangeMax]);
+
+  const series: ChartSeries[] = useMemo(
+    () =>
+      plot
+        ? [
+            {
+              key: plot.variable,
+              name: getVariableLabel(plot.variable),
+              color: COLORMAP_COLORS[plot.colormap] || '#2563EB',
+            },
+          ]
+        : [],
+    [plot?.variable, plot?.colormap],
+  );
+
+  if (!open || !plot) return null;
 
   const handleStartRename = () => {
     setNameVal(plot.name);
@@ -155,39 +191,6 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
       onClose();
     }
   };
-
-  // Prepare chart series & data rows
-  const distances = plot.data?.distance ?? [];
-  const rawValues = plot.data?.values ?? [];
-
-  const chartData = useMemo(() => {
-    const rows: Array<Record<string, number>> = [];
-    for (let i = 0; i < distances.length; i++) {
-      let v = rawValues[i];
-      if (typeof v !== 'number' || !isFinite(v)) {
-        v = NaN;
-      } else {
-        if (plot.rangeMin !== null && v < plot.rangeMin) v = NaN;
-        if (plot.rangeMax !== null && v > plot.rangeMax) v = NaN;
-      }
-      rows.push({
-        distance: distances[i],
-        [plot.variable]: v,
-      });
-    }
-    return rows;
-  }, [distances, rawValues, plot.variable, plot.rangeMin, plot.rangeMax]);
-
-  const series: ChartSeries[] = useMemo(
-    () => [
-      {
-        key: plot.variable,
-        name: getVariableLabel(plot.variable),
-        color: activeThemeColor,
-      },
-    ],
-    [plot.variable, activeThemeColor],
-  );
 
   const lineLength = Math.hypot(
     plot.line.p2[0] - plot.line.p1[0],
