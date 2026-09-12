@@ -17,14 +17,14 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
       <div className="space-y-1.5">
         <label className="font-semibold text-slate-800 flex items-center justify-between">
           <span className="flex items-center gap-1.5">
-            <Activity className="w-3.5 h-3.5 text-blue-600" />
+            <Activity className="w-3.5 h-3.5 text-[#69717D]" />
             <span>Flow Regime</span>
           </span>
         </label>
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => onChange({ regime: 'laminar' })}
-            className={`py-2 rounded-lg font-medium border text-center transition-all ${
+            className={`py-2 rounded font-medium border text-center transition-all ${
               config.regime === 'laminar'
                 ? 'bg-blue-600 text-white border-blue-600 '
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
@@ -34,7 +34,7 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
           </button>
           <button
             onClick={() => onChange({ regime: 'turbulent' })}
-            className={`py-2 rounded-lg font-medium border text-center transition-all ${
+            className={`py-2 rounded font-medium border text-center transition-all ${
               config.regime === 'turbulent'
                 ? 'bg-blue-600 text-white border-blue-600 '
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
@@ -47,7 +47,7 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
 
       {/* Dynamic Turbulence Model Selection & Branching */}
       {config.regime === 'turbulent' && (
-        <div className="p-3 bg-blue-50/40 border border-blue-100 rounded-lg space-y-3">
+        <div className="p-3 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-3">
           <div>
             <label className="font-semibold text-slate-800 block mb-1">
               Turbulence Model Branch
@@ -55,7 +55,7 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
             <select
               value={config.turbulenceModel}
               onChange={(e) => onChange({ turbulenceModel: e.target.value as TurbulenceModel })}
-              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium text-slate-800"
+              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium text-slate-800"
             >
               <option value="kOmegaSST">k-ω SST (Menter Shear Stress Transport)</option>
               <option value="kEpsilon">Standard k-ε Model</option>
@@ -66,7 +66,7 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
           </div>
 
           {/* Dynamic Model-Specific Constants */}
-          <div className="p-2.5 bg-white border border-slate-200 rounded-md space-y-2">
+          <div className="p-2.5 bg-white border border-slate-200 rounded space-y-2">
             <span className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider block">
               {config.turbulenceModel === 'kOmegaSST' && 'k-ω SST Closure Constants'}
               {config.turbulenceModel.includes('kEpsilon') && 'k-ε Empirical Constants'}
@@ -231,7 +231,7 @@ export const PhysicsTurbulencePanel: React.FC<PhysicsTurbulencePanelProps> = ({
       )}
 
       {/* Fluid Transport Properties */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider flex items-center justify-between">
           <span>Fluid Properties</span>
           <Droplet className="w-3.5 h-3.5 text-slate-400" />

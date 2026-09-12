@@ -53,7 +53,7 @@ const ToastItem: React.FC<ToastRow> = ({ id, msg, kind, expiring }) => {
   return (
     <div
       data-enter={entered && !expiring}
-      className="toast-item pointer-events-auto flex items-start gap-3 w-[360px] max-w-[86vw] rounded-xl bg-white border border-[#E4E7EC] pl-3.5 pr-3 py-3 overflow-hidden"
+      className="toast-item pointer-events-auto flex items-start gap-3 w-[360px] max-w-[86vw] rounded bg-white border border-[#E4E7EC] pl-3.5 pr-3 py-3 overflow-hidden"
       style={{ borderLeft: `3px solid ${BAR[kind]}` }}
     >
       <span className="mt-0.5 shrink-0">{ICON[kind]}</span>

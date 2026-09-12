@@ -234,7 +234,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   return (
     <div className="relative w-full h-full bg-white overflow-hidden flex flex-col select-none">
       {/* Top Floating Viewport Toolbar */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white/95 backdrop-blur border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700">
+      <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1.5 text-xs text-[#171A1F]">
         <button
           onClick={onToggleWireframe}
           className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${

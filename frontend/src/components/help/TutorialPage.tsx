@@ -51,13 +51,13 @@ const S: React.FC<{ n: number; children: React.ReactNode }> = ({ n, children }) 
 );
 
 const Note: React.FC<{ tone?: 'info' | 'warn'; children: React.ReactNode }> = ({ tone = 'info', children }) => (
-  <div className={`my-3 p-3 rounded-lg text-[12px] leading-relaxed border ${
+  <div className={`my-3 p-3 rounded text-[12px] leading-relaxed border ${
     tone === 'warn' ? 'bg-amber-50 border-amber-200 text-[#92400E]' : 'bg-blue-50 border-blue-200 text-[#1D4ED8]'
   }`}>{children}</div>
 );
 
 const Fig: React.FC<{ children: React.ReactNode; caption?: string }> = ({ children, caption }) => (
-  <figure className="my-4 border border-[#E1E4E8] rounded-xl bg-[#FAFBFC] p-4 max-w-md">
+  <figure className="my-4 border border-[#E1E4E8] rounded bg-[#FAFBFC] p-4 max-w-md">
     <svg viewBox="0 0 260 160" className="w-full">{children}</svg>
     {caption && <figcaption className="text-[11px] text-[#69717D] mt-2">{caption}</figcaption>}
   </figure>
@@ -209,7 +209,7 @@ export const TutorialPage: React.FC = () => {
             <button
               key={s.id}
               onClick={() => go(s.id)}
-              className={`w-full text-left px-3 py-2 rounded-md text-[12px] leading-snug transition-colors ${
+              className={`w-full text-left px-3 py-2 rounded-sm text-[12px] leading-snug transition-colors ${
                 active === s.id ? 'bg-blue-50 text-[#1D4ED8] font-semibold' : 'text-[#69717D] hover:bg-[#F1F3F5] hover:text-[#171A1F]'
               }`}
             >

@@ -137,7 +137,7 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
             onClick={() =>
               setPhysics({ compressibility: 'incompressible', equationOfState: 'constantDensity', energyModel: 'disabled', speedRegime: 'incompressible' })
             }
-            className={`w-full p-3 rounded-lg border text-left transition-all ${
+            className={`w-full p-3 rounded border text-left transition-all ${
               !compressible ? 'bg-blue-50 border-[#2563EB] ring-1 ring-[#2563EB]' : 'border-[#E1E4E8] hover:bg-[#F8F9FA]'
             }`}
           >
@@ -151,7 +151,7 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
             onClick={() =>
               setPhysics({ compressibility: 'compressible', equationOfState: 'perfectGas', energyModel: 'enabled', speedRegime: flow.regimeHint === 'incompressible' ? 'subsonic' : flow.regimeHint })
             }
-            className={`w-full p-3 rounded-lg border text-left transition-all ${
+            className={`w-full p-3 rounded border text-left transition-all ${
               compressible ? 'bg-blue-50 border-[#2563EB] ring-1 ring-[#2563EB]' : 'border-[#E1E4E8] hover:bg-[#F8F9FA]'
             }`}
           >
@@ -167,7 +167,7 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
         <span className="text-[11px] font-semibold text-[#A5ACB5] uppercase tracking-wider block mb-2">Other modes</span>
         <div className="space-y-1">
           {lockedModes.map(([id, label, Icon]) => (
-            <div key={id} className="p-2.5 rounded-lg flex items-center gap-2.5 text-[#A5ACB5] cursor-not-allowed">
+            <div key={id} className="p-2.5 rounded flex items-center gap-2.5 text-[#A5ACB5] cursor-not-allowed">
               <LockKeyhole className="w-3.5 h-3.5 shrink-0" />
               <Icon className="w-3.5 h-3.5 shrink-0" />
               <span className="text-[11px] leading-tight">

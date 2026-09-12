@@ -15,7 +15,7 @@ const ORDER_OPTS: Array<[SpatialOrder, string]> = [
 const num =
   'w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded font-mono text-[11px] text-[#171A1F] focus:outline-none focus:border-[#2563EB]';
 const sel =
-  'w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-md text-[11px] text-[#171A1F] focus:outline-none focus:border-[#2563EB]';
+  'w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm text-[11px] text-[#171A1F] focus:outline-none focus:border-[#2563EB]';
 
 /** Numeric input with a local editing buffer. Controlled numeric values cannot
  * represent an empty string, so parsing directly in onChange makes backspace
@@ -117,7 +117,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
             <button
               key={t}
               onClick={() => chooseRegime(t)}
-              className={`py-2 rounded-lg border text-[11px] font-medium transition-colors ${
+              className={`py-2 rounded border text-[11px] font-medium transition-colors ${
                 (t === 'transient') === transient
                   ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]'
                   : 'border-[#E1E4E8] text-[#69717D] bg-white'
@@ -270,7 +270,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
       <div className="shrink-0 px-4 pt-3 pb-3 border-t border-[#E1E4E8] bg-white space-y-2">
         <button
           onClick={running ? onStop : onRun}
-          className={`w-full py-2 font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors ${
+          className={`w-full py-2 font-medium rounded-sm flex items-center justify-center gap-1.5 transition-colors ${
             running ? 'bg-[#DC2626] hover:bg-[#B91C1C] text-white' : 'bg-[#2563EB] hover:bg-[#1D4ED8] text-white'
           }`}
         >

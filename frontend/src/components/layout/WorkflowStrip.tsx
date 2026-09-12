@@ -74,7 +74,7 @@ export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
           onClick={onOpenCaseFiles}
           disabled={caseFilesCount === 0}
           title={caseFilesCount === 0 ? 'Case files appear once the case is set up' : 'Browse the OpenFOAM case dictionaries'}
-          className="ml-auto shrink-0 h-7 inline-flex items-center gap-1.5 rounded-md border border-[#E1E4E8] px-2.5 text-[11px] font-medium text-[#69717D] hover:text-[#171A1F] hover:border-[#C4D4F5] hover:bg-[#F7F9FF] disabled:opacity-40 disabled:pointer-events-none transition-colors"
+          className="ml-auto shrink-0 h-7 inline-flex items-center gap-1.5 rounded-sm border border-[#E1E4E8] px-2.5 text-[11px] font-medium text-[#69717D] hover:text-[#171A1F] hover:border-[#C4D4F5] hover:bg-[#F7F9FF] disabled:opacity-40 disabled:pointer-events-none transition-colors"
         >
           <FileCode className="w-3.5 h-3.5" />
           OpenFOAM Dicts

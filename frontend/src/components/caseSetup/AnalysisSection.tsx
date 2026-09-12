@@ -20,7 +20,7 @@ export const AnalysisSection: React.FC<
     >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Field label="Flow topology" hint="Set in Geometry ▸ Domain">
-          <div className="w-full px-2.5 py-2 bg-[#F5F6F8] border border-[#DDE2E8] rounded-md text-xs text-[#69717D] capitalize">
+          <div className="w-full px-2.5 py-2 bg-[#F5F6F8] border border-[#DDE2E8] rounded-sm text-xs text-[#69717D] capitalize">
             {flowType} flow
           </div>
         </Field>

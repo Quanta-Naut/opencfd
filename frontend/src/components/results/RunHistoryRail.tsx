@@ -223,12 +223,12 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
         title="Open run history"
         className="h-full w-9 shrink-0 border-l border-[#E1E4E8] bg-white hover:bg-[#F5F6F8] flex flex-col items-center justify-center gap-2 text-[#69717D]"
       >
-        <History className={`w-4 h-4 ${executionStatus === 'running' ? 'text-[#2563EB]' : ''}`} />
+        <History className={`w-4 h-4 ${executionStatus === 'running' ? 'text-[#10B981]' : ''}`} />
         <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-semibold uppercase tracking-wider">
           RUNS
         </span>
         {executionStatus === 'running' && (
-          <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] animate-pulse" />
+          <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse" />
         )}
       </button>
     );
@@ -465,7 +465,7 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
 
                   <div className="flex items-center gap-2 shrink-0">
                     {selectedRunId === run.id && (
-                      <span className="text-[10px] font-semibold text-[#2563EB] bg-blue-100/70 px-1.5 py-0.5 rounded">
+                      <span className="text-[10px] font-semibold text-[#171A1F] bg-[#EFF6FF] border border-[#2563EB]/30 px-1.5 py-0.5 rounded-sm">
                         Viewing
                       </span>
                     )}

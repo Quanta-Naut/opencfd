@@ -35,7 +35,7 @@ export const BoundarySection: React.FC<
 
   if (patches.length === 0) {
     return (
-      <section className="bg-white border border-[#E1E4E8] rounded-xl p-5 xl:col-span-2">
+      <section className="bg-white border border-[#E1E4E8] rounded p-5 xl:col-span-2">
         <div className="flex items-center gap-2 mb-2">
           <SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />
           <h2 className="text-[13px] font-bold text-[#171A1F]">Boundary conditions</h2>
@@ -48,7 +48,7 @@ export const BoundarySection: React.FC<
   }
 
   return (
-    <section className="bg-white border border-[#E1E4E8] rounded-xl p-5 xl:col-span-2 space-y-3">
+    <section className="bg-white border border-[#E1E4E8] rounded p-5 xl:col-span-2 space-y-3">
       <div className="flex items-center gap-2">
         <SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />
         <div>
@@ -87,7 +87,7 @@ const PatchRow: React.FC<{
   const isWall = bc.kind === 'noSlipWall' || bc.kind === 'movingWall' || bc.kind === 'rotatingWall';
 
   return (
-    <div className="border border-[#E1E4E8] rounded-lg p-3 space-y-2">
+    <div className="border border-[#E1E4E8] rounded p-3 space-y-2">
       <span className="flex items-center gap-2 text-[11px] font-semibold text-[#171A1F]">
         <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: ROLE_COLOR[role] }} />
         {name}

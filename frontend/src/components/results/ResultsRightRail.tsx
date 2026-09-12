@@ -197,17 +197,17 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
 
       {/* Unified Tab Switcher Header */}
       <div className="h-9 px-2 flex items-center justify-between border-b border-[#E1E4E8] bg-[#F5F6F8] shrink-0">
-        <div className="flex items-center gap-1 bg-[#EAECEF] p-0.5 rounded-md">
+        <div className="flex items-center gap-1 bg-[#EAECEF] p-0.5 rounded">
           <button
             type="button"
             onClick={() => handleTabChange('plots')}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'plots'
-                ? 'bg-white text-[#171A1F] shadow-xs'
+                ? 'bg-white text-[#171A1F]'
                 : 'text-[#69717D] hover:text-[#171A1F]'
             }`}
           >
-            <LineChart className="w-3.5 h-3.5 text-[#2563EB]" />
+            <LineChart className={`w-3.5 h-3.5 ${activeTab === 'plots' ? 'text-[#2563EB]' : 'text-[#69717D]'}`} />
             <span>Plots</span>
             {plots.length > 0 && (
               <span
@@ -227,7 +227,7 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
             onClick={() => handleTabChange('runs')}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
               activeTab === 'runs'
-                ? 'bg-white text-[#171A1F] shadow-xs'
+                ? 'bg-white text-[#171A1F]'
                 : 'text-[#69717D] hover:text-[#171A1F]'
             }`}
           >

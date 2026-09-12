@@ -70,7 +70,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex items-center justify-center h-screen w-screen bg-[#F5F6F8] text-[#171A1F] font-sans px-6">
-      <div className="w-full max-w-md bg-white border border-[#E1E4E8] rounded-xl p-7 ">
+      <div className="w-full max-w-md bg-white border border-[#E1E4E8] rounded p-7 ">
         {phase === 'checking' && (
           <div className="flex items-center gap-3 text-sm text-[#69717D]">
             <Loader2 className="w-4 h-4 animate-spin" /> Starting the OpenCFD engine...
@@ -111,7 +111,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
             </p>
             <button
               onClick={() => setSkipped(true)}
-              className="mt-5 w-full py-2 rounded-md bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[13px] font-medium"
+              className="mt-5 w-full py-2 rounded-sm bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[13px] font-medium"
             >
               Continue with the mock solver
             </button>
@@ -129,7 +129,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
             </p>
             <button
               onClick={provision}
-              className="mt-5 w-full py-2 rounded-md bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[13px] font-medium"
+              className="mt-5 w-full py-2 rounded-sm bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[13px] font-medium"
             >
               Install the OpenFOAM solver
             </button>
@@ -159,7 +159,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
             <p className="text-[13px] text-[#69717D] leading-relaxed mt-3 break-words">{error}</p>
             <button
               onClick={provision}
-              className="mt-5 w-full py-2 rounded-md bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[13px] font-medium flex items-center justify-center gap-2"
+              className="mt-5 w-full py-2 rounded-sm bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-[13px] font-medium flex items-center justify-center gap-2"
             >
               <RefreshCw className="w-3.5 h-3.5" /> Try again
             </button>

@@ -28,7 +28,7 @@ export const ColormapLegend: React.FC<ColormapLegendProps> = ({
   };
 
   return (
-    <div className="absolute bottom-4 right-4 bg-white/95 backdrop-blur border border-slate-200 rounded-lg p-3 w-64 pointer-events-auto">
+    <div className="absolute bottom-4 right-4 bg-white border border-[#E1E4E8] rounded p-3 w-64 pointer-events-auto">
       <div className="flex justify-between items-center mb-1 text-xs font-semibold text-slate-700">
         <span>{fieldName}</span>
         <span className="text-slate-400 font-mono font-normal">[{unit}]</span>

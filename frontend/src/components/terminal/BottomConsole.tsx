@@ -42,7 +42,7 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
             <Terminal className="w-3.5 h-3.5" />
             <span>Terminal Output</span>
             {terminalLogs.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.2 bg-slate-200 text-slate-600 rounded-full text-[10px]">
+              <span className="ml-1 px-1.5 py-0.5 bg-slate-200 text-slate-600 rounded-sm text-[10px] font-mono">
                 {terminalLogs.length}
               </span>
             )}
@@ -59,7 +59,7 @@ export const BottomConsole: React.FC<BottomConsoleProps> = ({
             <LineChart className="w-3.5 h-3.5" />
             <span>Residuals Convergence</span>
             {residuals.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.2 bg-blue-100 text-blue-700 rounded-full text-[10px]">
+              <span className="ml-1 px-1.5 py-0.5 bg-[#EFF6FF] text-[#2563EB] rounded-sm text-[10px] font-mono">
                 {residuals.length} iter
               </span>
             )}

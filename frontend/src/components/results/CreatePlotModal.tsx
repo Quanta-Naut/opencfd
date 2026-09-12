@@ -142,13 +142,13 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/50 backdrop-blur-[2px] p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/50 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !loading) onClose();
       }}
     >
       <div
-        className="w-full max-w-lg rounded-xl bg-white border border-[#E4E7EC] shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-lg rounded bg-white border border-[#E4E7EC] flex flex-col overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Create New Plot"
@@ -156,7 +156,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#EDEFF3] bg-[#FAFBFC]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#2563EB] text-white flex items-center justify-center shadow-sm">
+            <div className="w-8 h-8 rounded bg-[#F5F6F8] border border-[#E1E4E8] text-[#171A1F] flex items-center justify-center">
               <LineChart className="w-4 h-4" />
             </div>
             <div>
@@ -169,16 +169,16 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
           <button
             onClick={onClose}
             disabled={loading}
-            className="p-1 rounded-md text-[#69717D] hover:bg-[#EEF1F5] transition-colors disabled:opacity-50"
+            className="p-1 rounded text-[#69717D] hover:bg-[#EEF1F5] transition-colors disabled:opacity-50"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Target Run info */}
-        <div className="px-5 py-2.5 bg-[#F0F5FF] border-b border-[#DBEAFE] flex items-center justify-between text-xs">
-          <span className="text-[#1E40AF] font-medium">Sampling Target:</span>
-          <span className="font-mono text-[#1E3A8A] font-semibold">
+        <div className="px-5 py-2 bg-[#F8F9FA] border-b border-[#E1E4E8] flex items-center justify-between text-xs">
+          <span className="text-[#69717D] font-medium">Sampling Target:</span>
+          <span className="font-mono text-[#171A1F] font-semibold">
             {targetRunLabel || targetRunId ? `${targetRunLabel || targetRunId}` : 'No active run found'}
           </span>
         </div>
@@ -203,7 +203,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Centerline Velocity"
-              className="w-full px-3 py-1.5 bg-white border border-[#E1E4E8] rounded-md text-xs text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+              className="w-full px-3 py-1.5 bg-white border border-[#E1E4E8] rounded-sm text-xs text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
             />
           </div>
 
@@ -216,7 +216,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               <select
                 value={variable}
                 onChange={(e) => setVariable(e.target.value as FlowVariable)}
-                className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-md font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
               >
                 {FLOW_VARIABLES.map((v) => (
                   <option key={v.id} value={v.id}>
@@ -250,7 +250,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
           </div>
 
           {/* Line Definition: Points & Pick Mode */}
-          <div className="border border-[#E1E4E8] rounded-lg p-3 bg-[#F9FAFB] space-y-3">
+          <div className="border border-[#E1E4E8] rounded p-3 bg-[#F9FAFB] space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold text-[#171A1F] uppercase tracking-wider">
                 Line Coordinates (meters)
@@ -258,7 +258,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               <button
                 type="button"
                 onClick={onStartPickPoints}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2563EB] hover:text-[#1D4ED8] bg-white border border-[#2563EB]/40 px-2 py-1 rounded shadow-xs hover:bg-[#F0F5FF] transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2563EB] hover:text-[#1D4ED8] bg-white border border-[#2563EB]/40 px-2 py-1 rounded hover:bg-[#F0F5FF] transition-colors cursor-pointer"
               >
                 <Crosshair className="w-3.5 h-3.5" />
                 <span>Pick on Viewport</span>
@@ -352,14 +352,14 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               type="button"
               onClick={onClose}
               disabled={loading}
-              className="px-3.5 py-1.5 text-xs font-medium text-[#69717D] hover:bg-[#F5F6F8] rounded-md transition-colors"
+              className="px-3.5 py-1.5 text-xs font-medium text-[#69717D] hover:bg-[#F5F6F8] rounded-sm transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading || !targetRunId}
-              className="px-4 py-1.5 text-xs font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-md transition-colors flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               {loading ? (
                 <>

@@ -32,7 +32,7 @@ export const SolverControlPanel: React.FC<SolverControlPanelProps> = ({
         <select
           value={physics.solver}
           onChange={(e) => onChangePhysics({ solver: e.target.value as SolverType })}
-          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium font-mono text-slate-800"
+          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium font-mono text-slate-800"
         >
           <option value="simpleFoam">simpleFoam (Steady Incompressible RANS)</option>
           <option value="icoFoam">icoFoam (Transient Incompressible Laminar)</option>
@@ -42,7 +42,7 @@ export const SolverControlPanel: React.FC<SolverControlPanelProps> = ({
       </div>
 
       {/* Iterations and Time Controls */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider flex items-center justify-between">
           <span>Simulation Time & Steps</span>
           <Settings className="w-3.5 h-3.5 text-slate-400" />
@@ -75,7 +75,7 @@ export const SolverControlPanel: React.FC<SolverControlPanelProps> = ({
       </div>
 
       {/* Under-Relaxation Factors */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-2.5">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider flex items-center justify-between">
           <span>Relaxation Factors (fvSolution)</span>
           <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400" />
@@ -156,7 +156,7 @@ export const SolverControlPanel: React.FC<SolverControlPanelProps> = ({
       {executionStatus === 'running' ? (
         <button
           onClick={onStopSolver}
-          className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+          className="w-full py-2.5 bg-red-600 hover:bg-red-700 text-white font-semibold rounded flex items-center justify-center gap-2 transition-colors"
         >
           <Square className="w-3.5 h-3.5 fill-current" />
           <span>Stop Solver Execution</span>
@@ -164,7 +164,7 @@ export const SolverControlPanel: React.FC<SolverControlPanelProps> = ({
       ) : (
         <button
           onClick={onRunSolver}
-          className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors"
+          className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded flex items-center justify-center gap-2 transition-colors"
         >
           <Play className="w-3.5 h-3.5 fill-current" />
           <span>▶ Run OpenFOAM Solver</span>

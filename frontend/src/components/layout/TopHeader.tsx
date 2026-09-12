@@ -38,13 +38,13 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           <button
             onClick={onExitHome}
             title="Back to projects"
-            className="flex items-center gap-1 px-2 py-1 -ml-1 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded-md transition-colors shrink-0"
+            className="flex items-center gap-1 px-2 py-1 -ml-1 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded-sm transition-colors shrink-0"
           >
             <LayoutGrid className="w-4 h-4" />
             <span className="text-xs font-medium">Projects</span>
           </button>
         )}
-        <div className="w-7 h-7 bg-[#171A1F] rounded-md flex items-center justify-center text-white shrink-0">
+        <div className="w-7 h-7 bg-[#171A1F] rounded flex items-center justify-center text-white shrink-0">
           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M4 14c4-7 14-8 16-8-2 8-10 10-16 8z" />
             <path d="M7 14c3-3 8-4 12-5" />
@@ -84,14 +84,14 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         <div className="relative">
           <button
             onClick={() => setShowMenu(!showMenu)}
-            className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded-md transition-colors"
+            className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded transition-colors"
             title="Options"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
 
           {showMenu && (
-            <div className="absolute right-0 mt-1 w-48 bg-white border border-[#E1E4E8] rounded-lg py-1 z-50 text-xs text-[#171A1F]">
+            <div className="absolute right-0 mt-1 w-48 bg-white border border-[#E1E4E8] rounded py-1 z-50 text-xs text-[#171A1F]">
               <button
                 onClick={() => setShowMenu(false)}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#F5F6F8] flex items-center gap-2"

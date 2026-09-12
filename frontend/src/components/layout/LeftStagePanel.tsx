@@ -208,7 +208,7 @@ const StageGate: React.FC<{
   onCta?: () => void;
 }> = ({ title, reason, missing, ctaLabel = 'Go to Geometry', onCta }) => (
   <div className="p-4">
-    <div className="p-4 bg-[#F8F9FA] border border-[#E1E4E8] rounded-lg">
+    <div className="p-4 bg-[#F8F9FA] border border-[#E1E4E8] rounded">
       <div className="flex items-center gap-2 mb-1.5">
         <Lock className="w-4 h-4 text-[#69717D]" />
         <span className="text-[12px] font-bold text-[#171A1F]">{title}</span>
@@ -227,7 +227,7 @@ const StageGate: React.FC<{
       {onCta && (
         <button
           onClick={onCta}
-          className="w-full py-1.5 rounded-md bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-medium transition-colors"
+          className="w-full py-1.5 rounded-sm bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-medium transition-colors"
         >
           {ctaLabel}
         </button>
@@ -313,7 +313,7 @@ const StructuredMeshPanel: React.FC<{
           <button
             key={k}
             onClick={() => pick(k)}
-            className={`p-2 rounded-lg border text-left transition-colors ${
+            className={`p-2 rounded border text-left transition-colors ${
               kind === k
                 ? 'border-[#2563EB] bg-blue-50'
                 : 'bg-white border-[#E1E4E8] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'
@@ -332,7 +332,7 @@ const StructuredMeshPanel: React.FC<{
 
       <button
         onClick={() => onBuildBlocks?.(kind)}
-        className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-md transition-colors"
+        className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-sm transition-colors"
       >
         {hasBlocks ? 'Rebuild blocks' : 'Generate blocks'}
       </button>
@@ -657,7 +657,7 @@ const StructuredMeshPanel: React.FC<{
           </label>
         )}
 
-        <div className="p-2.5 bg-blue-50/60 border border-blue-100 rounded-md space-y-2">
+        <div className="p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold text-[#171A1F]">Wall resolution (y+)</span>
             <span className="text-[10px] text-[#69717D]">near-wall clustering</span>
@@ -698,7 +698,7 @@ const StructuredMeshPanel: React.FC<{
           <button
             onClick={applyYPlusClustering}
             disabled={wallCount === 0}
-            className="w-full py-1.5 px-2 rounded-md bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-medium transition-colors"
+            className="w-full py-1.5 px-2 rounded-sm bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-medium transition-colors"
           >
             Cluster wall-normal edges to y+
           </button>
@@ -715,7 +715,7 @@ const StructuredMeshPanel: React.FC<{
         {groupList.map(([gid, ids], i) => {
           const e = edgeById(ids[0]);
           return (
-            <div key={gid} className="p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded-lg space-y-2">
+            <div key={gid} className="p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-semibold text-[#171A1F]">Direction {String.fromCharCode(65 + i)}</span>
                 <span className="text-[10px] text-[#69717D] lowercase">along {patchLabel(ids)}</span>
@@ -739,7 +739,7 @@ const StructuredMeshPanel: React.FC<{
                 <select
                   value={e.law}
                   onChange={(ev) => applyToGroup(ids, { law: ev.target.value as EdgeLaw })}
-                  className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded-md text-[11px] focus:outline-none focus:border-[#2563EB]"
+                  className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded-sm text-[11px] focus:outline-none focus:border-[#2563EB]"
                 >
                   <option value="uniform">Uniform</option>
                   <option value="geometric">Geometric (cluster one end)</option>
@@ -1003,7 +1003,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
         const section = (n: CadWorkflowStep, label: string, body: React.ReactNode) => {
           const isOpen = openGeoSection === n;
           return (
-            <div className="border border-[#E1E4E8] rounded-lg bg-white overflow-hidden">
+            <div className="border border-[#E1E4E8] rounded bg-white overflow-hidden">
               <button
                 onClick={() => toggle(n)}
                 className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${isOpen ? 'bg-[#F8FAFC]' : 'hover:bg-[#F8FAFC]'}`}
@@ -1027,13 +1027,13 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 <input type="file" ref={fileInputDxfRef} onChange={handleDxfChange} accept=".dxf" className="hidden" />
 
                 <div className="grid grid-cols-2 gap-2">
-                  <button onClick={() => fileInputAirfoilRef.current?.click()} className="py-3 px-2 bg-white hover:bg-[#F8FAFC] border border-[#E1E4E8] hover:border-[#2563EB] rounded-lg font-medium flex flex-col items-center gap-1.5 transition-all">
-                    <Upload className="w-4 h-4 text-[#2563EB]" />
+                  <button onClick={() => fileInputAirfoilRef.current?.click()} className="group py-3 px-2 bg-white hover:bg-[#F8FAFC] border border-[#E1E4E8] hover:border-[#171A1F] rounded font-medium flex flex-col items-center gap-1.5 transition-all">
+                    <Upload className="w-4 h-4 text-[#69717D] group-hover:text-[#171A1F]" />
                     <span className="text-[11px] text-[#171A1F]">.dat / .csv</span>
                     <span className="text-[9px] text-[#A5ACB5]">airfoil coords</span>
                   </button>
-                  <button onClick={() => fileInputDxfRef.current?.click()} className="py-3 px-2 bg-white hover:bg-[#F8FAFC] border border-[#E1E4E8] hover:border-[#2563EB] rounded-lg font-medium flex flex-col items-center gap-1.5 transition-all">
-                    <FileCode className="w-4 h-4 text-[#2563EB]" />
+                  <button onClick={() => fileInputDxfRef.current?.click()} className="group py-3 px-2 bg-white hover:bg-[#F8FAFC] border border-[#E1E4E8] hover:border-[#171A1F] rounded font-medium flex flex-col items-center gap-1.5 transition-all">
+                    <FileCode className="w-4 h-4 text-[#69717D] group-hover:text-[#171A1F]" />
                     <span className="text-[11px] text-[#171A1F]">DXF drawing</span>
                     <span className="text-[9px] text-[#A5ACB5]">2D CAD outline</span>
                   </button>
@@ -1054,10 +1054,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       onChange={(e) => { setAirfoilUrl(e.target.value); if (urlError) setUrlError(null); }}
                       onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleImportUrl(); } }}
                       placeholder="Selig / UIUC .dat link…"
-                      className="w-full pl-8 pr-2 py-2 bg-[#F8FAFC] focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded-lg text-[11px] font-mono text-[#171A1F] outline-none transition-colors"
+                      className="w-full pl-8 pr-2 py-2 bg-[#F8FAFC] focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-[11px] font-mono text-[#171A1F] outline-none transition-colors"
                     />
                   </div>
-                  <button onClick={handleImportUrl} disabled={!airfoilUrl.trim() || isFetchingUrl} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 text-white rounded-lg text-[11px] font-semibold transition-colors">
+                  <button onClick={handleImportUrl} disabled={!airfoilUrl.trim() || isFetchingUrl} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 text-white rounded text-[11px] font-semibold transition-colors">
                     {isFetchingUrl ? 'Fetching…' : 'Fetch airfoil'}
                   </button>
                   {urlError && <span className="text-[10px] text-red-600 block leading-tight">{urlError}</span>}
@@ -1065,7 +1065,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
                 <div className="flex items-center justify-between pt-1">
                   <span className="text-[10px] text-[#A5ACB5]">Everything you draw here is geometry.</span>
-                  <button onClick={onClearGeometry} title="Clear all geometry" className="px-2.5 py-1.5 bg-white hover:bg-red-50 hover:text-[#DC2626] hover:border-red-200 text-[#A5ACB5] border border-[#E1E4E8] rounded-lg transition-colors">
+                  <button onClick={onClearGeometry} title="Clear all geometry" className="px-2.5 py-1.5 bg-white hover:bg-red-50 hover:text-[#DC2626] hover:border-red-200 text-[#A5ACB5] border border-[#E1E4E8] rounded transition-colors">
                     <RotateCcw className="w-3 h-3" />
                   </button>
                 </div>
@@ -1084,7 +1084,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     <button
                       key={v}
                       onClick={() => setFlowType?.(v)}
-                      className={`py-2 px-2.5 rounded-lg border text-left transition-colors ${sel(flowType === v)}`}
+                      className={`py-2 px-2.5 rounded border text-left transition-colors ${sel(flowType === v)}`}
                     >
                       <span className="block text-[11px] font-semibold">{label}</span>
                       <span className={`block text-[9px] ${flowType === v ? 'text-[#3B82F6]' : 'text-[#A5ACB5]'}`}>{hint}</span>
@@ -1093,7 +1093,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 </div>
 
                 {isInternal ? (
-                  <div className="p-2.5 bg-[#F8FAFC] border border-[#E1E4E8] rounded-lg text-[10px] text-[#69717D] leading-relaxed">
+                  <div className="p-2.5 bg-[#F8FAFC] border border-[#E1E4E8] rounded text-[10px] text-[#69717D] leading-relaxed">
                     The geometry walls bound the fluid directly - no outer domain is generated.
                     Tag the open ends as <b className="text-[#171A1F]">inlet</b> / <b className="text-[#171A1F]">outlet</b> and the
                     solid sides as <b className="text-[#171A1F]">wall</b> in step 3.
@@ -1122,7 +1122,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       }>
                         <button
                           onClick={onSetSelectedAsDomain}
-                          className={`w-full py-2 rounded-lg font-bold transition-colors text-white ${domainState === 'broken' ? 'bg-[#DC2626] hover:bg-[#B91C1C]' : 'bg-[#2563EB] hover:bg-[#1D4ED8]'}`}
+                          className={`w-full py-2 rounded font-bold transition-colors text-white ${domainState === 'broken' ? 'bg-[#DC2626] hover:bg-[#B91C1C]' : 'bg-[#2563EB] hover:bg-[#1D4ED8]'}`}
                         >
                           {domainState === 'ok' ? 'Redefine domain' : domainState === 'broken' ? 'Reselect & redefine' : 'Set as domain'}
                         </button>
@@ -1141,7 +1141,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                         ] as const).map(({ v, label }) => {
                           const on = domainShape === v;
                           return (
-                            <button key={v} onClick={() => setDomainShape?.(v)} className={`p-2 rounded-lg border flex flex-col items-center gap-1 transition-colors ${sel(on)}`}>
+                            <button key={v} onClick={() => setDomainShape?.(v)} className={`p-2 rounded border flex flex-col items-center gap-1 transition-colors ${sel(on)}`}>
                               <svg className="w-full h-7" viewBox="0 0 100 48" fill="none">
                                 {v === 'rectangle' && <rect x="6" y="6" width="88" height="36" rx="2" stroke={on ? '#2563EB' : '#94A3B8'} strokeWidth="1.5" strokeDasharray="3 2" fill="#EFF6FF" fillOpacity={on ? 0.7 : 0.15} />}
                                 {v === 'c_grid' && <path d="M94 8 L36 8 A16 16 0 0 0 36 40 L94 40 Z" stroke={on ? '#2563EB' : '#94A3B8'} strokeWidth="1.5" strokeDasharray="3 2" fill="#EFF6FF" fillOpacity={on ? 0.7 : 0.15} />}
@@ -1159,12 +1159,12 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       <span className="text-[10px] font-semibold text-[#69717D] block mb-1.5">Size preset</span>
                       <div className="grid grid-cols-4 gap-1.5">
                         {(['tight', 'standard', 'large', 'custom'] as DomainPreset[]).map((p) => (
-                          <button key={p} onClick={() => onApplyPreset(p)} className={`py-1.5 rounded-lg text-[10px] font-medium border transition-colors capitalize ${sel(domainPreset === p)}`}>{p}</button>
+                          <button key={p} onClick={() => onApplyPreset(p)} className={`py-1.5 rounded text-[10px] font-medium border transition-colors capitalize ${sel(domainPreset === p)}`}>{p}</button>
                         ))}
                       </div>
                     </div>
 
-                    <div className="bg-[#F8FAFC] border border-[#E1E4E8] rounded-lg p-2.5 space-y-2">
+                    <div className="bg-[#F8FAFC] border border-[#E1E4E8] rounded p-2.5 space-y-2">
                       <div className="flex justify-between items-center text-[10px] text-[#69717D]">
                         <span className="font-semibold">Clearance (chords)</span>
                         <span className="font-mono text-[#2563EB]">1c = {(geometryBBox?.chord ?? 1.0).toFixed(2)} m</span>
@@ -1193,7 +1193,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       </div>
                     )}
 
-                    <button onClick={onGenerateDomain} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg font-bold transition-colors">
+                    <button onClick={onGenerateDomain} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded font-bold transition-colors">
                       Generate domain
                     </button>
                     </div>
@@ -1220,7 +1220,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                         key={value}
                         onClick={() => setFlowDirection(value)}
                         title={`Inlet from ${label}`}
-                        className={`py-1.5 rounded-lg border flex flex-col items-center transition-colors ${sel(flowDirection === value)}`}
+                        className={`py-1.5 rounded border flex flex-col items-center transition-colors ${sel(flowDirection === value)}`}
                       >
                         <span className="text-sm font-bold leading-none">{icon}</span>
                         <span className="text-[9px] font-semibold font-mono">{label}</span>
@@ -1245,7 +1245,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                         <button
                           key={tag}
                           onClick={() => setActiveTagTool?.(isSel ? null : tag)}
-                          className={`py-1.5 px-2 rounded-lg text-[10px] font-semibold uppercase tracking-wider border transition-colors flex items-center gap-1.5 ${isSel ? `${conf.bg} ${conf.text}` : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F8FAFC]'}`}
+                          className={`py-1.5 px-2 rounded text-[10px] font-semibold uppercase tracking-wider border transition-colors flex items-center gap-1.5 ${isSel ? `${conf.bg} ${conf.text}` : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F8FAFC]'}`}
                           style={isSel ? { borderColor: conf.hex } : undefined}
                         >
                           <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: isSel ? conf.hex : '#CBD5E1' }} />
@@ -1263,7 +1263,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     setAngleOfAttackDeg?.(dirToAoa[flowDirection] ?? 0);
                     setTimeout(() => onAutoSuggestTags?.(), 30);
                   }}
-                  className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg font-bold transition-all active:scale-[0.99]"
+                  className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded font-bold transition-all active:scale-[0.99]"
                 >
                   Auto-tag edges
                 </button>
@@ -1303,7 +1303,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 />
               </div>
               <div className="shrink-0 px-4 pt-3 mt-3 border-t border-[#E1E4E8] bg-white">
-                <button disabled className="w-full py-2 bg-[#2563EB] text-white font-medium rounded-md opacity-40">
+                <button disabled className="w-full py-2 bg-[#2563EB] text-white font-medium rounded-sm opacity-40">
                   Generate mesh
                 </button>
               </div>
@@ -1318,8 +1318,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           <div>
             <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">Mesh topology</span>
             <div className="grid grid-cols-2 gap-1.5">
-              <button onClick={() => setMeshTopology('unstructured')} className={`py-2 rounded-lg border font-medium transition-colors ${meshTopology === 'unstructured' ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white border-[#E1E4E8] text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}>Unstructured</button>
-              <button onClick={() => setMeshTopology('structured')} className={`py-2 rounded-lg border font-medium transition-colors ${meshTopology === 'structured' ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white border-[#E1E4E8] text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}>Structured</button>
+              <button onClick={() => setMeshTopology('unstructured')} className={`py-2 rounded border font-medium transition-colors ${meshTopology === 'unstructured' ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white border-[#E1E4E8] text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}>Unstructured</button>
+              <button onClick={() => setMeshTopology('structured')} className={`py-2 rounded border font-medium transition-colors ${meshTopology === 'structured' ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white border-[#E1E4E8] text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}>Structured</button>
             </div>
             {meshTopology === 'structured' && (
               <span className="text-[10px] text-[#69717D] block mt-1">Block-structured all-quad mesh. Pick a topology and generate the blocks, then set cell counts.</span>
@@ -1350,7 +1350,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">Resolution</span>
                 <div className="grid grid-cols-3 gap-1.5">
                   {(['coarse', 'medium', 'fine'] as const).map((res) => (
-                    <button key={res} onClick={() => set({ meshResolution: res })} className={`py-1.5 rounded-lg capitalize font-medium border transition-colors ${g.meshResolution === res ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}>{res}</button>
+                    <button key={res} onClick={() => set({ meshResolution: res })} className={`py-1.5 rounded capitalize font-medium border transition-colors ${g.meshResolution === res ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}>{res}</button>
                   ))}
                 </div>
                 <span className="text-[10px] text-[#69717D] block mt-1">{resolutionHint[g.meshResolution]}</span>
@@ -1359,7 +1359,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               {/* Element type */}
               <label className="block">
                 <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">Element type</span>
-                <select value={g.elementType} onChange={(e) => set({ elementType: e.target.value as typeof g.elementType })} className="w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md focus:outline-none focus:border-[#2563EB]">
+                <select value={g.elementType} onChange={(e) => set({ elementType: e.target.value as typeof g.elementType })} className="w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-sm focus:outline-none focus:border-[#2563EB]">
                   <option value="hybrid">Hybrid: prism layers at wall + triangles</option>
                   <option value="tri">Triangles: fully unstructured</option>
                   <option value="quad_dominant">Quad-dominant: mostly quads</option>
@@ -1385,7 +1385,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     </div>
 
                     <Tooltip content="y⁺, first-cell height and layer count size the prism stack against the wall (Hybrid element type only). They don't set the overall cell size - that's the Resolution preset. For a plain triangle / quad mesh, near-wall size is Local wall / region size under Advanced. Low y⁺ (~1) resolves the boundary layer; high (~30-100) uses wall functions.">
-                    <div className="mt-2.5 p-2.5 bg-blue-50/60 border border-blue-100 rounded-md space-y-2 cursor-help">
+                    <div className="mt-2.5 p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2 cursor-help">
                       <div className="flex items-end gap-2">
                         <label className="flex-1">
                           <span className="text-[10px] text-[#69717D] block mb-1">Target y⁺</span>
@@ -1396,7 +1396,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             value={yplusDraft}
                             onChange={(e) => commitYplusDraft(e.target.value)}
                             onBlur={normalizeYplusDraft}
-                            className={`${field} bg-white border-blue-200`}
+                            className={`${field} bg-white border-[#E1E4E8]`}
                           />
                         </label>
                         <div className="flex-1 pb-1">
@@ -1404,7 +1404,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           <span className="font-mono font-semibold text-[#171A1F]">{state.yplus.first_layer_height_mm?.toFixed(4)} mm</span>
                         </div>
                       </div>
-                      <button onClick={onApplyYPlusToMesh} className="w-full py-1.5 rounded-md bg-white border border-blue-200 text-[#1D4ED8] font-medium hover:bg-blue-50 transition-colors">
+                      <button onClick={onApplyYPlusToMesh} className="w-full py-1.5 rounded-sm bg-white border border-[#E1E4E8] text-[#171A1F] hover:bg-[#F5F6F8] font-medium transition-colors">
                         Apply y⁺ sizing to first cell &amp; layers
                       </button>
                     </div>
@@ -1423,7 +1423,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   <div className="space-y-2.5 mt-2.5">
                     <label className="block">
                       <span className="text-[#69717D] block mb-1">Algorithm</span>
-                      <select value={g.meshAlgorithm} onChange={(e) => set({ meshAlgorithm: e.target.value as typeof g.meshAlgorithm })} className="w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md focus:outline-none focus:border-[#2563EB]">
+                      <select value={g.meshAlgorithm} onChange={(e) => set({ meshAlgorithm: e.target.value as typeof g.meshAlgorithm })} className="w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-sm focus:outline-none focus:border-[#2563EB]">
                         <option value="frontal_delaunay">Frontal-Delaunay (recommended)</option>
                         <option value="mesh_adapt">MeshAdapt (robust fallback)</option>
                         <option value="delaunay">Delaunay (fast preview)</option>
@@ -1455,11 +1455,11 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
           <div className="shrink-0 px-4 pt-3 mt-3 border-t border-[#E1E4E8] bg-white space-y-2">
           {meshTopology === 'structured' ? (
-            <button onClick={onGenerateStructuredMesh} disabled={isMeshing || !blocking} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-md transition-colors disabled:opacity-40">
+            <button onClick={onGenerateStructuredMesh} disabled={isMeshing || !blocking} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-sm transition-colors disabled:opacity-40">
               {isMeshing ? 'Generating…' : !blocking ? 'Build blocks first' : meshError ? 'Retry mesh' : (meshStale && meshData?.num_elements) ? 'Regenerate mesh' : 'Generate mesh'}
             </button>
           ) : (
-            <button onClick={onGenerateMesh} disabled={isMeshing} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-md transition-colors disabled:opacity-40">
+            <button onClick={onGenerateMesh} disabled={isMeshing} className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-sm transition-colors disabled:opacity-40">
               {isMeshing ? 'Generating…' : meshError ? 'Retry mesh' : (meshStale && meshData?.num_elements) ? 'Regenerate mesh' : 'Generate mesh'}
             </button>
           )}
@@ -1471,9 +1471,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
       {/* 02 PHYSICS & FLOW SETUP */}
       {activeStage === 'physics' && (
         <div className="p-4 space-y-4 text-xs text-[#171A1F]">
-          <div className="p-3 bg-blue-50/50 border border-blue-100 rounded-lg space-y-3">
+          <div className="p-3 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-3">
             <div className="flex items-start gap-2">
-              <Wind className="w-4 h-4 text-[#2563EB] mt-0.5 shrink-0" />
+              <Wind className="w-4 h-4 text-[#69717D] mt-0.5 shrink-0" />
               <div>
                 <span className="font-semibold text-[#171A1F] block">Simulation model</span>
                 <span className="text-[10px] text-[#69717D] block mt-0.5">These reference values drive y⁺ and mesh sizing.</span>
@@ -1487,7 +1487,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   <button
                     key={mode}
                     onClick={() => updatePhysics({ compressibility: mode })}
-                    className={`py-2 rounded-md text-[11px] font-medium border transition-colors ${
+                    className={`py-2 rounded-sm text-[11px] font-medium border transition-colors ${
                       state.physics.compressibility === mode
                         ? 'bg-[#2563EB] text-white border-[#2563EB]'
                         : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
@@ -1511,7 +1511,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   <button
                     key={regime}
                     onClick={() => updatePhysics({ regime })}
-                    className={`py-1.5 rounded-md text-[11px] font-medium border transition-colors capitalize ${
+                    className={`py-1.5 rounded-sm text-[11px] font-medium border transition-colors capitalize ${
                       state.physics.regime === regime
                         ? 'bg-[#2563EB] text-white border-[#2563EB]'
                         : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
@@ -1524,7 +1524,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 bg-white border border-[#E1E4E8] rounded-lg space-y-3">
+          <div className="p-3 bg-white border border-[#E1E4E8] rounded space-y-3">
             <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">Reference inlet state</span>
             <div className="grid grid-cols-2 gap-2">
               {[
@@ -1561,7 +1561,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             </label>
           </div>
 
-          <div className="p-3 bg-[#F8F9FA] border border-[#E1E4E8] rounded-lg space-y-3">
+          <div className="p-3 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-3">
             <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">Fluid properties</span>
             <div className="grid grid-cols-2 gap-2">
               <label className="block"><span className="text-[#69717D] block mb-1">Density (ρ)</span><NumberField value={state.physics.density} min={0} fallback={1.225} onChange={(n) => updatePhysics({ density: n })} className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded font-mono" /></label>
@@ -1572,7 +1572,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           {state.physics.regime === 'turbulent' && (
             <div className="space-y-2">
               <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">Turbulence model</span>
-              <select value={state.physics.turbulenceModel} onChange={(e) => updatePhysics({ turbulenceModel: e.target.value as TurbulenceModel })} className="w-full px-2.5 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]">
+              <select value={state.physics.turbulenceModel} onChange={(e) => updatePhysics({ turbulenceModel: e.target.value as TurbulenceModel })} className="w-full px-2.5 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]">
                 <option value="kOmegaSST">k-ω SST (Menter)</option>
                 <option value="kEpsilon">Standard k-ε</option>
                 <option value="realizableKE">Realizable k-ε</option>
@@ -1642,7 +1642,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 bg-[#F5F6F8] border border-[#E1E4E8] rounded-md text-center space-y-1">
+          <div className="p-3 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-center space-y-1">
             <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
               First Cell Height (Δy)
             </span>
@@ -1656,7 +1656,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
           <button
             onClick={onApplyYPlusToMesh}
-            className="w-full py-2 bg-[#16A34A] hover:bg-[#15803D] text-white font-medium rounded-md flex items-center justify-center gap-1.5 transition-colors"
+            className="w-full py-2 bg-[#16A34A] hover:bg-[#15803D] text-white font-medium rounded-sm flex items-center justify-center gap-1.5 transition-colors"
           >
             <Zap className="w-3.5 h-3.5 fill-current" />
             <span>Apply Sizing to Gmsh</span>
@@ -1708,7 +1708,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               <select
                 value={state.postprocess.activeField}
                 onChange={(e) => updatePostProcess({ activeField: e.target.value as any })}
-                className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-md font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
               >
                 <option value="U_mag">Velocity Magnitude (|U|)</option>
                 <option value="p">Static Pressure (p)</option>
@@ -1747,7 +1747,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               <button
                 type="button"
                 onClick={onCreatePlot}
-                className="w-full py-2 px-3 rounded-lg bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm"
+                className="w-full py-2 px-3 rounded bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Create Plot</span>
@@ -1774,7 +1774,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   alert(`Failed to launch ParaView: ${res.detail}`);
                 }
               }}
-              className="w-full py-2 px-3 rounded-lg border border-[#2563EB] bg-blue-50 text-[#1D4ED8] hover:bg-blue-100 font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full py-2 px-3 rounded border border-[#E1E4E8] bg-white text-[#171A1F] hover:bg-[#F5F6F8] font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <span>Open in ParaView</span>
             </button>

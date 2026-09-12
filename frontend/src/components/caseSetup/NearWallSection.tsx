@@ -59,7 +59,7 @@ export const NearWallSection: React.FC<SectionProps & { model: TurbulenceModel }
         <Field label="Link to mesh">
           <button
             onClick={() => setCaseSetup({ linkFirstCellToMesh: !caseSetup.linkFirstCellToMesh })}
-            className={`w-full py-2 rounded-md border text-xs font-medium transition-colors ${
+            className={`w-full py-2 rounded-sm border text-xs font-medium transition-colors ${
               caseSetup.linkFirstCellToMesh
                 ? 'bg-blue-50 border-[#2563EB] text-[#1D4ED8]'
                 : 'bg-white border-[#DDE2E8] text-[#69717D]'

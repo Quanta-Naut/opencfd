@@ -16,7 +16,7 @@ export const BoundaryConditionsPanel: React.FC<BoundaryConditionsPanelProps> = (
   return (
     <div className="space-y-4 p-4 text-xs text-slate-700 select-none">
       {/* Inlet Boundary Condition */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider flex items-center justify-between">
           <span className="flex items-center gap-1.5">
             <Wind className="w-3.5 h-3.5 text-blue-600" />
@@ -94,7 +94,7 @@ export const BoundaryConditionsPanel: React.FC<BoundaryConditionsPanelProps> = (
       </div>
 
       {/* Outlet Boundary Condition */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-2">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider flex items-center justify-between">
           <span className="flex items-center gap-1.5">
             <ArrowDownRight className="w-3.5 h-3.5 text-slate-500" />
@@ -118,7 +118,7 @@ export const BoundaryConditionsPanel: React.FC<BoundaryConditionsPanelProps> = (
       </div>
 
       {/* Wall Boundary Condition */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-2">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider flex items-center justify-between">
           <span className="flex items-center gap-1.5">
             <ShieldAlert className="w-3.5 h-3.5 text-slate-500" />

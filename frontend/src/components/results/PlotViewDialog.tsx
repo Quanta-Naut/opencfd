@@ -196,13 +196,13 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/50 backdrop-blur-[2px] p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/50 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-5xl h-[82vh] rounded-xl bg-white border border-[#E4E7EC] shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-5xl h-[82vh] rounded bg-white border border-[#E4E7EC] flex flex-col overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Plot Details"
@@ -260,7 +260,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
               onClick={handleReSample}
               disabled={reSampling}
               title="Re-sample line data from solver run"
-              className="inline-flex items-center gap-1 text-xs font-medium text-[#69717D] hover:text-[#171A1F] bg-white border border-[#E1E4E8] px-2.5 py-1.5 rounded-md hover:bg-[#F5F6F8] transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1 text-xs font-medium text-[#69717D] hover:text-[#171A1F] bg-white border border-[#E1E4E8] px-2.5 py-1.5 rounded-sm hover:bg-[#F5F6F8] transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${reSampling ? 'animate-spin' : ''}`} />
               <span>Re-sample</span>
@@ -269,7 +269,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
               type="button"
               onClick={handleDelete}
               title="Delete this plot"
-              className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 bg-white border border-red-200 px-2.5 py-1.5 rounded-md hover:bg-red-50 transition-colors"
+              className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 bg-white border border-red-200 px-2.5 py-1.5 rounded-sm hover:bg-red-50 transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Delete</span>
@@ -277,7 +277,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 text-[#69717D] hover:bg-[#EEF1F5] rounded-md transition-colors"
+              className="p-1.5 text-[#69717D] hover:bg-[#EEF1F5] rounded transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -300,7 +300,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
             <select
               value={plot.variable}
               onChange={(e) => handleVariableChange(e.target.value as FlowVariable)}
-              className="px-2.5 py-1 bg-white border border-[#E1E4E8] rounded-md font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+              className="px-2.5 py-1 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
             >
               {FLOW_VARIABLES.map((v) => (
                 <option key={v.id} value={v.id}>

@@ -20,7 +20,7 @@ export const TransientPlaybackControls: React.FC<TransientPlaybackControlsProps>
   };
   const iconButton = 'w-7 h-7 inline-flex items-center justify-center rounded text-[#69717D] hover:bg-[#F0F4FF] hover:text-[#2563EB] disabled:opacity-35 disabled:hover:bg-transparent';
   return (
-    <div className="absolute left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 rounded-lg border border-[#E1E4E8] bg-white/95 px-2.5 py-1.5 text-[10px] font-mono text-[#69717D]" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 0.75rem)' }}>
+    <div className="absolute left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 rounded border border-[#E1E4E8] bg-white/95 px-2.5 py-1.5 text-[10px] font-mono text-[#69717D]" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 0.75rem)' }}>
       <div className="flex items-center">
         <button className={iconButton} onClick={() => onSelect(0)} title="First frame" disabled={current === 0}><ChevronFirst className="w-4 h-4" /></button>
         <button className={iconButton} onClick={() => onSelect(current - 1)} title="Previous frame" disabled={current === 0}><ChevronLeft className="w-4 h-4" /></button>

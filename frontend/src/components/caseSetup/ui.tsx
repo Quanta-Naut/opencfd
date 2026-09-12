@@ -1,7 +1,7 @@
 import React from 'react';
 
 export const card =
-  'bg-[var(--cs-surface,#fff)] border border-[#E1E4E8] rounded-xl p-5';
+  'bg-[var(--cs-surface,#fff)] border border-[#E1E4E8] rounded p-5';
 
 export const SectionCard: React.FC<{
   title: string;
@@ -39,7 +39,7 @@ export const Field: React.FC<{ label: React.ReactNode; hint?: string; children: 
 );
 
 const inputBase =
-  'w-full px-2.5 py-2 bg-white border border-[#DDE2E8] rounded-md font-mono text-xs text-[#171A1F] focus:outline-none focus:border-[#2563EB] disabled:opacity-50 disabled:bg-[#F5F6F8]';
+  'w-full px-2.5 py-2 bg-white border border-[#DDE2E8] rounded-sm font-mono text-xs text-[#171A1F] focus:outline-none focus:border-[#2563EB] disabled:opacity-50 disabled:bg-[#F5F6F8]';
 
 export const NumberInput: React.FC<{
   value: number;
@@ -112,7 +112,7 @@ export const Segmented = <T extends string>({
       <button
         key={v}
         onClick={() => onChange(v)}
-        className={`py-2 rounded-md border text-xs font-medium transition-colors ${
+        className={`py-2 rounded-sm border text-xs font-medium transition-colors ${
           value === v
             ? 'bg-[#2563EB] border-[#2563EB] text-white'
             : 'border-[#DDE2E8] text-[#69717D] bg-white hover:bg-[#F5F6F8]'
@@ -129,7 +129,7 @@ export const Stat: React.FC<{ label: string; value: string; tone?: 'default' | '
   value,
   tone = 'default',
 }) => (
-  <div className="bg-[#F8FAFC] border border-[#E8EDF1] rounded-lg px-3 py-2">
+  <div className="bg-[#F8FAFC] border border-[#E8EDF1] rounded px-3 py-2">
     <span className="text-[10px] uppercase tracking-wide text-[#8B95A1] block">{label}</span>
     <span
       className={`text-[13px] font-mono font-semibold block mt-0.5 ${

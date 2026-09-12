@@ -4905,7 +4905,7 @@ boundary
             toggle in CAD/mesh stages, overlay toggles in Results). The solver
             stage has neither, so no empty pill. */}
         {displayOnly && (!meshOnly || showField) && (
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-lg px-2 py-1 text-xs select-none">
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-xs select-none">
             {!meshOnly ? (
               <>
                 {(
@@ -5001,7 +5001,7 @@ boundary
             wireframe and field colouring are independent toggles, not a
             single radio group, and each field button re-clicks off. */}
         {displayOnly && meshOnly && !showField && livePreview && (
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-lg px-2 py-1 text-xs select-none">
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-xs select-none">
             <button
               onClick={() => setLiveMeshOn((m) => !m)}
               title="Toggle mesh wireframe overlay"
@@ -5064,7 +5064,7 @@ boundary
           };
           const fieldLabel = labels[activeField] || { name: activeField, unit: '' };
           return (
-            <div className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}>
+            <div className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}>
               <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
                 {fieldLabel.name} {fieldLabel.unit}
               </div>
@@ -5079,7 +5079,7 @@ boundary
         {/* ─── Mesh-quality legend (Mesh tab only) ─── */}
         {!showField && !meshOnly && canvasMode === 'mesh' && showMeshQuality && meshSkew && meshSkewStats && (
           <div
-            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
             <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">Cell skewness</div>
@@ -5111,7 +5111,7 @@ boundary
         {/* ─── Live solver preview legend (Solver tab) ─── */}
         {liveVals && (
           <div
-            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded-md p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
             <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
@@ -5137,7 +5137,7 @@ boundary
         {/* ─── Transient Flow Simulation Player ─── */}
         {showField && isTransient && (
           <div
-            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white/95 backdrop-blur-sm border border-[#E1E4E8] rounded-xl px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
+            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white border border-[#E1E4E8] rounded px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
             {/* 5 Playback Control Buttons: First, Prev, Play/Pause, Next, Last */}
@@ -5147,7 +5147,7 @@ boundary
                 onClick={() => onSelectTransientFrame?.(0)}
                 disabled={transientTimes.length === 0 || transientFrameIndex === 0}
                 title="First Frame"
-                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <ChevronFirst className="w-4 h-4" />
               </button>
@@ -5157,7 +5157,7 @@ boundary
                 onClick={() => onSelectTransientFrame?.(transientFrameIndex - 1)}
                 disabled={transientTimes.length === 0 || transientFrameIndex === 0}
                 title="Previous Frame"
-                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <SkipBack className="w-3.5 h-3.5" />
               </button>
@@ -5177,7 +5177,7 @@ boundary
                 onClick={() => onSelectTransientFrame?.(transientFrameIndex + 1)}
                 disabled={transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1}
                 title="Next Frame"
-                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <SkipForward className="w-3.5 h-3.5" />
               </button>
@@ -5187,7 +5187,7 @@ boundary
                 onClick={() => onSelectTransientFrame?.(transientTimes.length - 1)}
                 disabled={transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1}
                 title="Last Frame"
-                className="p-1.5 rounded-md text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <ChevronLast className="w-4 h-4" />
               </button>
@@ -5211,7 +5211,7 @@ boundary
                 value={transientFrameIndex}
                 onChange={(e) => onSelectTransientFrame?.(parseInt(e.target.value, 10))}
                 disabled={transientTimes.length < 2}
-                className="w-full h-1.5 bg-[#E1E4E8] rounded-lg appearance-none cursor-pointer accent-[#2563EB] disabled:cursor-not-allowed"
+                className="w-full h-1.5 bg-[#E1E4E8] rounded appearance-none cursor-pointer accent-[#2563EB] disabled:cursor-not-allowed"
               />
             </div>
 
@@ -5237,7 +5237,7 @@ boundary
         {/* --- Historical field loading overlay --- */}
         {showField && historicalStatus?.loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-30 pointer-events-none">
-            <div className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E1E4E8] rounded-lg text-xs font-medium text-[#171A1F]">
+            <div className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E1E4E8] rounded text-xs font-medium text-[#171A1F]">
               <Loader2 className="w-4 h-4 animate-spin text-[#2563EB]" />
               <span>Loading flow field snapshot...</span>
             </div>
@@ -5247,7 +5247,7 @@ boundary
         {/* --- Historical field error overlay (e.g. 404 / no field stored) --- */}
         {showField && historicalStatus?.error && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#FAFAFA]/90 z-30 pointer-events-auto">
-            <div className="max-w-sm bg-white border border-[#E1E4E8] rounded-lg p-5 text-center space-y-3">
+            <div className="max-w-sm bg-white border border-[#E1E4E8] rounded p-5 text-center space-y-3">
               <div className="w-9 h-9 rounded-full bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
                 <AlertCircle className="w-5 h-5" />
               </div>
@@ -5284,7 +5284,7 @@ boundary
 
           return (
             <div
-              className="absolute z-30 flex items-center gap-2 bg-white/95 backdrop-blur-xs text-[#171A1F] px-2.5 py-1.5 rounded-md border border-[#E1E4E8] text-xs font-mono select-none transition-all duration-75"
+              className="absolute z-30 flex items-center gap-2 bg-white text-[#171A1F] px-2.5 py-1.5 rounded-sm border border-[#E1E4E8] text-xs font-mono select-none transition-all duration-75"
               style={{ left: `${posX}px`, top: `${posY}px` }}
               onClick={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
@@ -5351,7 +5351,7 @@ boundary
         <>
           {/* Bottom Left: Live Cursor Position & Google Maps Style Scale Indicator */}
           <div
-            className="absolute left-3 z-20 flex items-center gap-3 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+            className="absolute left-3 z-20 flex items-center gap-3 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
           >
             <div className="flex items-center gap-2.5">
@@ -5391,7 +5391,7 @@ boundary
               const skew = meshData.quality?.max_skewness;
               return (
                 <div
-                  className="absolute right-3 z-20 flex items-center gap-3 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  className="absolute right-3 z-20 flex items-center gap-3 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
                   <span><strong className="text-[#171A1F]">{meshData.num_nodes}</strong> nodes</span>
@@ -5407,7 +5407,7 @@ boundary
               const isCircular = tool === 'circle_center_radius' || tool === 'ellipse_center';
               return (
                 <div
-                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
                   {isCircular ? (
@@ -5426,7 +5426,7 @@ boundary
             if (hoveredVertex) {
               return (
                 <div
-                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white/95 backdrop-blur-xs border border-[#E1E4E8] rounded-md px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
                   <span className="text-[10px] uppercase font-bold text-[#69717D]">Vertex</span>
@@ -5442,7 +5442,7 @@ boundary
       )}
 
       {meshToastVisible && (
-        <div className="absolute right-4 bottom-10 z-40 w-72 rounded-lg border border-[#D9E2F2] bg-white/95 backdrop-blur px-3.5 py-3 pointer-events-none">
+        <div className="absolute right-4 bottom-10 z-40 w-72 rounded border border-[#D9E2F2] bg-white px-3.5 py-3 pointer-events-none">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-[#171A1F]">{meshProgress >= 100 ? 'Mesh complete' : 'Generating mesh'}</span>
             <span className="text-xs font-mono font-semibold text-[#2563EB]">{Math.round(meshProgress)}%</span>

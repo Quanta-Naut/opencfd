@@ -2329,7 +2329,7 @@ export function App({
                 plotPickPreviewP1={pickingPointsState?.p1 ?? null}
               />
               {pickingPointsState && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-[#1E293B] text-white px-4 py-2 rounded-full shadow-xl flex items-center gap-3 text-xs font-medium border border-white/10">
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-[#1E293B] text-white px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
                   <Crosshair className="w-4 h-4 text-[#38BDF8] animate-pulse" />
                   <span>
                     {pickingPointsState.step === 1
@@ -2342,7 +2342,7 @@ export function App({
                       setPickingPointsState(null);
                       setCreatePlotModalOpen(true);
                     }}
-                    className="px-2.5 py-0.5 rounded-full bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition-colors cursor-pointer"
+                    className="px-2.5 py-0.5 rounded-sm bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition-colors cursor-pointer"
                   >
                     Cancel
                   </button>

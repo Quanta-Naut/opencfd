@@ -67,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* App Header Branding */}
       <div className="px-4 py-3.5 border-b border-slate-200 flex items-center justify-between bg-white">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded-lg bg-blue-600 flex items-center justify-center text-white ">
+          <div className="w-7 h-7 rounded bg-[#171A1F] flex items-center justify-center text-white">
             <Wind className="w-4 h-4" />
           </div>
           <div>
@@ -75,7 +75,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="text-[10px] text-slate-400 block -mt-0.5">OpenFOAM &amp; Gmsh Suite</span>
           </div>
         </div>
-        <span className="text-[10px] font-mono px-2 py-0.5 bg-slate-100 text-slate-600 rounded-full border border-slate-200 font-semibold">
+        <span className="text-[10px] font-mono px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded-sm border border-slate-200 font-semibold">
           v1.0
         </span>
       </div>
@@ -90,7 +90,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={step.id}
                 onClick={() => setActiveStep(step.id)}
-                className={`py-1.5 px-1 rounded-md text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
+                className={`py-1.5 px-1 rounded-sm text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
                   isActive
                     ? 'bg-white text-blue-600 border border-slate-200 font-semibold'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
@@ -110,7 +110,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={step.id}
                 onClick={() => setActiveStep(step.id)}
-                className={`py-1.5 px-1 rounded-md text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
+                className={`py-1.5 px-1 rounded-sm text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
                   isActive
                     ? 'bg-white text-blue-600 border border-slate-200 font-semibold'
                     : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'

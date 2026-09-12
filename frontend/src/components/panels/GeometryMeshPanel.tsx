@@ -20,13 +20,13 @@ export const GeometryMeshPanel: React.FC<GeometryMeshPanelProps> = ({
       {/* Geometry Template Selector */}
       <div className="space-y-1.5">
         <label className="font-semibold text-slate-800 flex items-center gap-1.5">
-          <Box className="w-3.5 h-3.5 text-blue-600" />
+          <Box className="w-3.5 h-3.5 text-[#69717D]" />
           <span>Geometry Model</span>
         </label>
         <select
           value={config.type}
           onChange={(e) => onChange({ type: e.target.value as GeometryType })}
-          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
+          className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-sm focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
         >
           <option value="naca0012">NACA 0012 Airfoil (2D)</option>
           <option value="cylinder">Cylinder in Crossflow</option>
@@ -37,7 +37,7 @@ export const GeometryMeshPanel: React.FC<GeometryMeshPanelProps> = ({
       </div>
 
       {/* Geometry Parameters */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider">
           Dimensions & Flow Domain
         </span>
@@ -121,7 +121,7 @@ export const GeometryMeshPanel: React.FC<GeometryMeshPanelProps> = ({
       </div>
 
       {/* Gmsh Meshing Controls */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider flex items-center justify-between">
           <span>Gmsh Mesh Settings</span>
           <Layers className="w-3.5 h-3.5 text-slate-400" />
@@ -202,7 +202,7 @@ export const GeometryMeshPanel: React.FC<GeometryMeshPanelProps> = ({
       <button
         onClick={onGenerateMesh}
         disabled={isMeshing}
-        className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+        className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
       >
         <Play className="w-3.5 h-3.5 fill-current" />
         <span>{isMeshing ? 'Generating Mesh...' : 'Generate Gmsh Mesh'}</span>

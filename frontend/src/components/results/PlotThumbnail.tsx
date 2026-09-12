@@ -174,9 +174,9 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
       onClick={onClick}
       role="button"
       tabIndex={0}
-      className={`group relative rounded-lg border p-2.5 transition-all cursor-pointer text-left ${
+      className={`group relative rounded border p-2.5 transition-all cursor-pointer text-left ${
         isSelected
-          ? 'bg-[#F0F5FF] border-[#2563EB] shadow-sm'
+          ? 'bg-[#F0F5FF] border-[#2563EB]'
           : 'bg-white border-[#EDEFF3] hover:border-[#C4C9D0] hover:bg-[#F9FAFB]'
       }`}
     >

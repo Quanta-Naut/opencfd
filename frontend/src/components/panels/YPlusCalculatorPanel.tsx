@@ -32,7 +32,7 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
             <button
               key={item.val}
               onClick={() => onChange({ target_yplus: item.val })}
-              className={`py-1.5 px-1 rounded-md text-[11px] font-medium border text-center transition-colors ${
+              className={`py-1.5 px-1 rounded-sm text-[11px] font-medium border text-center transition-colors ${
                 yplus.target_yplus === item.val
                   ? 'bg-blue-600 text-white border-blue-600 '
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
@@ -45,7 +45,7 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
       </div>
 
       {/* Input Parameters */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
         <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider">
           Flow Condition Inputs
         </span>
@@ -111,55 +111,55 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
         </div>
       </div>
 
-      {/* Calculated Boundary Layer & Mesh Properties */}
-      <div className="p-3.5 bg-blue-50/50 border border-blue-200 rounded-lg space-y-2.5">
+      {/* Calculated Boundary Layer &      {/* Results */}
+      <div className="p-3.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2.5">
         <div className="flex items-center justify-between">
-          <span className="font-semibold text-blue-900 text-[11px] uppercase tracking-wider flex items-center gap-1">
-            <Calculator className="w-3.5 h-3.5 text-blue-600" />
+          <span className="font-semibold text-[#171A1F] text-[11px] uppercase tracking-wider flex items-center gap-1">
+            <Calculator className="w-3.5 h-3.5 text-[#69717D]" />
             <span>Boundary Layer Results</span>
           </span>
-          <span className="font-mono text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded font-semibold">
+          <span className="font-mono text-[10px] px-1.5 py-0.5 bg-white border border-[#E1E4E8] text-[#171A1F] rounded font-semibold">
             Re = {yplus.reynolds_number.toExponential(2)}
           </span>
         </div>
 
         {/* Highlight First Layer Height */}
-        <div className="p-2.5 bg-white border border-blue-200/80 rounded-md flex items-center justify-between">
+        <div className="p-2.5 bg-white border border-[#E1E4E8] rounded flex items-center justify-between">
           <div>
-            <span className="text-[11px] text-slate-500 block">First Layer Height (Δy)</span>
-            <span className="text-sm font-mono font-bold text-slate-900">
+            <span className="text-[11px] text-[#69717D] block">First Layer Height (Δy)</span>
+            <span className="text-sm font-mono font-bold text-[#171A1F]">
               {yplus.first_layer_height_mm.toFixed(4)} mm
             </span>
           </div>
           <div className="text-right">
-            <span className="text-[10px] font-mono text-slate-400">
+            <span className="text-[10px] font-mono text-[#8A929E]">
               {yplus.first_layer_height_m.toExponential(3)} m
             </span>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 text-[11px]">
-          <div className="p-2 bg-white/80 border border-blue-100 rounded">
-            <span className="text-slate-500 block">BL Thickness (δ)</span>
-            <span className="font-mono font-semibold text-slate-800">
+          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
+            <span className="text-[#69717D] block">BL Thickness (δ)</span>
+            <span className="font-mono font-semibold text-[#171A1F]">
               {yplus.boundary_layer_thickness_mm.toFixed(2)} mm
             </span>
           </div>
-          <div className="p-2 bg-white/80 border border-blue-100 rounded">
-            <span className="text-slate-500 block">Prism Layers</span>
-            <span className="font-mono font-semibold text-slate-800">
+          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
+            <span className="text-[#69717D] block">Prism Layers</span>
+            <span className="font-mono font-semibold text-[#171A1F]">
               {yplus.recommended_layers} layers
             </span>
           </div>
-          <div className="p-2 bg-white/80 border border-blue-100 rounded">
-            <span className="text-slate-500 block">Friction Velocity (u_τ)</span>
-            <span className="font-mono font-semibold text-slate-800">
+          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
+            <span className="text-[#69717D] block">Friction Velocity (u_τ)</span>
+            <span className="font-mono font-semibold text-[#171A1F]">
               {yplus.friction_velocity.toFixed(3)} m/s
             </span>
           </div>
-          <div className="p-2 bg-white/80 border border-blue-100 rounded">
-            <span className="text-slate-500 block">Skin Friction (Cf)</span>
-            <span className="font-mono font-semibold text-slate-800">
+          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
+            <span className="text-[#69717D] block">Skin Friction (Cf)</span>
+            <span className="font-mono font-semibold text-[#171A1F]">
               {yplus.skin_friction_coefficient.toExponential(2)}
             </span>
           </div>
@@ -169,7 +169,7 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
       {/* Apply to Gmsh Mesh Button */}
       <button
         onClick={onApplyToMesh}
-        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg flex items-center justify-center gap-2 transition-colors"
+        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded flex items-center justify-center gap-2 transition-colors"
       >
         <Zap className="w-3.5 h-3.5 fill-current" />
         <span>Apply Sizing to Gmsh Mesh</span>
