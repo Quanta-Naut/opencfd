@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MoreVertical, Database, Pencil, LayoutGrid } from 'lucide-react';
+import { MoreVertical, Database, Pencil, LayoutGrid, Settings } from 'lucide-react';
+import { PreferencesDialog } from '../settings/PreferencesDialog';
 
 interface TopHeaderProps {
   projectName: string;
@@ -13,6 +14,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   onExitHome,
 }) => {
   const [showMenu, setShowMenu] = useState<boolean>(false);
+  const [showPreferences, setShowPreferences] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(projectName);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -80,7 +82,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
       {/* Right: Project actions. Everything autosaves to the project on disk, so
           there is no manual Save; the how-to guide lives on the home screen. */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-1">
         <div className="relative">
           <button
             onClick={() => setShowMenu(!showMenu)}
@@ -102,7 +104,17 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
             </div>
           )}
         </div>
+
+        <button
+          onClick={() => setShowPreferences(true)}
+          className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded transition-colors"
+          title="Preferences"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
       </div>
+
+      <PreferencesDialog open={showPreferences} onClose={() => setShowPreferences(false)} />
     </header>
   );
 };

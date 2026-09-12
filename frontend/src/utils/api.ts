@@ -666,4 +666,36 @@ export async function sampleSolverRunLine(
   }
 }
 
+export interface AppSettings {
+  case_storage: 'wsl' | 'windows';
+}
+
+export async function fetchSettings(): Promise<{ data: AppSettings | null; detail?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/settings`);
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.success === false) return { data: null, detail: j.detail || `HTTP ${res.status}` };
+    return { data: j.data ?? null };
+  } catch (e: any) {
+    return { data: null, detail: e?.message || 'request failed' };
+  }
+}
+
+export async function updateSettings(
+  patch: Partial<AppSettings>,
+): Promise<{ data: AppSettings | null; detail?: string }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j.success === false) return { data: null, detail: j.detail || `HTTP ${res.status}` };
+    return { data: j.data ?? null };
+  } catch (e: any) {
+    return { data: null, detail: e?.message || 'request failed' };
+  }
+}
+
 

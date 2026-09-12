@@ -26,7 +26,7 @@ from app.services.cad2d_service import (
     compute_2d_fillet,
     generate_mesh_from_cad_loop
 )
-from app.services import project_service, run_service
+from app.services import project_service, run_service, settings_service
 
 app = FastAPI(title="OpenCFD Backend API", version="1.0.0")
 
@@ -329,6 +329,24 @@ async def paraview_launch_endpoint(req: ParaviewLaunchRequest):
         return {"success": True, "detail": f"Launched ParaView for {foam_file}"}
     except Exception as e:
         return {"success": False, "detail": str(e)}
+
+
+class SettingsUpdate(BaseModel):
+    case_storage: str | None = None
+
+
+@app.get("/api/settings")
+async def get_settings_endpoint():
+    return {"success": True, "data": settings_service.get_settings()}
+
+
+@app.put("/api/settings")
+async def update_settings_endpoint(req: SettingsUpdate):
+    patch = {k: v for k, v in req.model_dump().items() if v is not None}
+    try:
+        return {"success": True, "data": settings_service.update_settings(patch)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/api/setup/status")
