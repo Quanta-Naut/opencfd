@@ -993,7 +993,7 @@ export function wrapBodyOgrid(
       const arc: BlockEdge = {
         id: uid(), v0: innerIds[k], v1: innerIds[(k + 1) % N],
         path: arcs[k].slice(1, -1).map((p) => ({ ...p })),
-        patch, nodes: N === 8 ? 18 : 30, law: 'uniform', ratio: 1,
+        patch: patch ?? 'wall', nodes: N === 8 ? 18 : 30, law: 'uniform', ratio: 1,
         curveId: bodyEntityId,
       };
       edges.push(rad, arc);

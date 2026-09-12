@@ -85,6 +85,68 @@ def _entity_points(entity: Dict[str, Any]) -> List[Tuple[float, float]]:
     return _clean_loop(entity.get("pts", []))
 
 
+def _propagate_axis_to_collinear_edges(
+    loop_pts: List[Tuple[float, float]],
+    entity_id: str,
+    edge_tags: Dict[str, Any],
+) -> None:
+    """Propagate the 'axis' boundary tag across contiguous collinear edges.
+
+    Hand-drawn centerlines are frequently drawn as multiple separate segments
+    (or a polyline with multiple collinear edges) where the user only tagged one
+    segment as 'axis'. The true axisymmetric centerline spans all contiguous
+    collinear segments along the same line; any untagged collinear neighbour is
+    part of the same physical axis, not an auto-classified wall.
+    """
+    n_edges = len(loop_pts)
+    if n_edges < 3:
+        return
+    axis_edges = [
+        e_idx for e_idx in range(n_edges)
+        if str(edge_tags.get(f"{entity_id}_{e_idx}", "")).strip().lower() == "axis"
+    ]
+    if not axis_edges:
+        return
+
+    def edge_vec(k: int) -> Tuple[float, float]:
+        p_a = loop_pts[k]
+        p_b = loop_pts[(k + 1) % n_edges]
+        return (p_b[0] - p_a[0], p_b[1] - p_a[1])
+
+    def is_collinear(v1: Tuple[float, float], v2: Tuple[float, float]) -> bool:
+        len1 = math.hypot(*v1)
+        len2 = math.hypot(*v2)
+        if len1 < 1e-12 or len2 < 1e-12:
+            return False
+        cross = abs(v1[0] * v2[1] - v1[1] * v2[0]) / (len1 * len2)
+        dot = (v1[0] * v2[0] + v1[1] * v2[1]) / (len1 * len2)
+        return cross < 0.05 and dot > 0.95
+
+    for ax_k in list(axis_edges):
+        # Forward propagation
+        curr = ax_k
+        while True:
+            nxt = (curr + 1) % n_edges
+            if f"{entity_id}_{nxt}" in edge_tags and str(edge_tags[f"{entity_id}_{nxt}"]).strip().lower() != "axis":
+                break
+            if is_collinear(edge_vec(curr), edge_vec(nxt)):
+                edge_tags[f"{entity_id}_{nxt}"] = "axis"
+                curr = nxt
+            else:
+                break
+        # Backward propagation
+        curr = ax_k
+        while True:
+            prv = (curr - 1) % n_edges
+            if f"{entity_id}_{prv}" in edge_tags and str(edge_tags[f"{entity_id}_{prv}"]).strip().lower() != "axis":
+                break
+            if is_collinear(edge_vec(prv), edge_vec(curr)):
+                edge_tags[f"{entity_id}_{prv}"] = "axis"
+                curr = prv
+            else:
+                break
+
+
 def _join_segmented_loops(
     entities: List[Dict[str, Any]],
     edge_tags: Dict[str, Any] | None = None,
@@ -98,20 +160,30 @@ def _join_segmented_loops(
     Returns (entities, edge_tags) - both possibly rewritten.
     """
     edge_tags = dict(edge_tags or {})
-    tolerance = 1e-6
     candidates = [
         entity for entity in entities
         if entity.get("type") == "line" and entity.get("layer") != "construction" and len(entity.get("pts", [])) >= 2
     ]
-    consumed: set[int] = set()
-    closed_segment_indices: set[int] = set()
-    rebuilt: List[Dict[str, Any]] = []
+    if not candidates:
+        return entities, edge_tags
 
     def point(raw: Any) -> Tuple[float, float]:
         return (float(raw["x"]), float(raw["y"])) if isinstance(raw, dict) else (float(raw[0]), float(raw[1]))
 
-    def same(a: Tuple[float, float], b: Tuple[float, float]) -> bool:
-        return math.hypot(a[0] - b[0], a[1] - b[1]) <= tolerance
+    all_pts = [point(p) for ent in entities if ent.get("layer") != "construction" for p in ent.get("pts", [])]
+    if all_pts:
+        span_x = max(p[0] for p in all_pts) - min(p[0] for p in all_pts)
+        span_y = max(p[1] for p in all_pts) - min(p[1] for p in all_pts)
+        span = max(span_x, span_y, 0.1)
+    else:
+        span = 1.0
+
+    span_tol = span * 1e-3
+    tolerance = max(1e-6, min(5e-3, max(1e-3 if span >= 0.5 else 1e-4, span_tol)))
+
+    consumed: set[int] = set()
+    closed_segment_indices: set[int] = set()
+    rebuilt: List[Dict[str, Any]] = []
 
     for seed_index, seed in enumerate(candidates):
         if seed_index in consumed:
@@ -119,37 +191,41 @@ def _join_segmented_loops(
         start = point(seed["pts"][0])
         chain = [start, point(seed["pts"][1])]
         consumed.add(seed_index)
-        traversed = {seed_index}
+        traversed = [seed_index]
         # edge_seg_ids[k] = source entity id that became edge k of the rebuilt loop
         edge_seg_ids: List[Any] = [seed.get("id")]
-        while not same(chain[-1], chain[0]):
+        while math.hypot(chain[-1][0] - chain[0][0], chain[-1][1] - chain[0][1]) > tolerance:
+            best_dist = tolerance
             next_index = None
             next_point = None
             for index, candidate in enumerate(candidates):
                 if index in consumed:
                     continue
                 p0, p1 = point(candidate["pts"][0]), point(candidate["pts"][1])
-                if same(p0, chain[-1]):
+                d0 = math.hypot(p0[0] - chain[-1][0], p0[1] - chain[-1][1])
+                if d0 <= best_dist:
+                    best_dist = d0
                     next_index, next_point = index, p1
-                    break
-                if same(p1, chain[-1]):
+                d1 = math.hypot(p1[0] - chain[-1][0], p1[1] - chain[-1][1])
+                if d1 <= best_dist:
+                    best_dist = d1
                     next_index, next_point = index, p0
-                    break
             if next_index is None:
                 break
             consumed.add(next_index)
-            traversed.add(next_index)
+            traversed.append(next_index)
             chain.append(next_point)
             edge_seg_ids.append(candidates[next_index].get("id"))
 
-        if len(chain) >= 4 and same(chain[-1], chain[0]):
+        if len(chain) >= 4 and math.hypot(chain[-1][0] - chain[0][0], chain[-1][1] - chain[0][1]) <= tolerance:
             closed_segment_indices.update(traversed)
             new_id = seed.get("id", "boundary")
+            rebuilt_pts = [{"x": x, "y": y} for x, y in chain[:-1]]
             rebuilt.append({
                 **seed,
                 "type": "polyline",
                 "isClosed": True,
-                "pts": [{"x": x, "y": y} for x, y in chain[:-1]],
+                "pts": rebuilt_pts,
             })
             # Move each source segment's tag ("<segId>_0") onto "<newId>_<edgeIdx>".
             for edge_idx, seg_id in enumerate(edge_seg_ids):
@@ -157,6 +233,13 @@ def _join_segmented_loops(
                     if key in edge_tags:
                         edge_tags[f"{new_id}_{edge_idx}"] = edge_tags[key]
                         break
+            _propagate_axis_to_collinear_edges(
+                [(float(p["x"]), float(p["y"])) for p in rebuilt_pts],
+                new_id,
+                edge_tags,
+            )
+        else:
+            consumed.difference_update(traversed)
 
     # A closed reconstruction replaces its source segments; leave unrelated
     # open CAD lines intact so they can still be diagnosed/ignored explicitly.
@@ -445,8 +528,34 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
     if not loops:
         raise ValueError("No closed 2D CAD loop was found.")
 
+    # Propagate axis tags across collinear edges on all loops (covers both rebuilt and pre-closed polylines)
+    for loop in loops:
+        loop_entity_id = str(loop["entity"].get("id", "boundary"))
+        _propagate_axis_to_collinear_edges(loop["points"], loop_entity_id, joined_edge_tags)
+
+    axisymmetric = "axis" in {str(v).strip().lower() for v in joined_edge_tags.values()}
+
+    def _loop_has_axis(loop_entry: Dict[str, Any]) -> bool:
+        loop_id = str(loop_entry["entity"].get("id", "boundary"))
+        for k, v in joined_edge_tags.items():
+            if str(v).strip().lower() == "axis" and k.startswith(f"{loop_id}_"):
+                return True
+        return False
+
     domain_loops = [loop for loop in loops if loop["entity"].get("role") == "domain_boundary"]
-    outer = max(domain_loops or loops, key=lambda loop: loop["area"])
+    if axisymmetric:
+        # In axisymmetric flow, the domain boundary is the profile containing the axis.
+        axis_domain_loops = [loop for loop in domain_loops if _loop_has_axis(loop)]
+        if axis_domain_loops:
+            outer = max(axis_domain_loops, key=lambda loop: loop["area"])
+        else:
+            axis_loops = [loop for loop in loops if _loop_has_axis(loop)]
+            if axis_loops:
+                outer = max(axis_loops, key=lambda loop: loop["area"])
+            else:
+                outer = max(domain_loops or loops, key=lambda loop: loop["area"])
+    else:
+        outer = max(domain_loops or loops, key=lambda loop: loop["area"])
     holes = [loop for loop in loops if loop is not outer and loop["area"] < outer["area"] * 0.98]
     if not holes and not domain_loops and len(loops) > 1:
         holes = [loop for loop in loops if loop is not outer]
@@ -458,15 +567,6 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
     domain_width = max(point[0] for point in outer_points) - min(point[0] for point in outer_points)
     domain_height = max(point[1] for point in outer_points) - min(point[1] for point in outer_points)
     span = max(domain_width, domain_height, 0.1)
-
-    # Axisymmetric is derived purely from the user having manually tagged some
-    # edge 'axis' - never inferred/auto-tagged, and never a separate flag that
-    # could drift out of sync with the tagging. Whatever y that edge sits at
-    # (not necessarily 0 - the sketch canvas has no reason to be centered on
-    # the world origin) is normalised to y = 0 once the axis-tagged nodes are
-    # known, after meshing; see the axisymmetric block near the end of this
-    # function.
-    axisymmetric = "axis" in {str(v).strip().lower() for v in joined_edge_tags.values()}
 
     # Smallest obstacle bounding-box diagonal drives the near-body sizing so a
     # thin airfoil is resolved regardless of how large the flow domain is.
@@ -657,7 +757,8 @@ def generate_mesh_from_cad_entities(params: Dict[str, Any]) -> Dict[str, Any]:
                 orig_index = (n_pts - 2 - index) % n_pts if reverse else index
                 tag = circle_tag if circle_tag is not None else edge_tags.get(f"{entity_id}_{orig_index}")
                 if tag:
-                    name = str(tag)
+                    t_str = str(tag).strip()
+                    name = t_str.lower() if t_str.lower() in {"axis", "inlet", "outlet", "wall", "symmetry", "farfield"} else t_str
                 elif outer_domain:
                     name = _auto_domain_patch(
                         points[index], points[(index + 1) % len(points)]

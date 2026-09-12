@@ -513,7 +513,7 @@ export function autoSuggestBoundaryTags(
     // 'axis' is never auto-suggested - it is manual-only. Getting it wrong
     // silently gives a planar (not axisymmetric) solution rather than an
     // obvious error, so auto-detection is too risky here.
-    if (edge.role === 'geometry' && flowType === 'external') {
+    if (edge.role === 'geometry') {
       result[edge.key] = 'wall';
       continue;
     }
