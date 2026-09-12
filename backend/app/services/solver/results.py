@@ -44,7 +44,7 @@ def _read_field(path: Path) -> Optional[np.ndarray]:
     """Return an (N,) scalar or (N,3) vector array from an OpenFOAM field file."""
     if not path.is_file():
         return None
-    text = path.read_text()
+    text = path.read_text(encoding='utf-8', errors='ignore')
 
     m = _NONUNIFORM.search(text)
     if m:
@@ -124,15 +124,15 @@ def _cell_centres(tdir: Path, mesh: Dict, n_cells: int) -> np.ndarray:
         if ckey in _POLYMESH_CACHE:
             return _POLYMESH_CACHE[ckey]
         try:
-            owner_text = poly_owner_f.read_text()
+            owner_text = poly_owner_f.read_text(encoding='utf-8', errors='ignore')
             m_owner = re.search(r'\n(\d+)\s*\n\(', owner_text)
             if m_owner:
                 owner = np.fromstring(owner_text[m_owner.end():owner_text.rfind(')')], dtype=int, sep='\n')
-                pts_text = poly_pts_f.read_text()
+                pts_text = poly_pts_f.read_text(encoding='utf-8', errors='ignore')
                 m_pts = re.search(r'\n(\d+)\s*\n\(', pts_text)
                 if m_pts:
                     pts = np.fromstring(pts_text[m_pts.end():pts_text.rfind(')')].replace('(', ' ').replace(')', ' '), sep=' ').reshape(-1, 3)
-                    faces_text = poly_faces_f.read_text()
+                    faces_text = poly_faces_f.read_text(encoding='utf-8', errors='ignore')
                     face_lines = re.findall(r'\((\d+(?:\s+\d+)+)\)', faces_text[faces_text.find('(')+1:faces_text.rfind(')')])
                     face_nodes = [[int(x) for x in l.split()] for l in face_lines]
                     face_centres = np.array([pts[fn].mean(axis=0) for fn in face_nodes])

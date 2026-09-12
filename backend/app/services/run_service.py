@@ -137,25 +137,50 @@ class RunRecorder:
         that under the run-history contract (which promises per-node
         fields matching the stored mesh) would make every historical run
         fail the frontend's own node-count mismatch guard.
+
+        Retries with backoff: on a WSL-backed Windows install, the solver
+        writes its last timestep from inside WSL onto a Windows-native case
+        path (via the /mnt/c bridge), and this runs immediately after that
+        write completes. The native Windows process reading the same
+        directory can briefly see a stale listing before that write is
+        visible on this side of the WSL boundary, so a bare first attempt
+        can spuriously find "no written time directory" on a run that
+        actually finished fine. A few retries absorb that lag everywhere
+        without it being WSL-specific in the code itself.
         """
         mesh = self.config.get("mesh")
         if case_dir and mesh and mesh.get("nodes"):
-            try:
-                from app.services.solver.results import read_field_results
+            from app.services.solver.results import read_field_results
 
-                loop = asyncio.get_event_loop()
-                fp = await loop.run_in_executor(
-                    None, read_field_results, str(case_dir), mesh, None
-                )
-                if fp and isinstance(fp, dict) and fp.get("fields"):
-                    payload = {
-                        **fp,
-                        "mesh": self.mesh_snapshot,
-                    }
-                    await self._write_field_json(payload)
-                    self.has_field = True
-            except Exception:
-                pass
+            last_error: Exception | None = None
+            for attempt in range(4):
+                if attempt > 0:
+                    await asyncio.sleep(0.5 * attempt)
+                try:
+                    loop = asyncio.get_event_loop()
+                    fp = await loop.run_in_executor(
+                        None, read_field_results, str(case_dir), mesh, None
+                    )
+                    if fp and isinstance(fp, dict) and fp.get("fields"):
+                        payload = {
+                            **fp,
+                            "mesh": self.mesh_snapshot,
+                        }
+                        await self._write_field_json(payload)
+                        self.has_field = True
+                        last_error = None
+                        break
+                except Exception as e:  # noqa: BLE001
+                    last_error = e
+                    continue
+            if last_error is not None:
+                # Surface this in the run's own log instead of failing
+                # silently - a completed run with nothing stored otherwise
+                # looks identical to a run that finished cleanly.
+                await self.record_event({
+                    "type": "log",
+                    "line": f"[OpenCFD] could not save the final result snapshot: {last_error}",
+                })
         self.close()
 
 

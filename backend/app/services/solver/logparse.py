@@ -84,7 +84,7 @@ def read_force_coeffs(case_dir: str | Path) -> Optional[Dict[str, float]]:
     path = max(files, key=lambda p: p.stat().st_mtime)
     header: List[str] = []
     last: Optional[str] = None
-    for raw in path.read_text().splitlines():
+    for raw in path.read_text(encoding='utf-8', errors='ignore').splitlines():
         s = raw.strip()
         if not s:
             continue

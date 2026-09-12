@@ -204,7 +204,7 @@ class OpenFoamAdapter(SolverAdapter):
         bnd = case_dir / "constant" / "polyMesh" / "boundary"
         if not bnd.is_file():
             return
-        text = bnd.read_text()
+        text = bnd.read_text(encoding='utf-8', errors='ignore')
         base = (
             {"wedge_front": "wedge", "wedge_back": "wedge"}
             if axisymmetric
