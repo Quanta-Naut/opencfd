@@ -78,6 +78,13 @@ export async function renameProject(id: string, name: string): Promise<ProjectMe
   return json<ProjectMeta>(res, 'Rename project');
 }
 
+export async function duplicateProject(id: string): Promise<ProjectMeta> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(id)}/duplicate`, {
+    method: 'POST',
+  });
+  return json<ProjectMeta>(res, 'Duplicate project');
+}
+
 export async function deleteProject(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(id)}`, {
     method: 'DELETE',

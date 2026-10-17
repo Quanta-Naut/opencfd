@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.services.project_service import PROJECTS_ROOT
+
+_logger = logging.getLogger(__name__)
 
 
 def _safe_id(val: str | None, default: str = "scratch") -> str:
@@ -90,22 +93,33 @@ class RunRecorder:
                 pass
             self._stream_file = None
 
-    def _write_field_sync(self, payload: Dict[str, Any]) -> None:
-        tmp_path = self.run_dir / f"field.json.tmp.{os.getpid()}"
+    def _atomic_write_json(self, path: Path, payload: Dict[str, Any]) -> None:
+        tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, default=_json_default)
-            os.replace(tmp_path, self.field_path)
+            os.replace(tmp_path, path)
         except Exception:
+            _logger.warning("could not write %s", path, exc_info=True)
             if tmp_path.exists():
                 try:
                     tmp_path.unlink()
                 except OSError:
                     pass
 
+    def _write_field_sync(self, payload: Dict[str, Any]) -> None:
+        self._atomic_write_json(self.field_path, payload)
+
     async def _write_field_json(self, payload: Dict[str, Any]) -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, self._write_field_sync, payload)
+
+    def _write_field_error_sync(self, reason: str) -> None:
+        self._atomic_write_json(self.run_dir / "field_error.json", {"reason": reason})
+
+    async def _write_field_error(self, reason: str) -> None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._write_field_error_sync, reason)
 
     async def record_event(self, item: Dict[str, Any]) -> None:
         """Append one event to stream.jsonl and update field.json if type is field."""
@@ -153,6 +167,7 @@ class RunRecorder:
             from app.services.solver.results import read_field_results
 
             last_error: Exception | None = None
+            field_found = False
             for attempt in range(4):
                 if attempt > 0:
                     await asyncio.sleep(0.5 * attempt)
@@ -168,12 +183,17 @@ class RunRecorder:
                         }
                         await self._write_field_json(payload)
                         self.has_field = True
-                        last_error = None
+                        field_found = True
                         break
+                    # No exception, but nothing usable either (e.g. the solver
+                    # diverged before writing a final timestep) - keep retrying
+                    # the WSL-lag window, but make sure the eventual error path
+                    # below still fires instead of silently doing nothing.
+                    last_error = RuntimeError("no field data in the final written timestep")
                 except Exception as e:  # noqa: BLE001
                     last_error = e
                     continue
-            if last_error is not None:
+            if not field_found:
                 # Surface this in the run's own log instead of failing
                 # silently - a completed run with nothing stored otherwise
                 # looks identical to a run that finished cleanly.
@@ -181,6 +201,23 @@ class RunRecorder:
                     "type": "log",
                     "line": f"[OpenCFD] could not save the final result snapshot: {last_error}",
                 })
+                # Whatever is on disk now is only the cheap live-preview
+                # snapshot from record_event() (per viewer *element*, not per
+                # mesh *node*). Leaving it as this run's field.json would let
+                # a later "View in Viewport" pass the presence check and then
+                # fail the frontend's own node-count guard with a cryptic
+                # mismatch error instead of the real reason (usually: the
+                # solver diverged before writing a usable final timestep).
+                try:
+                    self.field_path.unlink(missing_ok=True)
+                except OSError as e:
+                    _logger.warning("could not remove stale %s", self.field_path, exc_info=True)
+                    await self.record_event({
+                        "type": "log",
+                        "line": f"[OpenCFD] could not remove the stale field snapshot: {e}",
+                    })
+                self.has_field = False
+                await self._write_field_error(str(last_error))
         self.close()
 
 
@@ -195,6 +232,23 @@ def get_run_field(project_id: str, run_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         return json.loads(field_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def get_run_field_error(project_id: str, run_id: str) -> Optional[str]:
+    """Why a run has no stored field snapshot, if that's known - see finish()."""
+    try:
+        rdir = resolve_run_dir(project_id, run_id, create=False)
+    except ValueError:
+        return None
+    err_file = rdir / "field_error.json"
+    if not err_file.is_file():
+        return None
+    try:
+        data = json.loads(err_file.read_text(encoding="utf-8"))
+        reason = data.get("reason")
+        return reason if isinstance(reason, str) else None
     except (OSError, ValueError):
         return None
 

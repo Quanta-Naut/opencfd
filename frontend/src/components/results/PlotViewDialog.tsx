@@ -1,8 +1,14 @@
 import React, { useState, useMemo } from 'react';
 import { X, Trash2, RefreshCw, Sliders, Check, Loader2 } from 'lucide-react';
-import { PlotDefinition, FlowVariable } from '../../types/cfd';
+import { PlotDefinition, FlowVariable, MonitorField, SolverRunRecord } from '../../types/cfd';
 import { CanvasChart, ChartSeries } from '../solver/CanvasChart';
-import { FLOW_VARIABLES, getVariableLabel } from './PlotThumbnail';
+import {
+  FLOW_VARIABLES,
+  MONITOR_FIELDS,
+  getVariableLabel,
+  getMonitorLabel,
+  monitorResidualsFor,
+} from './PlotThumbnail';
 import { sampleSolverRunLine } from '../../utils/api';
 
 export interface PlotViewDialogProps {
@@ -12,7 +18,10 @@ export interface PlotViewDialogProps {
   onUpdatePlot: (updated: PlotDefinition) => void;
   onDeletePlot: (id: string) => void;
   projectId: string;
+  solverRuns?: SolverRunRecord[];
 }
+
+const MULTI_SERIES_COLORS = ['#DC2626', '#2563EB', '#059669', '#D97706', '#7C3AED', '#DB2777'];
 
 const COLORMAPS: Array<'viridis' | 'coolwarm' | 'turbo'> = ['viridis', 'coolwarm', 'turbo'];
 
@@ -31,6 +40,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   onUpdatePlot,
   onDeletePlot,
   projectId,
+  solverRuns,
 }) => {
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState('');
@@ -40,40 +50,71 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   // Hooks must run unconditionally on every render, so the chart data/series
   // memos (and their null-safe inputs) live here, above the early return
   // below - do not move them after the `if (!open || !plot)` guard.
+  const isMonitor = plot?.kind === 'monitor';
   const distances = plot?.data?.distance ?? [];
   const rawValues = plot?.data?.values ?? [];
+  const xAxis = plot?.xAxis ?? 'distance';
+  const xValues = xAxis !== 'distance' ? (plot?.data?.fields?.[xAxis] ?? []) : distances;
+  const monitorX = plot?.monitorX ?? 'iteration';
+  const monitorRows = useMemo(
+    () => (isMonitor ? monitorResidualsFor(plot?.runId ?? null, solverRuns) : []),
+    [isMonitor, plot?.runId, solverRuns],
+  );
 
   const chartData = useMemo(() => {
+    if (isMonitor) {
+      return monitorRows.map(
+        (r) => ({ x: Number((r as any)[monitorX] ?? r.iteration), ...r }) as Record<string, number>,
+      );
+    }
     const rows: Array<Record<string, number>> = [];
-    for (let i = 0; i < distances.length; i++) {
+    for (let i = 0; i < rawValues.length; i++) {
       let v = rawValues[i];
+      const x = xValues[i];
+      if (typeof x !== 'number' || !isFinite(x)) continue;
       if (typeof v !== 'number' || !isFinite(v)) {
         v = NaN;
       } else {
         if (plot?.rangeMin != null && v < plot.rangeMin) v = NaN;
         if (plot?.rangeMax != null && v > plot.rangeMax) v = NaN;
       }
-      rows.push({
-        distance: distances[i],
-        [plot?.variable ?? 'value']: v,
-      });
+      rows.push({ x, [plot?.variable ?? 'value']: v });
     }
     return rows;
-  }, [distances, rawValues, plot?.variable, plot?.rangeMin, plot?.rangeMax]);
+  }, [
+    isMonitor,
+    monitorRows,
+    monitorX,
+    rawValues,
+    xValues,
+    plot?.variable,
+    plot?.rangeMin,
+    plot?.rangeMax,
+  ]);
 
-  const series: ChartSeries[] = useMemo(
-    () =>
-      plot
-        ? [
-            {
-              key: plot.variable,
-              name: getVariableLabel(plot.variable),
-              color: COLORMAP_COLORS[plot.colormap] || '#2563EB',
-            },
-          ]
-        : [],
-    [plot?.variable, plot?.colormap],
-  );
+  const series: ChartSeries[] = useMemo(() => {
+    if (!plot) return [];
+    if (isMonitor) {
+      return (plot.monitorFields ?? []).map((f, i) => {
+        const def = MONITOR_FIELDS.find((m) => m.id === f);
+        return {
+          key: def?.residualKey ?? f,
+          name: getMonitorLabel(f),
+          color: MULTI_SERIES_COLORS[i % MULTI_SERIES_COLORS.length],
+        };
+      });
+    }
+    return [
+      {
+        key: plot.variable,
+        name: getVariableLabel(plot.variable),
+        color: COLORMAP_COLORS[plot.colormap] || '#2563EB',
+      },
+    ];
+  }, [plot, isMonitor]);
+
+  const isResidualMonitor =
+    isMonitor && (plot?.monitorFields ?? []).some((f) => f.startsWith('residual_'));
 
   if (!open || !plot) return null;
 
@@ -105,7 +146,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
     }
 
     // Fallback: re-fetch from backend
-    if (!plot.runId) return;
+    if (!plot.runId || !plot.line) return;
     setReSampling(true);
     setReSampleError(null);
     try {
@@ -136,6 +177,10 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
     }
   };
 
+  const handleXAxisChange = (newX: 'distance' | FlowVariable) => {
+    onUpdatePlot({ ...plot, xAxis: newX });
+  };
+
   const handleColormapChange = (newMap: 'viridis' | 'coolwarm' | 'turbo') => {
     onUpdatePlot({ ...plot, colormap: newMap });
   };
@@ -155,7 +200,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   };
 
   const handleReSample = async () => {
-    if (!plot.runId) return;
+    if (!plot.runId || !plot.line) return;
     setReSampling(true);
     setReSampleError(null);
     try {
@@ -192,14 +237,13 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
     }
   };
 
-  const lineLength = Math.hypot(
-    plot.line.p2[0] - plot.line.p1[0],
-    plot.line.p2[1] - plot.line.p1[1],
-  );
+  const lineLength = plot.line
+    ? Math.hypot(plot.line.p2[0] - plot.line.p1[0], plot.line.p2[1] - plot.line.p1[1])
+    : 0;
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/50 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/25 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -258,16 +302,18 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleReSample}
-              disabled={reSampling}
-              title="Re-sample line data from solver run"
-              className="inline-flex items-center gap-1 text-xs font-medium text-[#69717D] hover:text-[#171A1F] bg-white border border-[#E1E4E8] px-2.5 py-1.5 rounded-sm hover:bg-[#F5F6F8] transition-colors disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${reSampling ? 'animate-spin' : ''}`} />
-              <span>Re-sample</span>
-            </button>
+            {!isMonitor && (
+              <button
+                type="button"
+                onClick={handleReSample}
+                disabled={reSampling}
+                title="Re-sample line data from solver run"
+                className="inline-flex items-center gap-1 text-xs font-medium text-[#69717D] hover:text-[#171A1F] bg-white border border-[#E1E4E8] px-2.5 py-1.5 rounded-sm hover:bg-[#F5F6F8] transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${reSampling ? 'animate-spin' : ''}`} />
+                <span>Re-sample</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={handleDelete}
@@ -294,110 +340,190 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
         )}
 
         {/* Controls Toolbar */}
-        <div className="px-5 py-2.5 border-b border-[#EDEFF3] bg-[#F8FAFC] flex flex-wrap items-center justify-between gap-4 text-xs shrink-0">
-          {/* Variable Picker */}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
-              Variable:
-            </span>
-            <select
-              value={plot.variable}
-              onChange={(e) => handleVariableChange(e.target.value as FlowVariable)}
-              className="px-2.5 py-1 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
-            >
-              {FLOW_VARIABLES.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Colormap Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
-              Colormap:
-            </span>
-            <div className="flex items-center gap-1">
-              {COLORMAPS.map((map) => (
-                <button
-                  key={map}
-                  type="button"
-                  onClick={() => handleColormapChange(map)}
-                  className={`px-2 py-0.5 rounded capitalize text-xs font-medium border transition-colors ${
-                    plot.colormap === map
-                      ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                      : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
-                  }`}
-                >
-                  {map}
-                </button>
-              ))}
+        {isMonitor ? (
+          <div className="px-5 py-2.5 border-b border-[#EDEFF3] bg-[#F8FAFC] flex flex-wrap items-center gap-4 text-xs shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+                Quantities:
+              </span>
+              <div className="flex items-center gap-2">
+                {series.map((s) => (
+                  <span
+                    key={s.key}
+                    className="inline-flex items-center gap-1 font-medium text-[#171A1F]"
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
+                    {s.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+                X axis:
+              </span>
+              <div className="flex items-center gap-1">
+                {(['iteration', 'time'] as const).map((x) => (
+                  <button
+                    key={x}
+                    type="button"
+                    onClick={() => onUpdatePlot({ ...plot, monitorX: x })}
+                    className={`px-2 py-0.5 rounded capitalize text-xs font-medium border transition-colors ${
+                      monitorX === x
+                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                    }`}
+                  >
+                    {x}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+        ) : (
+          <div className="px-5 py-2.5 border-b border-[#EDEFF3] bg-[#F8FAFC] flex flex-wrap items-center justify-between gap-4 text-xs shrink-0">
+            {/* X axis Picker */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+                X axis:
+              </span>
+              <select
+                value={xAxis}
+                onChange={(e) => handleXAxisChange(e.target.value as 'distance' | FlowVariable)}
+                className="px-2.5 py-1 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+              >
+                <option value="distance">Distance along line</option>
+                {FLOW_VARIABLES.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {/* Min / Max Range Controls */}
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider flex items-center gap-1">
-              <Sliders className="w-3 h-3 text-[#69717D]" />
-              Clip Range:
-            </span>
-            <div className="flex items-center gap-1.5 font-mono">
-              <input
-                type="number"
-                step="any"
-                placeholder="Min (auto)"
-                value={plot.rangeMin ?? ''}
-                onChange={(e) => handleMinChange(e.target.value)}
-                className="w-24 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs focus:outline-none focus:border-[#2563EB]"
-              />
-              <span className="text-[#8A929E]">to</span>
-              <input
-                type="number"
-                step="any"
-                placeholder="Max (auto)"
-                value={plot.rangeMax ?? ''}
-                onChange={(e) => handleMaxChange(e.target.value)}
-                className="w-24 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs focus:outline-none focus:border-[#2563EB]"
-              />
-              {(plot.rangeMin !== null || plot.rangeMax !== null) && (
-                <button
-                  type="button"
-                  onClick={handleResetRange}
-                  className="text-[11px] text-[#2563EB] hover:underline ml-1"
-                >
-                  Reset
-                </button>
-              )}
+            {/* Variable Picker */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+                Y axis:
+              </span>
+              <select
+                value={plot.variable}
+                onChange={(e) => handleVariableChange(e.target.value as FlowVariable)}
+                className="px-2.5 py-1 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+              >
+                {FLOW_VARIABLES.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Colormap Selector */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+                Colormap:
+              </span>
+              <div className="flex items-center gap-1">
+                {COLORMAPS.map((map) => (
+                  <button
+                    key={map}
+                    type="button"
+                    onClick={() => handleColormapChange(map)}
+                    className={`px-2 py-0.5 rounded capitalize text-xs font-medium border transition-colors ${
+                      plot.colormap === map
+                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                    }`}
+                  >
+                    {map}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Min / Max Range Controls */}
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider flex items-center gap-1">
+                <Sliders className="w-3 h-3 text-[#69717D]" />
+                Clip Range:
+              </span>
+              <div className="flex items-center gap-1.5 font-mono">
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="Min (auto)"
+                  value={plot.rangeMin ?? ''}
+                  onChange={(e) => handleMinChange(e.target.value)}
+                  className="w-24 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs focus:outline-none focus:border-[#2563EB]"
+                />
+                <span className="text-[#8A929E]">to</span>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="Max (auto)"
+                  value={plot.rangeMax ?? ''}
+                  onChange={(e) => handleMaxChange(e.target.value)}
+                  className="w-24 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs focus:outline-none focus:border-[#2563EB]"
+                />
+                {(plot.rangeMin !== null || plot.rangeMax !== null) && (
+                  <button
+                    type="button"
+                    onClick={handleResetRange}
+                    className="text-[11px] text-[#2563EB] hover:underline ml-1"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Chart Area */}
         <div className="flex-1 min-h-0 relative p-4 bg-white">
           <CanvasChart
             data={chartData}
-            xKey="distance"
+            xKey="x"
             series={series}
-            xFormat={(d) => `${d.toFixed(2)}m`}
-            yFormat={(v) => (Math.abs(v) >= 1000 || (v !== 0 && Math.abs(v) < 0.01) ? v.toExponential(2) : v.toFixed(3))}
+            yScale={isResidualMonitor ? 'log' : 'linear'}
+            xFormat={(d) =>
+              isMonitor
+                ? monitorX === 'time'
+                  ? `${d.toFixed(2)}s`
+                  : d.toFixed(0)
+                : xAxis === 'distance'
+                  ? `${d.toFixed(2)}m`
+                  : d.toFixed(3)
+            }
+            yFormat={(v) =>
+              Math.abs(v) >= 1000 || (v !== 0 && Math.abs(v) < 0.01)
+                ? v.toExponential(2)
+                : v.toFixed(3)
+            }
           />
         </div>
 
-        {/* Footer: Probe Line Specifications */}
+        {/* Footer: Probe Line / Monitor Specifications */}
         <div className="px-5 py-2.5 border-t border-[#EDEFF3] bg-[#FAFBFC] flex items-center justify-between text-[11px] text-[#8A929E] font-mono shrink-0">
-          <div className="flex items-center gap-4">
-            <span>
-              P1: ({plot.line.p1[0].toFixed(3)}m, {plot.line.p1[1].toFixed(3)}m)
-            </span>
-            <span>
-              P2: ({plot.line.p2[0].toFixed(3)}m, {plot.line.p2[1].toFixed(3)}m)
-            </span>
-            <span>Length: {lineLength.toFixed(3)}m</span>
-          </div>
-          <div>
-            <span>{plot.line.samples} samples</span>
-          </div>
+          {isMonitor ? (
+            <span>{monitorRows.length} iterations</span>
+          ) : plot.line ? (
+            <>
+              <div className="flex items-center gap-4">
+                <span>
+                  P1: ({plot.line.p1[0].toFixed(3)}m, {plot.line.p1[1].toFixed(3)}m)
+                </span>
+                <span>
+                  P2: ({plot.line.p2[0].toFixed(3)}m, {plot.line.p2[1].toFixed(3)}m)
+                </span>
+                <span>Length: {lineLength.toFixed(3)}m</span>
+              </div>
+              <div>
+                <span>{plot.line.samples} samples</span>
+              </div>
+            </>
+          ) : null}
         </div>
       </div>
     </div>

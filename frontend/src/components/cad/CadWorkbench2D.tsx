@@ -54,7 +54,14 @@ import {
   HelpCircle,
   Loader2,
 } from 'lucide-react';
-import { requestOffset, requestFillet, requestMeshFromSketch, uploadAndParseAirfoil, uploadAndParseDxf, fetchAndParseAirfoilFromUrl } from '../../utils/api';
+import {
+  requestOffset,
+  requestFillet,
+  requestMeshFromSketch,
+  uploadAndParseAirfoil,
+  uploadAndParseDxf,
+  fetchAndParseAirfoilFromUrl,
+} from '../../utils/api';
 import { toast } from '../ui/Toast';
 import {
   CadWorkflowStep,
@@ -76,814 +83,80 @@ import {
   validateBoundaryTags,
   generateDefaultAirfoilPoints,
 } from '../../types/cadWorkflow';
-import { Blocking, blockPolygon, entityRing, applyVertexMove, cleanBlocking, propagateNodeCounts } from '../../types/blocking';
+import {
+  Blocking,
+  blockPolygon,
+  entityRing,
+  applyVertexMove,
+  cleanBlocking,
+  propagateNodeCounts,
+  emptyBlocking,
+  outlinesFor,
+  snapToOutline,
+  pickEdge,
+  blockAt,
+  blocksOverBodies,
+  addBlockFromCorners,
+  makeTagLookup,
+  deleteBlock,
+  splitSheet,
+  currentCellSize,
+  autoCellSize,
+  checkBlocking,
+  curveOf,
+  projectOnCurve,
+  constrainToCurves,
+  initializeBlocking,
+  associateEdges,
+  disassociateEdges,
+  snapProjectVertices,
+  mergeVertices,
+  mergeBlocks,
+  ogridBlock,
+  setEdgeParams,
+} from '../../types/blocking';
 import { useWebGLField } from './useWebGLField';
 
-// ─── CAD Workbench Tool & State Types ─────────────────────────────────────────
-
-export type CadTool =
-  | 'select'
-  | 'line'
-  | 'polyline'
-  | 'rectangle'
-  | 'circle_center_radius'
-  | 'ellipse_center'
-  | 'circle_3pt'
-  | 'arc_center'
-  | 'arc_3pt'
-  | 'spline'
-  | 'construction_line' // infinite reference line through two points
-  | 'fillet'
-  | 'chamfer'
-  | 'offset'
-  | 'trim'
-  | 'extend'
-  | 'mirror'
-  | 'move'
-  | 'copy_entity'
-  | 'rotate'
-  | 'dimension_linear';
-
-
-export interface GuideLine {
-  type: 'horizontal' | 'vertical' | 'parallel' | 'perpendicular' | 'projection' | 'origin' | 'xaxis' | 'yaxis';
-  from: Point2D;
-  to: Point2D;
-  label?: string;
-}
-
-interface Snap {
-  pt: Point2D;
-  type: 'endpoint' | 'midpoint' | 'center' | 'origin' | 'grid' | 'perpendicular' | 'parallel' | 'alignment' | 'tangent' | 'intersection';
-  guides?: GuideLine[];
-}
-
-export interface DynamicDimPrompt {
-  entityId: string;
-  type: 'line' | 'rectangle' | 'circle' | 'ellipse' | 'arc';
-  worldPos: Point2D;
-  val1: string;
-  val2?: string;
-  label1: string;
-  label2?: string;
-  basePt: Point2D;
-  endPt?: Point2D;
-  layer: string;
-  /** True while the shape is still being placed (no entity exists yet) - the
-   * box tracks the mouse live until the user types, and Tab/Enter/typed
-   * values drive the in-progress preview instead of editing a committed entity. */
-  live?: boolean;
-}
-
-
-interface CadState {
-  entities: CadEntity[];
-}
-
-
-
-type CadAction =
-  | { type: 'ADD_ENTITY'; entity: CadEntity }
-  | { type: 'REPLACE_ENTITIES'; entities: CadEntity[] }
-  | { type: 'DELETE_SELECTED' }
-  | { type: 'SELECT_ENTITY'; id: string | null; multi?: boolean }
-  | { type: 'CLEAR' };
-
-function cadReducer(state: CadState, action: CadAction): CadState {
-  switch (action.type) {
-    case 'ADD_ENTITY':
-      return { entities: [...state.entities, action.entity] };
-    case 'REPLACE_ENTITIES':
-      return { entities: action.entities };
-    case 'DELETE_SELECTED':
-      return { entities: state.entities.filter(e => !e.selected) };
-    case 'SELECT_ENTITY':
-      return {
-        entities: state.entities.map(e => ({
-          ...e,
-          selected: action.multi
-            ? (e.id === action.id ? !e.selected : e.selected)
-            : e.id === action.id,
-        })),
-      };
-    case 'CLEAR':
-      return { entities: [] };
-    default:
-      return state;
-  }
-}
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const SNAP_RADIUS_PX = 12;
-const INITIAL_ZOOM = 130;
-
-// ── Scientific colormaps (control-point ramps, linearly interpolated) ────────
-const _RAMPS: Record<string, [number, number, number][]> = {
-  coolwarm: [[59, 76, 192], [144, 178, 254], [220, 220, 220], [245, 156, 125], [180, 4, 38]],
-  viridis: [[68, 1, 84], [59, 82, 139], [33, 145, 140], [94, 201, 98], [253, 231, 37]],
-  turbo: [[48, 18, 59], [58, 138, 253], [27, 229, 138], [223, 224, 40], [122, 4, 3]],
-  jet: [[0, 0, 131], [0, 128, 255], [122, 255, 128], [255, 191, 0], [128, 0, 0]],
-  rainbow: [[110, 64, 170], [76, 176, 202], [126, 219, 92], [251, 179, 61], [235, 74, 74]],
-  // Mesh-quality ramp: good cells green, borderline amber, bad cells red.
-  quality: [[22, 163, 74], [132, 204, 22], [250, 204, 21], [249, 115, 22], [220, 38, 38]],
-};
-
-/** Equiangle skewness (0 = ideal, 1 = degenerate) for a triangle or quad given
- *  its ordered vertices - the same measure the Gmsh backend reports. */
-function cellSkewness(pts: [number, number][]): number {
-  const n = pts.length;
-  if (n < 3) return 1;
-  const ideal = n === 3 ? 60 : 90;
-  let mn = 180;
-  let mx = 0;
-  for (let i = 0; i < n; i += 1) {
-    const p0 = pts[(i - 1 + n) % n];
-    const p1 = pts[i];
-    const p2 = pts[(i + 1) % n];
-    const v1x = p0[0] - p1[0];
-    const v1y = p0[1] - p1[1];
-    const v2x = p2[0] - p1[0];
-    const v2y = p2[1] - p1[1];
-    const d = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y);
-    if (d < 1e-15) return 1;
-    const ang = (Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / d))) * 180) / Math.PI;
-    if (ang < mn) mn = ang;
-    if (ang > mx) mx = ang;
-  }
-  return Math.max(0, Math.min(1, Math.max((mx - ideal) / (180 - ideal), (ideal - mn) / ideal)));
-}
-
-function colormapRGB(t: number, name: string): string {
-  const ramp = _RAMPS[name] || _RAMPS.coolwarm;
-  const x = Math.max(0, Math.min(1, t)) * (ramp.length - 1);
-  const i = Math.min(ramp.length - 2, Math.floor(x));
-  const f = x - i;
-  const a = ramp[i];
-  const b = ramp[i + 1];
-  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * f)}, ${Math.round(a[1] + (b[1] - a[1]) * f)}, ${Math.round(a[2] + (b[2] - a[2]) * f)})`;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function uid(): string {
-  return `e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-}
-
-/** Move vertex `idx` of an entity to `np`, keeping the shape's kind sane
- *  (rectangles stay axis-aligned; a circle centre translates, its rim resizes). */
-function moveEntityVertex(ent: CadEntity, idx: number, np: Point2D): CadEntity {
-  const pts = ent.pts.map(p => ({ ...p }));
-  if (ent.type === 'rectangle' && pts.length === 4) {
-    const opp = pts[(idx + 2) % 4];
-    const x0 = Math.min(np.x, opp.x), x1 = Math.max(np.x, opp.x);
-    const y0 = Math.min(np.y, opp.y), y1 = Math.max(np.y, opp.y);
-    return { ...ent, pts: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }] };
-  }
-  if (ent.type === 'circle' && pts.length >= 2) {
-    if (idx === 0) {
-      const dx = np.x - pts[0].x, dy = np.y - pts[0].y;
-      return { ...ent, pts: pts.map(p => ({ x: p.x + dx, y: p.y + dy })) };
-    }
-    const r = Math.hypot(np.x - pts[0].x, np.y - pts[0].y);
-    return { ...ent, radius: r, pts: [pts[0], np] };
-  }
-  if (ent.type === 'ellipse' && pts.length >= 2) {
-    if (idx === 0) {
-      const dx = np.x - pts[0].x, dy = np.y - pts[0].y;
-      return { ...ent, pts: pts.map(p => ({ x: p.x + dx, y: p.y + dy })) };
-    }
-    if (idx === 1) {
-      const rx = Math.hypot(np.x - pts[0].x, np.y - pts[0].y);
-      const rotation = Math.atan2(np.y - pts[0].y, np.x - pts[0].x);
-      return { ...ent, rx, rotation, pts: [pts[0], np] };
-    }
-    if (idx === 2) {
-      const c = pts[0];
-      const rot = ent.rotation || 0;
-      const distMinor = Math.abs(-(np.x - c.x) * Math.sin(rot) + (np.y - c.y) * Math.cos(rot));
-      return { ...ent, ry: distMinor };
-    }
-  }
-  pts[idx] = np;
-  return { ...ent, pts };
-}
-
-function translateEntity(ent: CadEntity, dx: number, dy: number): CadEntity {
-  return { ...ent, pts: ent.pts.map(p => ({ x: p.x + dx, y: p.y + dy })) };
-}
-
-function dist(a: Point2D, b: Point2D): number {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function midpt(a: Point2D, b: Point2D): Point2D {
-  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-}
-
-function pointInPolygon(p: Point2D, poly: Point2D[]): boolean {
-  let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
-    if ((yi > p.y) !== (yj > p.y) && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi || 1e-12) + xi) inside = !inside;
-  }
-  return inside;
-}
-
-/** Closest distance from point p to segment a→b */
-function distToSegment(p: Point2D, a: Point2D, b: Point2D): number {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return dist(p, a);
-  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
-  return dist(p, { x: a.x + t * dx, y: a.y + t * dy });
-}
-
-/** Dynamic Google Maps style scale computation based on zoom (pixels per meter) */
-function getMapScaleInfo(zoom: number, targetPx = 75): {
-  barWidthPx: number;
-  label: string;
-  worldDist: number;
-} {
-  const rawDist = targetPx / Math.max(zoom, 1e-6); // in meters
-  const exponent = Math.floor(Math.log10(rawDist));
-  const fraction = rawDist / Math.pow(10, exponent);
-
-  let niceFraction = 1;
-  if (fraction >= 5) niceFraction = 5;
-  else if (fraction >= 2) niceFraction = 2;
-  else niceFraction = 1;
-
-  let niceDist = niceFraction * Math.pow(10, exponent); // in meters
-
-  // Clamp minimum scale resolution to 0.2 mm (0.0002 m)
-  if (niceDist < 0.0002) {
-    niceDist = 0.0002;
-  }
-
-  const barWidthPx = Math.max(20, Math.round(niceDist * zoom));
-
-  let label = '';
-  if (niceDist >= 1000) {
-    label = `${(niceDist / 1000).toLocaleString()} km`;
-  } else if (niceDist >= 1) {
-    label = `${niceDist >= 10 ? niceDist.toFixed(0) : niceDist.toFixed(niceDist % 1 === 0 ? 0 : 1)} m`;
-  } else {
-    // All sub-meter scales formatted in mm down to 0.2 mm (never micrometers)
-    const mm = niceDist * 1000;
-    if (mm >= 1) {
-      label = `${mm >= 10 ? mm.toFixed(0) : mm.toFixed(mm % 1 === 0 ? 0 : 1)} mm`;
-    } else {
-      label = `${mm.toFixed(1)} mm`; // e.g. 0.5 mm, 0.2 mm
-    }
-  }
-
-  return { barWidthPx, label, worldDist: niceDist };
-}
-
-/** Converts an imported point sequence into one closed CFD profile. */
-function pointsToLineSegments(pts: Point2D[], role?: 'geometry' | 'domain_boundary'): CadEntity[] {
-  if (pts.length < 3) return [];
-  const clean = pts.filter((point, index) => index === 0 || dist(point, pts[index - 1]) > 1e-8);
-  if (clean.length > 1 && dist(clean[0], clean[clean.length - 1]) < 1e-5) clean.pop();
-  return [{
-    id: uid(),
-    type: 'polyline',
-    layer: 'geometry',
-    role,
-    pts: clean,
-    isClosed: true,
-  }];
-}
-
-/** Parameter t ∈ [0,1] at which segment a→b is closest to p (-1 if beyond ends) */
-function segParam(p: Point2D, a: Point2D, b: Point2D): number {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return 0;
-  return Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq));
-}
-
-/**
- * Intersection of segment a→b with segment c→d.
- * Returns intersection point or null if parallel/non-intersecting.
- */
-function segSegIntersect(a: Point2D, b: Point2D, c: Point2D, d: Point2D): Point2D | null {
-  const r = { x: b.x - a.x, y: b.y - a.y };
-  const s = { x: d.x - c.x, y: d.y - c.y };
-  const denom = r.x * s.y - r.y * s.x;
-  if (Math.abs(denom) < 1e-10) return null;
-  const t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / denom;
-  const u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / denom;
-  if (t >= -1e-6 && t <= 1 + 1e-6 && u >= -1e-6 && u <= 1 + 1e-6) {
-    return { x: a.x + Math.max(0, Math.min(1, t)) * r.x, y: a.y + Math.max(0, Math.min(1, t)) * r.y };
-  }
-  return null;
-}
-
-/** Intersection of finite segment a→b with infinite line passing through p1 and p2 */
-function segInfLineIntersect(a: Point2D, b: Point2D, p1: Point2D, p2: Point2D): Point2D | null {
-  const r = { x: b.x - a.x, y: b.y - a.y };
-  const s = { x: p2.x - p1.x, y: p2.y - p1.y };
-  const denom = r.x * s.y - r.y * s.x;
-  if (Math.abs(denom) < 1e-10) return null;
-  const t = ((p1.x - a.x) * s.y - (p1.y - a.y) * s.x) / denom;
-  if (t >= -1e-6 && t <= 1 + 1e-6) {
-    return { x: a.x + Math.max(0, Math.min(1, t)) * r.x, y: a.y + Math.max(0, Math.min(1, t)) * r.y };
-  }
-  return null;
-}
-
-/** Intersections of finite segment a→b with circle (center, radius) */
-function segCircleIntersect(a: Point2D, b: Point2D, center: Point2D, radius: number): Point2D[] {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return [];
-  const fx = a.x - center.x, fy = a.y - center.y;
-  const A = lenSq;
-  const B = 2 * (fx * dx + fy * dy);
-  const C = fx * fx + fy * fy - radius * radius;
-  const disc = B * B - 4 * A * C;
-  if (disc < 0) return [];
-  const sqrtD = Math.sqrt(disc);
-  const t1 = (-B - sqrtD) / (2 * A);
-  const t2 = (-B + sqrtD) / (2 * A);
-  const res: Point2D[] = [];
-  if (t1 >= -1e-6 && t1 <= 1 + 1e-6) res.push({ x: a.x + Math.max(0, Math.min(1, t1)) * dx, y: a.y + Math.max(0, Math.min(1, t1)) * dy });
-  if (t2 >= -1e-6 && t2 <= 1 + 1e-6 && Math.abs(t2 - t1) > 1e-5) res.push({ x: a.x + Math.max(0, Math.min(1, t2)) * dx, y: a.y + Math.max(0, Math.min(1, t2)) * dy });
-  return res;
-}
-
-/** Intersections of finite segment a→b with rotated ellipse (center, rx, ry, rotation) */
-function segEllipseIntersect(
-  a: Point2D,
-  b: Point2D,
-  center: Point2D,
-  rx: number,
-  ry: number,
-  rotation: number = 0
-): Point2D[] {
-  if (rx <= 1e-9 || ry <= 1e-9) return [];
-  const cosR = Math.cos(rotation);
-  const sinR = Math.sin(rotation);
-  const toUnit = (p: Point2D): Point2D => {
-    const tx = p.x - center.x;
-    const ty = p.y - center.y;
-    const rxRot = tx * cosR + ty * sinR;
-    const ryRot = -tx * sinR + ty * cosR;
-    return { x: rxRot / rx, y: ryRot / ry };
-  };
-  const fromUnit = (p: Point2D): Point2D => {
-    const sx = p.x * rx;
-    const sy = p.y * ry;
-    return {
-      x: center.x + sx * cosR - sy * sinR,
-      y: center.y + sx * sinR + sy * cosR,
-    };
-  };
-
-  const aUnit = toUnit(a);
-  const bUnit = toUnit(b);
-  const hitsUnit = segCircleIntersect(aUnit, bUnit, { x: 0, y: 0 }, 1);
-  return hitsUnit.map(fromUnit);
-}
-
-function normalizeAngle(a: number): number {
-
-  let res = a % (2 * Math.PI);
-  if (res > Math.PI) res -= 2 * Math.PI;
-  if (res < -Math.PI) res += 2 * Math.PI;
-  return res;
-}
-
-export interface TrimTarget {
-  targetEnt: CadEntity;
-  targetSegIdx: number;
-  subSeg: { p0: Point2D; p1: Point2D };
-  preservedSegs: { p0: Point2D; p1: Point2D }[];
-  preservedPolylines?: Point2D[][];
-  subPolyline?: Point2D[];
-}
-
-function sampleArcPoints(
-  hStart: { idx: number; pt: Point2D },
-  hEnd: { idx: number; pt: Point2D },
-  ring: Point2D[]
-): Point2D[] {
-  const N = ring.length;
-  const pts: Point2D[] = [hStart.pt];
-  let k = Math.floor(hStart.idx) + 1;
-  const endLimit = hStart.idx <= hEnd.idx ? hEnd.idx : hEnd.idx + N;
-
-  while (k < endLimit) {
-    const ringVtx = ring[k % N];
-    if (dist(pts[pts.length - 1], ringVtx) > 1e-4) {
-      pts.push(ringVtx);
-    }
-    k++;
-  }
-
-  if (dist(pts[pts.length - 1], hEnd.pt) > 1e-4) {
-    pts.push(hEnd.pt);
-  }
-  return pts;
-}
-
-function getTrimTarget(rawPt: Point2D, entities: CadEntity[], zoom: number): TrimTarget | null {
-  const hitR = 14 / zoom;
-  let targetEnt: CadEntity | null = null;
-  let targetSegIdx = -1;
-  let bestD = Infinity;
-
-  for (const ent of entities) {
-    if (ent.layer === 'construction') continue;
-    for (let i = 0; i < ent.pts.length - 1; i++) {
-      const d = distToSegment(rawPt, ent.pts[i], ent.pts[i + 1]);
-      if (d < hitR && d < bestD) { bestD = d; targetEnt = ent; targetSegIdx = i; }
-    }
-    if (ent.isClosed && ent.pts.length >= 3) {
-      const i = ent.pts.length - 1;
-      const d = distToSegment(rawPt, ent.pts[i], ent.pts[0]);
-      if (d < hitR && d < bestD) { bestD = d; targetEnt = ent; targetSegIdx = i; }
-    }
-    if (ent.type === 'circle' && ent.pts.length >= 1) {
-      const r = ent.radius ?? (ent.pts[1] ? dist(ent.pts[0], ent.pts[1]) : 0);
-      if (r > 0) {
-        const radialD = Math.abs(dist(rawPt, ent.pts[0]) - r);
-        if (radialD < hitR && radialD < bestD) {
-          bestD = radialD;
-          targetEnt = ent;
-          targetSegIdx = -1;
-        }
-      }
-    }
-    if (ent.type === 'ellipse' && ent.pts.length >= 1 && ent.rx != null && ent.ry != null) {
-      const c = ent.pts[0];
-      const rx = ent.rx;
-      const ry = ent.ry;
-      const rot = ent.rotation || 0;
-      const cosR = Math.cos(rot);
-      const sinR = Math.sin(rot);
-      const N = 32;
-      let minD = Infinity;
-      let prevP = {
-        x: c.x + rx * cosR,
-        y: c.y + rx * sinR,
-      };
-      for (let j = 1; j <= N; j++) {
-        const a = (2 * Math.PI * j) / N;
-        const lx = rx * Math.cos(a);
-        const ly = ry * Math.sin(a);
-        const curP = {
-          x: c.x + lx * cosR - ly * sinR,
-          y: c.y + lx * sinR + ly * cosR,
-        };
-        const d = distToSegment(rawPt, prevP, curP);
-        if (d < minD) minD = d;
-        prevP = curP;
-      }
-      if (minD < hitR && minD < bestD) {
-        bestD = minD;
-        targetEnt = ent;
-        targetSegIdx = -1;
-      }
-    }
-  }
-
-  if (!targetEnt) return null;
-  if (targetEnt.type !== 'circle' && targetEnt.type !== 'ellipse' && targetSegIdx < 0) return null;
-
-  if (targetEnt.type === 'circle' || targetEnt.type === 'ellipse') {
-    const c = targetEnt.pts[0];
-    let rx = 0;
-    let ry = 0;
-    let rot = 0;
-    if (targetEnt.type === 'circle') {
-      rx = targetEnt.radius ?? (targetEnt.pts[1] ? dist(c, targetEnt.pts[1]) : 0);
-      ry = rx;
-      rot = 0;
-    } else {
-      rx = targetEnt.rx ?? (targetEnt.pts[1] ? dist(c, targetEnt.pts[1]) : 0);
-      ry = targetEnt.ry ?? (rx * 0.5);
-      rot = targetEnt.rotation || 0;
-    }
-    if (rx <= 1e-6 || ry <= 1e-6) return null;
-
-    const N = 128;
-    const cosR = Math.cos(rot);
-    const sinR = Math.sin(rot);
-    const ring: Point2D[] = [];
-    for (let k = 0; k < N; k++) {
-      const a = (2 * Math.PI * k) / N;
-      const lx = rx * Math.cos(a);
-      const ly = ry * Math.sin(a);
-      ring.push({
-        x: c.x + lx * cosR - ly * sinR,
-        y: c.y + lx * sinR + ly * cosR,
-      });
-    }
-
-    const rawHits: { idx: number; pt: Point2D }[] = [];
-    for (let k = 0; k < N; k++) {
-      const segA = ring[k];
-      const segB = ring[(k + 1) % N];
-
-      for (const other of entities) {
-        if (other.id === targetEnt.id) continue;
-
-        for (let j = 0; j < other.pts.length - 1; j++) {
-          if (other.type === 'construction' && other.pts.length >= 2) {
-            const ix = segInfLineIntersect(segA, segB, other.pts[0], other.pts[1]);
-            if (ix) {
-              const t = segParam(ix, segA, segB);
-              rawHits.push({ idx: (k + t) % N, pt: ix });
-            }
-          } else {
-            const ix = segSegIntersect(segA, segB, other.pts[j], other.pts[j + 1]);
-            if (ix) {
-              const t = segParam(ix, segA, segB);
-              rawHits.push({ idx: (k + t) % N, pt: ix });
-            }
-          }
-        }
-
-        if (other.isClosed && other.pts.length >= 3) {
-          const j = other.pts.length - 1;
-          const ix = segSegIntersect(segA, segB, other.pts[j], other.pts[0]);
-          if (ix) {
-            const t = segParam(ix, segA, segB);
-            rawHits.push({ idx: (k + t) % N, pt: ix });
-          }
-        }
-
-        if (other.type === 'circle' && other.pts.length >= 2) {
-          const rOther = other.radius ?? dist(other.pts[0], other.pts[1]);
-          const ixs = segCircleIntersect(segA, segB, other.pts[0], rOther);
-          for (const ix of ixs) {
-            const t = segParam(ix, segA, segB);
-            rawHits.push({ idx: (k + t) % N, pt: ix });
-          }
-        }
-
-        if (other.type === 'ellipse' && other.pts.length >= 2 && other.rx != null && other.ry != null) {
-          const ixs = segEllipseIntersect(segA, segB, other.pts[0], other.rx, other.ry, other.rotation || 0);
-          for (const ix of ixs) {
-            const t = segParam(ix, segA, segB);
-            rawHits.push({ idx: (k + t) % N, pt: ix });
-          }
-        }
-      }
-    }
-
-    rawHits.sort((a, b) => a.idx - b.idx);
-    const uniqueHits: { idx: number; pt: Point2D }[] = [];
-    for (const h of rawHits) {
-      const isDup = uniqueHits.some(u => {
-        const idxDiff = Math.abs(u.idx - h.idx);
-        const wrapDiff = Math.abs(idxDiff - N);
-        return dist(u.pt, h.pt) < 1e-3 || idxDiff < 0.2 || wrapDiff < 0.2;
-      });
-      if (!isDup) uniqueHits.push(h);
-    }
-
-    if (uniqueHits.length < 2) {
-      return {
-        targetEnt,
-        targetSegIdx: -1,
-        subSeg: { p0: ring[0], p1: ring[Math.floor(N / 2)] },
-        subPolyline: [...ring, ring[0]],
-        preservedSegs: [],
-        preservedPolylines: [],
-      };
-    }
-
-    let clickIdx = 0;
-    let clickMinD = Infinity;
-    for (let k = 0; k < N; k++) {
-      const a = ring[k];
-      const b = ring[(k + 1) % N];
-      const d = distToSegment(rawPt, a, b);
-      if (d < clickMinD) {
-        clickMinD = d;
-        const t = segParam(rawPt, a, b);
-        clickIdx = (k + t) % N;
-      }
-    }
-
-    let trimSpanIdx = -1;
-    for (let i = 0; i < uniqueHits.length - 1; i++) {
-      if (clickIdx >= uniqueHits[i].idx && clickIdx <= uniqueHits[i + 1].idx) {
-        trimSpanIdx = i;
-        break;
-      }
-    }
-    if (trimSpanIdx === -1) {
-      trimSpanIdx = uniqueHits.length - 1;
-    }
-
-    const preservedPolylines: Point2D[][] = [];
-    const preservedSegs: { p0: Point2D; p1: Point2D }[] = [];
-    let subPolyline: Point2D[] = [];
-    let subSeg = { p0: ring[0], p1: ring[Math.floor(N / 2)] };
-
-    for (let i = 0; i < uniqueHits.length; i++) {
-      const hStart = uniqueHits[i];
-      const hEnd = uniqueHits[(i + 1) % uniqueHits.length];
-      const arcPts = sampleArcPoints(hStart, hEnd, ring);
-      if (i === trimSpanIdx) {
-        subPolyline = arcPts;
-        subSeg = { p0: hStart.pt, p1: hEnd.pt };
-      } else {
-        preservedPolylines.push(arcPts);
-        preservedSegs.push({ p0: hStart.pt, p1: hEnd.pt });
-      }
-    }
-
-    return {
-      targetEnt,
-      targetSegIdx: -1,
-      subSeg,
-      subPolyline,
-      preservedSegs,
-      preservedPolylines,
-    };
-  }
-
-  const segA = targetEnt.pts[targetSegIdx];
-  const segB = targetEnt.pts[(targetSegIdx + 1) % targetEnt.pts.length];
-
-  // Collect all intersection t-parameters along the segment [0, 1]
-  const tParams: number[] = [0, 1];
-
-  for (const other of entities) {
-    for (let j = 0; j < other.pts.length - 1; j++) {
-      if (other.id === targetEnt.id && j === targetSegIdx) continue;
-      if (other.type === 'construction' && other.pts.length >= 2) {
-        const ix = segInfLineIntersect(segA, segB, other.pts[0], other.pts[1]);
-        if (ix) {
-          const t = segParam(ix, segA, segB);
-          if (t > 1e-5 && t < 1 - 1e-5) tParams.push(t);
-        }
-      } else {
-        const ix = segSegIntersect(segA, segB, other.pts[j], other.pts[j + 1]);
-        if (ix) {
-          const t = segParam(ix, segA, segB);
-          if (t > 1e-5 && t < 1 - 1e-5) tParams.push(t);
-        }
-      }
-    }
-    if (other.isClosed && other.pts.length >= 3) {
-      const j = other.pts.length - 1;
-      if (!(other.id === targetEnt.id && j === targetSegIdx)) {
-        const ix = segSegIntersect(segA, segB, other.pts[j], other.pts[0]);
-        if (ix) {
-          const t = segParam(ix, segA, segB);
-          if (t > 1e-5 && t < 1 - 1e-5) tParams.push(t);
-        }
-      }
-    }
-    if (other.type === 'circle' && other.pts.length >= 2) {
-      const r = other.radius ?? dist(other.pts[0], other.pts[1]);
-      const ixs = segCircleIntersect(segA, segB, other.pts[0], r);
-      for (const ix of ixs) {
-        const t = segParam(ix, segA, segB);
-        if (t > 1e-5 && t < 1 - 1e-5) tParams.push(t);
-      }
-    }
-    if (other.type === 'ellipse' && other.pts.length >= 2 && other.rx != null && other.ry != null) {
-      const ixs = segEllipseIntersect(segA, segB, other.pts[0], other.rx, other.ry, other.rotation || 0);
-      for (const ix of ixs) {
-        const t = segParam(ix, segA, segB);
-        if (t > 1e-5 && t < 1 - 1e-5) tParams.push(t);
-      }
-    }
-  }
-
-  const sortedT = Array.from(new Set(tParams.map(t => +t.toFixed(6)))).sort((a, b) => a - b);
-
-  if (sortedT.length <= 2) {
-    // Nothing crosses this segment - trim removes the whole segment.
-    return { targetEnt, targetSegIdx, subSeg: { p0: segA, p1: segB }, preservedSegs: [] };
-  }
-
-  const tClick = segParam(rawPt, segA, segB);
-  let subIdx = sortedT.findIndex((t, i) => i < sortedT.length - 1 && tClick >= t && tClick <= sortedT[i + 1]);
-  if (subIdx < 0) subIdx = 0;
-
-  const t0 = sortedT[subIdx];
-  const t1 = sortedT[subIdx + 1];
-  const subSeg = {
-    p0: { x: +(segA.x + t0 * (segB.x - segA.x)).toFixed(5), y: +(segA.y + t0 * (segB.y - segA.y)).toFixed(5) },
-    p1: { x: +(segA.x + t1 * (segB.x - segA.x)).toFixed(5), y: +(segA.y + t1 * (segB.y - segA.y)).toFixed(5) }
-  };
-
-  const preservedSegs: { p0: Point2D; p1: Point2D }[] = [];
-  for (let i = 0; i < sortedT.length - 1; i++) {
-    if (i !== subIdx) {
-      const ta = sortedT[i];
-      const tb = sortedT[i + 1];
-      if (tb - ta > 1e-5) {
-        preservedSegs.push({
-          p0: { x: +(segA.x + ta * (segB.x - segA.x)).toFixed(5), y: +(segA.y + ta * (segB.y - segA.y)).toFixed(5) },
-          p1: { x: +(segA.x + tb * (segB.x - segA.x)).toFixed(5), y: +(segA.y + tb * (segB.y - segA.y)).toFixed(5) }
-        });
-      }
-    }
-  }
-
-  return {
-    targetEnt,
-    targetSegIdx,
-    subSeg,
-    preservedSegs,
-  };
-}
-
-
-
-
-
-interface CadWorkbenchProps {
-  onApplySketchMesh: (mesh: any, name: string) => void;
-  domainLength: number;
-  domainHeight: number;
-  resolution: string;
-  firstLayerMm: number;
-  pendingImportFile?:
-    | { type: 'parsed'; name: string; points: Point2D[] }
-    | { type: 'airfoil' | 'dxf' | 'url'; file?: File; url?: string }
-    | null;
-  onClearPendingImport?: () => void;
-
-  // ── 6-Step Workflow Props (controlled by sidebar) ──
-  currentStep?: CadWorkflowStep;
-  flowType?: FlowType;
-  domainShape?: DomainShapeType;
-  upstreamChordFactor?: number;
-  setUpstreamChordFactor?: (f: number) => void;
-  downstreamChordFactor?: number;
-  setDownstreamChordFactor?: (f: number) => void;
-  lateralHeightFactor?: number;
-  setLateralHeightFactor?: (f: number) => void;
-  geometryBBox?: GeometryBBox;
-  angleOfAttackDeg?: number;
-  setAngleOfAttackDeg?: (a: number) => void;
-  freestreamVelocity?: number;
-  activeTagTool?: BoundaryTag | null;
-  edgeTagMap?: Record<string, BoundaryTag>;
-  onSetEdgeTagMap?: React.Dispatch<React.SetStateAction<Record<string, BoundaryTag>>>;
-  onEntitiesChange?: (entities: CadEntity[]) => void;
-  onRequestGenerateDomainRef?: React.MutableRefObject<(() => void) | null>;
-  onRequestSetSelectedAsDomainRef?: React.MutableRefObject<(() => void) | null>;
-  onRequestSetSelectedAsGeometryRef?: React.MutableRefObject<(() => void) | null>;
-  onRequestSelectAllGeometryRef?: React.MutableRefObject<(() => void) | null>;
-  onRequestClearGeometryRef?: React.MutableRefObject<(() => void) | null>;
-  onRequestAutoSuggestTagsRef?: React.MutableRefObject<(() => void) | null>;
-  onRequestMeshHandoffRef?: React.MutableRefObject<(() => void) | null>;
-  onRequestDownloadBlockMeshDictRef?: React.MutableRefObject<(() => void) | null>;
-  cadName?: string;
-  onCadNameChange?: (name: string) => void;
-  initialEntities?: CadEntity[];
-  displayOnly?: boolean;
-  meshData?: any;
-  showMesh?: boolean;
-  meshOnly?: boolean;
-  showField?: boolean;
-  fieldData?: any;
-  /** cell-based field streamed live from the solver (Solver stage) */
-  livePreview?: {
-    time: string;
-    fields: Record<string, number[]>;
-    ranges: Record<string, [number, number]>;
-  } | null;
-  activeField?: string;
-  colormap?: string;
-  meshStale?: boolean;
-  domainBroken?: boolean;
-  isMeshing?: boolean;
-  blocking?: Blocking | null;
-  onUpdateBlocking?: (bk: Blocking | null) => void;
-  showBlocking?: boolean;
-  blocksBuiltTick?: number;
-  isTransient?: boolean;
-  transientTimes?: number[];
-  transientFrameIndex?: number;
-  transientPlaying?: boolean;
-  transientSpeed?: number;
-  onSelectTransientFrame?: (index: number) => void;
-  onToggleTransientPlay?: () => void;
-  onSelectTransientSpeed?: (speed: number) => void;
-  historicalStatus?: {
-    runLabel?: string;
-    loading?: boolean;
-    error?: string | null;
-  };
-  onRestoreLive?: () => void;
-  activePlotLine?: { p1: [number, number]; p2: [number, number]; label?: string } | null;
-  isPickingPlotPoints?: boolean;
-  onPickPlotPoint?: (pt: [number, number]) => void;
-  plotPickPreviewP1?: [number, number] | null;
-}
+import type {
+  CadTool,
+  GuideLine,
+  Snap,
+  DynamicDimPrompt,
+  CadState,
+  CadWorkbenchProps,
+} from './workbenchCore';
+import {
+  SNAP_RADIUS_PX,
+  INITIAL_ZOOM,
+  cadReducer,
+  cellSkewness,
+  colormapRGB,
+  uid,
+  moveEntityVertex,
+  translateEntity,
+  dist,
+  midpt,
+  pointInPolygon,
+  distToSegment,
+  getMapScaleInfo,
+  pointsToLineSegments,
+  normalizeAngle,
+  getTrimTarget,
+} from './workbenchCore';
+
+// Fill colors cycled by block index for the Mesh-view direction-coloring
+// overlay (one color per block, so the block layout reads at a glance on the
+// real generated mesh, not just the block diagram).
+const BLOCK_FILL_CYCLE = [
+  '#2563EB',
+  '#DC2626',
+  '#059669',
+  '#D97706',
+  '#7C3AED',
+  '#DB2777',
+  '#0891B2',
+  '#65A30D',
+];
 
 const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   onApplySketchMesh,
@@ -937,6 +210,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   onUpdateBlocking,
   showBlocking = false,
   blocksBuiltTick = 0,
+  directionColors = null,
+  blockMode = 'auto',
   isTransient = false,
   transientTimes = [],
   transientFrameIndex = 0,
@@ -959,18 +234,27 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // A second canvas, overlaid on the main canvas, used exclusively for GPU-
   // accelerated field visualization. Main Canvas 2D skips its field render loop
   // when WebGL is active and haveField is true.
-  const { canvasRef: glCanvasRef, updateGeometry: glUpdateGeometry, render: glRender } = useWebGLField();
+  const {
+    canvasRef: glCanvasRef,
+    updateGeometry: glUpdateGeometry,
+    render: glRender,
+  } = useWebGLField();
 
   // ── Domain Handle Dragging State ──
-  const [hoveredDomainHandle, setHoveredDomainHandle] = useState<'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null>(null);
-  const draggingDomainHandleRef = useRef<'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null>(null);
-  const [draggingDomainHandle, setDraggingDomainHandle] = useState<'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null>(null);
+  const [hoveredDomainHandle, setHoveredDomainHandle] = useState<
+    'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null
+  >(null);
+  const draggingDomainHandleRef = useRef<
+    'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null
+  >(null);
+  const [draggingDomainHandle, setDraggingDomainHandle] = useState<
+    'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null
+  >(null);
   const [domainAnimScale, setDomainAnimScale] = useState<number>(1.0);
 
   // ── Flow Vector AoA Dial Handle State ──
   const [hoveredAoAHandle, setHoveredAoAHandle] = useState<boolean>(false);
   const [draggingAoAHandle, setDraggingAoAHandle] = useState<boolean>(false);
-
 
   // ── Undo/Redo stack ─────────────────────────────────────────────────────────
   const historyRef = useRef<CadState[]>([]);
@@ -1001,11 +285,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     const idx = historyIdxRef.current;
     if (draggingDomainHandleRef.current && idx >= 0) {
       // Overwrite current history frame during continuous drag to prevent undo stack bloating
-      h[idx] = { entities: cadState.entities.map(e => ({ ...e })) };
+      h[idx] = { entities: cadState.entities.map((e) => ({ ...e })) };
     } else {
       // Truncate forward history on new action
       h.splice(idx + 1);
-      h.push({ entities: cadState.entities.map(e => ({ ...e })) });
+      h.push({ entities: cadState.entities.map((e) => ({ ...e })) });
       historyIdxRef.current = h.length - 1;
       if (h.length > 1) lastEditRef.current = 'cad'; // a real CAD edit (not the first seed)
     }
@@ -1015,13 +299,19 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const undo = useCallback(() => {
     if (historyIdxRef.current <= 0) return;
     historyIdxRef.current--;
-    dispatch({ type: 'REPLACE_ENTITIES', entities: historyRef.current[historyIdxRef.current].entities });
+    dispatch({
+      type: 'REPLACE_ENTITIES',
+      entities: historyRef.current[historyIdxRef.current].entities,
+    });
   }, []);
 
   const redo = useCallback(() => {
     if (historyIdxRef.current >= historyRef.current.length - 1) return;
     historyIdxRef.current++;
-    dispatch({ type: 'REPLACE_ENTITIES', entities: historyRef.current[historyIdxRef.current].entities });
+    dispatch({
+      type: 'REPLACE_ENTITIES',
+      entities: historyRef.current[historyIdxRef.current].entities,
+    });
   }, []);
 
   // ── Tool state ──────────────────────────────────────────────────────────────
@@ -1042,9 +332,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const panRafRef = useRef<number | null>(null);
   const pendingPanRef = useRef<Point2D | null>(null);
 
-  useEffect(() => () => {
-    if (panRafRef.current) cancelAnimationFrame(panRafRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (panRafRef.current) cancelAnimationFrame(panRafRef.current);
+    },
+    [],
+  );
 
   // ── Undo/redo: routed to whichever - CAD entities or the blocking - was last edited.
   //    Refs are declared up by the CAD history stack; the recording effect lives here
@@ -1097,19 +390,25 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     setGlReady(ok);
   }, [meshData?.nodes, meshData?.elements, glCanvasRef.current, glUpdateGeometry]);
 
-
   // ── Camera Framing Helper ───────────────────────────────────────────────────
   const fitBoundingBox = useCallback(
-    (box: { minX: number; maxX: number; minY: number; maxY: number }, marginRatio = 0.70): boolean => {
+    (
+      box: { minX: number; maxX: number; minY: number; maxY: number },
+      marginRatio = 0.7,
+    ): boolean => {
       const canvas = canvasRef.current;
       const cw =
         (canvas && canvas.clientWidth > 0 ? canvas.clientWidth : 0) ||
-        (containerRef.current && containerRef.current.clientWidth > 0 ? containerRef.current.clientWidth : 0) ||
+        (containerRef.current && containerRef.current.clientWidth > 0
+          ? containerRef.current.clientWidth
+          : 0) ||
         viewport.w ||
         0;
       const ch =
         (canvas && canvas.clientHeight > 0 ? canvas.clientHeight : 0) ||
-        (containerRef.current && containerRef.current.clientHeight > 0 ? containerRef.current.clientHeight : 0) ||
+        (containerRef.current && containerRef.current.clientHeight > 0
+          ? containerRef.current.clientHeight
+          : 0) ||
         viewport.h ||
         0;
 
@@ -1128,7 +427,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
       // Get bottom drawer overlay height if present
       const bottomBarPx =
-        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar')) || 32;
+        parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar'),
+        ) || 32;
       // Visible canvas height above the bottom console drawer
       const visibleH = Math.max(100, ch - bottomBarPx);
 
@@ -1173,17 +474,25 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     if (blockDrag.current || panning.current) return;
     const useMesh = (canvasMode === 'mesh' || meshOnly) && meshData?.nodes?.length;
     const ents = cadState.entities.filter((e) => e.layer !== 'construction');
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
     if (useMesh) {
       for (const n of meshData.nodes as number[][]) {
-        minX = Math.min(minX, n[0]); maxX = Math.max(maxX, n[0]);
-        minY = Math.min(minY, n[1]); maxY = Math.max(maxY, n[1]);
+        minX = Math.min(minX, n[0]);
+        maxX = Math.max(maxX, n[0]);
+        minY = Math.min(minY, n[1]);
+        maxY = Math.max(maxY, n[1]);
       }
     } else {
-      for (const e of ents) for (const p of e.pts) {
-        minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-        minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-      }
+      for (const e of ents)
+        for (const p of e.pts) {
+          minX = Math.min(minX, p.x);
+          maxX = Math.max(maxX, p.x);
+          minY = Math.min(minY, p.y);
+          maxY = Math.max(maxY, p.y);
+        }
     }
     if (minX !== Infinity) fitBoundingBox({ minX, maxX, minY, maxY }, 0.75);
   }, [cadState.entities, meshData, canvasMode, meshOnly, fitBoundingBox]);
@@ -1221,12 +530,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     const canvas = canvasRef.current;
     const cw =
       (canvas && canvas.clientWidth > 0 ? canvas.clientWidth : 0) ||
-      (containerRef.current && containerRef.current.clientWidth > 0 ? containerRef.current.clientWidth : 0) ||
+      (containerRef.current && containerRef.current.clientWidth > 0
+        ? containerRef.current.clientWidth
+        : 0) ||
       viewport.w ||
       0;
     const ch =
       (canvas && canvas.clientHeight > 0 ? canvas.clientHeight : 0) ||
-      (containerRef.current && containerRef.current.clientHeight > 0 ? containerRef.current.clientHeight : 0) ||
+      (containerRef.current && containerRef.current.clientHeight > 0
+        ? containerRef.current.clientHeight
+        : 0) ||
       viewport.h ||
       0;
 
@@ -1250,7 +563,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     const actualGeom = geomEnts.filter((e) => e.role !== 'domain_boundary');
     const targetEnts = actualGeom.length > 0 ? actualGeom : geomEnts;
 
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
     for (const ent of targetEnts) {
       if (ent.type === 'circle' && typeof ent.radius === 'number' && ent.pts[0]) {
         const c = ent.pts[0];
@@ -1259,7 +575,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         maxX = Math.max(maxX, c.x + r);
         minY = Math.min(minY, c.y - r);
         maxY = Math.max(maxY, c.y + r);
-      } else if (ent.type === 'ellipse' && typeof ent.rx === 'number' && typeof ent.ry === 'number' && ent.pts[0]) {
+      } else if (
+        ent.type === 'ellipse' &&
+        typeof ent.rx === 'number' &&
+        typeof ent.ry === 'number' &&
+        ent.pts[0]
+      ) {
         const c = ent.pts[0];
         const rx = ent.rx;
         const ry = ent.ry;
@@ -1288,8 +609,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       return;
     }
 
-    if (maxX === minX) { minX -= 0.5; maxX += 0.5; }
-    if (maxY === minY) { minY -= 0.5; maxY += 0.5; }
+    if (maxX === minX) {
+      minX -= 0.5;
+      maxX += 0.5;
+    }
+    if (maxY === minY) {
+      minY -= 0.5;
+      maxY += 0.5;
+    }
 
     const applied = fitBoundingBox({ minX, maxX, minY, maxY }, 0.72);
     if (applied) {
@@ -1323,13 +650,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // yanks the view around while you edit blocks).
   const lastViewStageRef = useRef('');
   useEffect(() => {
-    const st = meshOnly
-      ? 'meshOnly'
-      : !showMesh
-        ? 'cad'
-        : showBlocking
-          ? 'blocks'
-          : 'unstructured';
+    const st = meshOnly ? 'meshOnly' : !showMesh ? 'cad' : showBlocking ? 'blocks' : 'unstructured';
     if (st === lastViewStageRef.current) return;
     lastViewStageRef.current = st;
     if (st === 'meshOnly' || st === 'unstructured') setCanvasMode('mesh');
@@ -1357,12 +678,15 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   useEffect(() => {
     if (!glReady || !glCanvasRef.current) return;
     const canvas = glCanvasRef.current;
-    const vals: number[] | undefined = showField && fieldData?.fields?.[activeField]
-      ? fieldData.fields[activeField] : undefined;
-    const haveField = Array.isArray(vals) && vals.length > 0 &&
+    const vals: number[] | undefined =
+      showField && fieldData?.fields?.[activeField] ? fieldData.fields[activeField] : undefined;
+    const haveField =
+      Array.isArray(vals) &&
+      vals.length > 0 &&
       (!meshData?.nodes?.length || vals.length === meshData.nodes.length);
     const r = fieldData?.ranges?.[activeField];
-    let lo = 0, hi = 1;
+    let lo = 0,
+      hi = 1;
     if (haveField && Array.isArray(r) && r.length === 2 && r[0] !== r[1]) {
       [lo, hi] = r;
     } else if (haveField) {
@@ -1371,45 +695,85 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     }
     glRender({
       vals: haveField ? (vals as number[]) : [],
-      lo, hi, colormap,
-      pan, zoom,
+      lo,
+      hi,
+      colormap,
+      pan,
+      zoom,
       canvasWidth: canvas.clientWidth || (containerRef.current?.clientWidth ?? 800),
       canvasHeight: canvas.clientHeight || (containerRef.current?.clientHeight ?? 600),
       visible: !!(displayOnly && showMesh && canvasMode === 'mesh' && haveField),
-      showMeshWireframe: !!(displayOnly && showMesh && canvasMode === 'mesh' && haveField && showMeshWireframe),
+      showMeshWireframe: !!(
+        displayOnly &&
+        showMesh &&
+        canvasMode === 'mesh' &&
+        haveField &&
+        showMeshWireframe
+      ),
     });
-  }, [glReady, pan, zoom, showField, fieldData, activeField, colormap, displayOnly, showMesh, canvasMode, glRender, glCanvasRef, viewport.w, viewport.h, meshData?.nodes?.length, showMeshWireframe]);
+  }, [
+    glReady,
+    pan,
+    zoom,
+    showField,
+    fieldData,
+    activeField,
+    colormap,
+    displayOnly,
+    showMesh,
+    canvasMode,
+    glRender,
+    glCanvasRef,
+    viewport.w,
+    viewport.h,
+    meshData?.nodes?.length,
+    showMeshWireframe,
+  ]);
 
-  const handleAuxClick = useCallback((e: React.MouseEvent) => {
-    userInteractedRef.current = true;
-    if (e.button !== 1) return;
-    e.preventDefault();
-    const now = Date.now();
-    const isDoubleMiddleClick = now - lastMiddleClickRef.current < 350;
-    lastMiddleClickRef.current = now;
-    if (!isDoubleMiddleClick) return;
+  const handleAuxClick = useCallback(
+    (e: React.MouseEvent) => {
+      userInteractedRef.current = true;
+      if (e.button !== 1) return;
+      e.preventDefault();
+      const now = Date.now();
+      const isDoubleMiddleClick = now - lastMiddleClickRef.current < 350;
+      lastMiddleClickRef.current = now;
+      if (!isDoubleMiddleClick) return;
 
-    if (showMesh && canvasMode === 'mesh' && meshData?.nodes?.length) {
-      const xs = meshData.nodes.map((node: number[]) => node[0]);
-      const ys = meshData.nodes.map((node: number[]) => node[1]);
-      fitBoundingBox({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }, 0.72);
-      return;
-    }
+      if (showMesh && canvasMode === 'mesh' && meshData?.nodes?.length) {
+        const xs = meshData.nodes.map((node: number[]) => node[0]);
+        const ys = meshData.nodes.map((node: number[]) => node[1]);
+        fitBoundingBox(
+          {
+            minX: Math.min(...xs),
+            maxX: Math.max(...xs),
+            minY: Math.min(...ys),
+            maxY: Math.max(...ys),
+          },
+          0.72,
+        );
+        return;
+      }
 
-    const entities = cadState.entities.filter((entity) => entity.layer !== 'construction');
-    const points = entities.flatMap((entity) => entity.pts);
-    if (points.length) {
-      fitBoundingBox({
-        minX: Math.min(...points.map((point) => point.x)),
-        maxX: Math.max(...points.map((point) => point.x)),
-        minY: Math.min(...points.map((point) => point.y)),
-        maxY: Math.max(...points.map((point) => point.y)),
-      }, 0.72);
-    } else {
-      setZoom(INITIAL_ZOOM);
-      setPan({ x: 0, y: 0 });
-    }
-  }, [cadState.entities, canvasMode, fitBoundingBox, meshData, showMesh]);
+      const entities = cadState.entities.filter((entity) => entity.layer !== 'construction');
+      const points = entities.flatMap((entity) => entity.pts);
+      if (points.length) {
+        fitBoundingBox(
+          {
+            minX: Math.min(...points.map((point) => point.x)),
+            maxX: Math.max(...points.map((point) => point.x)),
+            minY: Math.min(...points.map((point) => point.y)),
+            maxY: Math.max(...points.map((point) => point.y)),
+          },
+          0.72,
+        );
+      } else {
+        setZoom(INITIAL_ZOOM);
+        setPan({ x: 0, y: 0 });
+      }
+    },
+    [cadState.entities, canvasMode, fitBoundingBox, meshData, showMesh],
+  );
   const [showConstruction, setShowConstruction] = useState(true);
   const [constructionMode, setConstructionMode] = useState(false); // draw to construction layer
   const [showResultsStreamlines, setShowResultsStreamlines] = useState(true); // toggle streamlines overlay in Results
@@ -1438,6 +802,37 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         : 0,
     );
   }, [meshData?.nodes, meshData?.elements]);
+
+  // Per-element block-fill color for the direction-coloring overlay: which
+  // block's color each generated cell should fill with, found from the
+  // element's own centroid against the block polygons. Deliberately recolors
+  // the REAL mesh cells (exact, by construction) rather than overlaying a
+  // separate translucent block-shaped polygon on top of them - the latter
+  // was built from the idealized blocking edge path, which can disagree with
+  // where the backend actually put the real mesh nodes by a cell's width at
+  // a wall kink too shallow for the mesh's own corner-preservation to snap
+  // onto exactly, leaving a sliver of the overlay sitting outside the real
+  // mesh (looked like a stray "bevel" at the kink).
+  const elementBlockColor = useMemo<(string | null)[] | null>(() => {
+    const nodes: number[][] | undefined = meshData?.nodes;
+    const elements: number[][] | undefined = meshData?.elements;
+    if (!Array.isArray(nodes) || !Array.isArray(elements) || elements.length === 0) return null;
+    if (!blocking || blocking.blocks.length === 0) return null;
+    const polys = blocking.blocks
+      .map((blk, i) => ({
+        poly: blockPolygon(blocking, blk),
+        color: BLOCK_FILL_CYCLE[i % BLOCK_FILL_CYCLE.length],
+      }))
+      .filter((p) => p.poly.length >= 3);
+    if (!polys.length) return null;
+    return elements.map((el) => {
+      if (!el.every((i) => nodes[i])) return null;
+      const cx = el.reduce((s, i) => s + nodes[i][0], 0) / el.length;
+      const cy = el.reduce((s, i) => s + nodes[i][1], 0) / el.length;
+      const hit = polys.find((p) => pointInPolygon({ x: cx, y: cy }, p.poly));
+      return hit ? hit.color : null;
+    });
+  }, [meshData?.nodes, meshData?.elements, blocking]);
 
   // Precompute exterior boundary edges once per mesh change.
   // Exterior edges (count === 1) represent domain and obstacle boundaries.
@@ -1519,13 +914,20 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   // ── Drag-to-select (marquee) ─────────────────────────────────────────────────
   const dragSelecting = useRef(false);
-  const dragStart = useRef<Point2D>({ x: 0, y: 0 });   // screen pixels
-  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const dragStart = useRef<Point2D>({ x: 0, y: 0 }); // screen pixels
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(
+    null,
+  );
 
   // ── Direct manipulation with the Select tool: drag a vertex / move a selection
   const editDrag = useRef<
     | null
-    | { mode: 'vertex'; targets: { id: string; idx: number }[]; startWorld: Point2D; snapshot: CadEntity[] }
+    | {
+        mode: 'vertex';
+        targets: { id: string; idx: number }[];
+        startWorld: Point2D;
+        snapshot: CadEntity[];
+      }
     | { mode: 'move'; startWorld: Point2D; snapshot: CadEntity[] }
   >(null);
   const [editDragActive, setEditDragActive] = useState(false);
@@ -1535,10 +937,125 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [hoveredBlockVtx, setHoveredBlockVtx] = useState<string | null>(null);
   const [hoveredBlockIdx, setHoveredBlockIdx] = useState<number | null>(null);
 
+  // ── Block editor (Blocks view): select / draw / split / delete tools ───────
+  const [blockTool, setBlockTool] = useState<
+    'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc'
+  >('select');
+  // Leaving Manual mode must drop any mid-edit tool - otherwise a leftover
+  // 'draw'/'split'/... tool keeps intercepting clicks on the Automatic canvas
+  // even with its own toolbar hidden.
+  useEffect(() => {
+    if (blockMode !== 'manual') setBlockTool('select');
+  }, [blockMode]);
+  // ICEM-style tools: the first pick of a two-pick tool (merge vertices /
+  // blocks), the edge selection + stage of Associate, the curve under the
+  // cursor, the edge whose params are being edited, and the O-grid size.
+  const [blockPick, setBlockPick] = useState<string | null>(null);
+  const [assocEdges, setAssocEdges] = useState<string[]>([]);
+  const [assocStage, setAssocStage] = useState<'edges' | 'curve'>('edges');
+  const [hoverCurveId, setHoverCurveId] = useState<string | null>(null);
+  const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [ogridScale, setOgridScale] = useState(0.5);
+  const [blockDrawPts, setBlockDrawPts] = useState<Point2D[]>([]);
+  const [blockCursor, setBlockCursor] = useState<Point2D | null>(null);
+  const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [splitHover, setSplitHover] = useState<{
+    edgeId: string;
+    pt: Point2D;
+    cut: Point2D[][];
+  } | null>(null);
+  const [blockMsg, setBlockMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const blockOutlines = useMemo(() => outlinesFor(cadState.entities), [cadState.entities]);
+  const badBlockIds = useMemo(
+    () => new Set(blocking ? blocksOverBodies(blocking, blockOutlines) : []),
+    [blocking, blockOutlines],
+  );
+  // ICEM-style check: blocks reaching outside the fluid, boundary edges with no patch.
+  const blockCheck = useMemo(
+    () =>
+      blocking?.blocks.length
+        ? checkBlocking(blocking, blockOutlines)
+        : { outside: [], unpatched: [] },
+    [blocking, blockOutlines],
+  );
+  const outsideBlockIds = useMemo(() => new Set(blockCheck.outside), [blockCheck]);
+  const unpatchedEdgeIds = useMemo(() => new Set(blockCheck.unpatched), [blockCheck]);
+  /** Nearest geometry curve (CAD entity) within `radius`, for Associate. */
+  const pickCurve = useCallback(
+    (p: Point2D, radius: number): string | null => {
+      let best: string | null = null;
+      let bd = radius;
+      for (const e of cadState.entities) {
+        if (e.layer === 'construction') continue;
+        const c = curveOf(e);
+        if (!c) continue;
+        const d = projectOnCurve(c, p).d;
+        if (d < bd) {
+          bd = d;
+          best = e.id;
+        }
+      }
+      return best;
+    },
+    [cadState.entities],
+  );
+  // How much of the fluid (domain minus bodies) the blocks cover: only blocked
+  // area gets meshed, so a partly drawn blocking must say so.
+  const blockCoverage = useMemo(() => {
+    if (!blocking?.blocks.length) return null;
+    const area = (q: Point2D[]) => {
+      let a = 0;
+      for (let i = 0; i < q.length; i++)
+        a += q[i].x * q[(i + 1) % q.length].y - q[(i + 1) % q.length].x * q[i].y;
+      return Math.abs(a) / 2;
+    };
+    const fluid = blockOutlines.reduce((acc, o) => acc + (o.body ? -area(o.pts) : area(o.pts)), 0);
+    if (fluid <= 0) return null;
+    const covered = blocking.blocks.reduce((acc, b) => acc + area(blockPolygon(blocking, b)), 0);
+    return Math.min(1, covered / fluid);
+  }, [blocking, blockOutlines]);
+  // Leaving the Blocks view (or structured meshing) drops any half-drawn block.
+  useEffect(() => {
+    if (!showBlocking) {
+      setBlockTool('select');
+      setBlockDrawPts([]);
+      setSelectedBlockId(null);
+      setSplitHover(null);
+      setBlockPick(null);
+      setAssocEdges([]);
+      setAssocStage('edges');
+      setSelectedEdgeId(null);
+    }
+  }, [showBlocking]);
+  useEffect(() => {
+    if (selectedBlockId && !blocking?.blocks.some((b) => b.id === selectedBlockId))
+      setSelectedBlockId(null);
+    if (selectedEdgeId && !blocking?.edges.some((e) => e.id === selectedEdgeId))
+      setSelectedEdgeId(null);
+    if (assocEdges.length && blocking) {
+      const live = assocEdges.filter((id) => blocking.edges.some((e) => e.id === id));
+      if (live.length !== assocEdges.length) setAssocEdges(live);
+    }
+  }, [blocking, selectedBlockId, selectedEdgeId, assocEdges]);
+  // Switching tools drops any half-finished pick.
+  useEffect(() => {
+    setBlockPick(null);
+    setHoverCurveId(null);
+    setHoverEdgeId(null);
+    if (blockTool !== 'assoc') {
+      setAssocEdges([]);
+      setAssocStage('edges');
+    }
+    if (blockTool !== 'select') setSelectedEdgeId(null);
+  }, [blockTool]);
+
   const domainRing = useMemo<Point2D[]>(() => {
     const dom = cadState.entities.find((e) => e.role === 'domain_boundary');
     if (!dom) return [];
-    return (dom.type === 'circle' || dom.type === 'ellipse') ? entityRing(dom) : dom.pts.map((p) => ({ ...p }));
+    return dom.type === 'circle' || dom.type === 'ellipse'
+      ? entityRing(dom)
+      : dom.pts.map((p) => ({ ...p }));
   }, [cadState.entities]);
 
   /** Snap a dragged block vertex: exact snap to a geometry/domain corner or a
@@ -1549,11 +1066,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     (raw: Point2D, draggedVid: string): { pt: Point2D; guides: { a: Point2D; b: Point2D }[] } => {
       const R = SNAP_RADIUS_PX / zoom;
       const guides: { a: Point2D; b: Point2D }[] = [];
+      // An associated vertex (ICEM) is constrained to its curves.
+      const dragged = draggedVid ? blocking?.vertices.find((v) => v.id === draggedVid) : undefined;
+      const onAssoc = constrainToCurves(raw, dragged?.curves, cadState.entities);
+      if (onAssoc) return { pt: onAssoc, guides: [] };
       const siblings = blocking?.vertices.filter((v) => v.id !== draggedVid).map((v) => v.pt) ?? [];
       const corners: Point2D[] = [];
       for (const e of cadState.entities) {
         if (e.layer === 'construction') continue;
-        for (const q of (e.type === 'circle' || e.type === 'ellipse') ? entityRing(e) : e.pts) corners.push(q);
+        for (const q of e.type === 'circle' || e.type === 'ellipse' ? entityRing(e) : e.pts)
+          corners.push(q);
       }
 
       // 1. exact snap to a corner or sibling vertex
@@ -1567,6 +1089,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         }
       }
       if (hit) return { pt: { x: hit.x, y: hit.y }, guides: [] };
+
+      // 1b. slide along the domain outline or a body, so a boundary corner
+      // stays on the geometry instead of drifting off it
+      const onCurve = snapToOutline(raw, blockOutlines, R * 0.8);
+      if (onCurve) return { pt: onCurve.pt, guides: [] };
 
       // 2. axis alignment with a sibling vertex
       const pt = { x: raw.x, y: raw.y };
@@ -1626,7 +1153,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       if (ay !== null) guides.push({ a: { x: pt.x - BIG, y: ay }, b: { x: pt.x + BIG, y: ay } });
       return { pt, guides };
     },
-    [zoom, cadState.entities, blocking, gridSnapEnabled, domainRing],
+    [zoom, cadState.entities, blocking, gridSnapEnabled, domainRing, blockOutlines],
   );
 
   // ── Dynamic Dimension Input (Onshape / Fusion 360 style) ───────────────────
@@ -1640,12 +1167,160 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const input2Ref = useRef<HTMLInputElement>(null);
 
   // ── Trim Tool Preview ───────────────────────────────────────────────────────
-  const [hoveredTrim, setHoveredTrim] = useState<{ p0: Point2D; p1: Point2D; polyline?: Point2D[] } | null>(null);
+  const [hoveredTrim, setHoveredTrim] = useState<{
+    p0: Point2D;
+    p1: Point2D;
+    polyline?: Point2D[];
+  } | null>(null);
 
   // ── Fallback edgeTagMap if not controlled ──────────────────────────────────
   const [localEdgeTagMap, setLocalEdgeTagMap] = useState<Record<string, BoundaryTag>>({});
   const edgeTagMap = propEdgeTagMap ?? localEdgeTagMap;
   const setEdgeTagMap = onSetEdgeTagMap ?? setLocalEdgeTagMap;
+
+  // ── Block editor actions ───────────────────────────────────────────────────
+  const blockTag = useMemo(
+    () => makeTagLookup(cadState.entities, edgeTagMap),
+    [cadState.entities, edgeTagMap],
+  );
+
+  /** One click of the Draw tool: collect corners, build the block on the 4th. */
+  const addBlockCorner = useCallback(
+    (pt: Point2D) => {
+      if (!onUpdateBlocking) return;
+      const pts = [...blockDrawPts, pt];
+      if (pts.length < 4) {
+        setBlockDrawPts(pts);
+        setBlockMsg({ text: `Corner ${pts.length} of 4 placed.`, error: false });
+        return;
+      }
+      const base = blocking ?? emptyBlocking();
+      const cellSize = base.edges.length
+        ? currentCellSize(base)
+        : autoCellSize({ ...base, vertices: pts.map((p, i) => ({ id: String(i), pt: p })) });
+      const res = addBlockFromCorners(base, pts, {
+        outlines: blockOutlines,
+        tag: blockTag,
+        cellSize,
+      });
+      setBlockDrawPts([]);
+      if ('error' in res) {
+        setBlockMsg({ text: res.error, error: true });
+        return;
+      }
+      onUpdateBlocking(res.blocking);
+      setSelectedBlockId(res.blocking.blocks[res.blocking.blocks.length - 1].id);
+      setBlockMsg({ text: `Block ${res.blocking.blocks.length} added.`, error: false });
+    },
+    [blockDrawPts, blocking, onUpdateBlocking, blockOutlines, blockTag],
+  );
+
+  const splitAtHover = useCallback(() => {
+    if (!blocking || !onUpdateBlocking || !splitHover) return;
+    const next = splitSheet(blocking, splitHover.edgeId, splitHover.pt);
+    if (!next) {
+      setBlockMsg({ text: 'Cannot split there.', error: true });
+      return;
+    }
+    onUpdateBlocking(propagateNodeCounts(next));
+    setSplitHover(null);
+    setBlockMsg({ text: `Split. ${next.blocks.length} blocks.`, error: false });
+  }, [blocking, onUpdateBlocking, splitHover]);
+
+  /** Apply an ICEM-style operation result, or show its error. */
+  const applyBlockOp = useCallback(
+    (res: Blocking | { error: string } | null, okText: string) => {
+      if (!res) {
+        setBlockMsg({ text: 'That operation did not apply here.', error: true });
+        return false;
+      }
+      if ('error' in res) {
+        setBlockMsg({ text: res.error, error: true });
+        return false;
+      }
+      onUpdateBlocking?.(res);
+      setBlockMsg({ text: okText, error: false });
+      return true;
+    },
+    [onUpdateBlocking],
+  );
+
+  // Patch for an associated curve when its segments carry none (circles):
+  // any tag set on that entity, else "wall" for a body.
+  const curvePatch = useCallback(
+    (ids: string[]): BoundaryTag | undefined => {
+      for (const id of ids) {
+        const key = Object.keys(edgeTagMap).find((k) => k.startsWith(`${id}_`) && edgeTagMap[k]);
+        if (key) return edgeTagMap[key];
+      }
+      const ent = cadState.entities.find((e) => ids.includes(e.id));
+      if (
+        ent &&
+        ent.role !== 'domain_boundary' &&
+        (ent.isClosed || ent.type === 'circle' || ent.type === 'ellipse')
+      )
+        return 'wall' as BoundaryTag;
+      return undefined;
+    },
+    [edgeTagMap, cadState.entities],
+  );
+
+  const associateTo = useCallback(
+    (curveId: string) => {
+      if (!blocking || !assocEdges.length) return;
+      const res = associateEdges(
+        blocking,
+        assocEdges,
+        [curveId],
+        cadState.entities,
+        blockTag,
+        curvePatch,
+      );
+      if (
+        applyBlockOp(
+          res,
+          `${assocEdges.length} edge${assocEdges.length > 1 ? 's' : ''} associated.`,
+        )
+      ) {
+        setAssocEdges([]);
+        setAssocStage('edges');
+      }
+    },
+    [blocking, assocEdges, cadState.entities, blockTag, curvePatch, applyBlockOp],
+  );
+
+  const initializeBlocks = useCallback(() => {
+    const bk = initializeBlocking(cadState.entities);
+    if (!bk) {
+      setBlockMsg({ text: 'No geometry to block.', error: true });
+      return;
+    }
+    onUpdateBlocking?.(bk);
+    setBlockTool('split');
+    setBlockMsg({ text: 'Initialized 1 block.', error: false });
+  }, [cadState.entities, onUpdateBlocking]);
+
+  const snapProject = useCallback(() => {
+    if (!blocking) return;
+    const n = blocking.vertices.filter((v) => v.curves?.length).length;
+    if (!n) {
+      setBlockMsg({ text: 'No associated vertices.', error: true });
+      return;
+    }
+    onUpdateBlocking?.(snapProjectVertices(blocking, cadState.entities));
+    setBlockMsg({ text: `${n} vertices projected.`, error: false });
+  }, [blocking, cadState.entities, onUpdateBlocking]);
+
+  const deleteBlockById = useCallback(
+    (id: string) => {
+      if (!blocking || !onUpdateBlocking) return;
+      const next = propagateNodeCounts(deleteBlock(blocking, id));
+      onUpdateBlocking(next);
+      setSelectedBlockId(null);
+      setBlockMsg({ text: `Block deleted. ${next.blocks.length} left.`, error: false });
+    },
+    [blocking, onUpdateBlocking],
+  );
 
   const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null);
   const [hoveredVertex, setHoveredVertex] = useState<Point2D | null>(null);
@@ -1654,8 +1329,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const geometryBBox = useMemo(() => getGeometryBBox(cadState.entities), [cadState.entities]);
 
   const domainEntity = useMemo(
-    () => cadState.entities.find(e => e.role === 'domain_boundary') || null,
-    [cadState.entities]
+    () => cadState.entities.find((e) => e.role === 'domain_boundary') || null,
+    [cadState.entities],
   );
 
   const domainValidation = useMemo(
@@ -1663,17 +1338,17 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       flowType === 'external'
         ? validateDomainContainment(domainEntity, cadState.entities)
         : { valid: true, reason: 'Internal flow - duct walls serve as the domain boundary.' },
-    [domainEntity, cadState.entities, flowType]
+    [domainEntity, cadState.entities, flowType],
   );
 
   const boundaryEdges = useMemo(
     () => extractBoundaryEdges(cadState.entities, flowType, edgeTagMap),
-    [cadState.entities, flowType, edgeTagMap]
+    [cadState.entities, flowType, edgeTagMap],
   );
 
   const boundaryValidation = useMemo(
     () => validateBoundaryTags(boundaryEdges, flowType),
-    [boundaryEdges, flowType]
+    [boundaryEdges, flowType],
   );
 
   // ── Dynamic Google Maps Style Scale Bar Info ──
@@ -1683,7 +1358,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // Whenever domain factors, shape, or geometry bounding box change, update the domain entity points in real time
   useEffect(() => {
     if (flowType !== 'external') return;
-    const existingDomain = cadState.entities.find(e => e.role === 'domain_boundary');
+    const existingDomain = cadState.entities.find((e) => e.role === 'domain_boundary');
     // Only a "Generate domain" far-field loop tracks the sliders. A hand-drawn
     // loop pinned as the domain must be left exactly as the user drew it.
     if (!existingDomain || !existingDomain.autoDomain) return;
@@ -1694,21 +1369,35 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       upstreamChordFactor,
       downstreamChordFactor,
       lateralHeightFactor,
-      existingDomain.id
+      existingDomain.id,
     );
 
     const ptsChanged =
       existingDomain.pts.length !== updatedDomain.pts.length ||
       existingDomain.type !== updatedDomain.type ||
-      existingDomain.pts.some((p, i) => Math.abs(p.x - updatedDomain.pts[i].x) > 1e-5 || Math.abs(p.y - updatedDomain.pts[i].y) > 1e-5);
+      existingDomain.pts.some(
+        (p, i) =>
+          Math.abs(p.x - updatedDomain.pts[i].x) > 1e-5 ||
+          Math.abs(p.y - updatedDomain.pts[i].y) > 1e-5,
+      );
 
     if (ptsChanged) {
       dispatch({
         type: 'REPLACE_ENTITIES',
-        entities: cadState.entities.map(e => (e.id === existingDomain.id ? { ...updatedDomain, selected: e.selected } : e)),
+        entities: cadState.entities.map((e) =>
+          e.id === existingDomain.id ? { ...updatedDomain, selected: e.selected } : e,
+        ),
       });
     }
-  }, [domainShape, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, flowType, geometryBBox, cadState.entities]);
+  }, [
+    domainShape,
+    upstreamChordFactor,
+    downstreamChordFactor,
+    lateralHeightFactor,
+    flowType,
+    geometryBBox,
+    cadState.entities,
+  ]);
 
   // ── Internal flow has no outer domain ───────────────────────────────────────
   // An auto-generated far-field box is regenerable, so drop it. A loop the user
@@ -1716,13 +1405,17 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // geometry (for internal flow the drawn walls ARE the boundary).
   useEffect(() => {
     if (flowType !== 'internal') return;
-    if (!cadState.entities.some(e => e.role === 'domain_boundary')) return;
+    if (!cadState.entities.some((e) => e.role === 'domain_boundary')) return;
     const next: CadEntity[] = [];
     for (const e of cadState.entities) {
-      if (e.role !== 'domain_boundary') { next.push(e); continue; }
+      if (e.role !== 'domain_boundary') {
+        next.push(e);
+        continue;
+      }
       if (e.autoDomain) continue; // regenerable - safe to drop
       const { role, autoDomain, ...rest } = e; // keep the drawing, clear its role
-      void role; void autoDomain;
+      void role;
+      void autoDomain;
       next.push(rest);
     }
     dispatch({ type: 'REPLACE_ENTITIES', entities: next });
@@ -1736,7 +1429,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // ── Global domain-handle drag (document listeners so cursor can leave canvas) ──
   useEffect(() => {
     const getBBoxAndChord = () => {
-      const bbox = getGeometryBBox(cadState.entities) ?? { chord: 1, height: 0.5, minX: -0.5, maxX: 0.5, centerX: 0, centerY: 0 };
+      const bbox = getGeometryBBox(cadState.entities) ?? {
+        chord: 1,
+        height: 0.5,
+        minX: -0.5,
+        maxX: 0.5,
+        centerX: 0,
+        centerY: 0,
+      };
       return bbox;
     };
 
@@ -1753,7 +1453,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       const c = bbox.chord;
       const effH = Math.max(0.5 * c, bbox.height);
       // Snap the chord factor to 0.5c steps only while OSNAP is on; free-flow otherwise.
-      const q = (f: number) => Math.max(1, Math.min(100, snapEnabled ? Math.round(f * 2) / 2 : Math.round(f * 100) / 100));
+      const q = (f: number) =>
+        Math.max(1, Math.min(100, snapEnabled ? Math.round(f * 2) / 2 : Math.round(f * 100) / 100));
 
       if (handle === 'upstream') {
         setUpstreamChordFactor?.(q((bbox.minX - rawX) / c));
@@ -1788,10 +1489,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoom, pan, cadState.entities, snapEnabled, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor]);
-
-
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    zoom,
+    pan,
+    cadState.entities,
+    snapEnabled,
+    setUpstreamChordFactor,
+    setDownstreamChordFactor,
+    setLateralHeightFactor,
+  ]);
 
   // ── World ↔ Screen ───────────────────────────────────────────────────────────
   const origin = useCallback(() => {
@@ -1800,275 +1507,302 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     return { x: c.clientWidth / 2 + pan.x, y: c.clientHeight / 2 + pan.y };
   }, [pan]);
 
-  const toScreen = useCallback((wx: number, wy: number): Point2D => {
-    const o = origin();
-    return { x: o.x + wx * zoom, y: o.y - wy * zoom };
-  }, [origin, zoom]);
+  const toScreen = useCallback(
+    (wx: number, wy: number): Point2D => {
+      const o = origin();
+      return { x: o.x + wx * zoom, y: o.y - wy * zoom };
+    },
+    [origin, zoom],
+  );
 
-  const toWorld = useCallback((sx: number, sy: number): Point2D => {
-    const c = canvasRef.current;
-    if (!c) return { x: 0, y: 0 };
-    const rect = c.getBoundingClientRect();
-    const o = origin();
-    return { x: (sx - rect.left - o.x) / zoom, y: -(sy - rect.top - o.y) / zoom };
-  }, [origin, zoom]);
+  const toWorld = useCallback(
+    (sx: number, sy: number): Point2D => {
+      const c = canvasRef.current;
+      if (!c) return { x: 0, y: 0 };
+      const rect = c.getBoundingClientRect();
+      const o = origin();
+      return { x: (sx - rect.left - o.x) / zoom, y: -(sy - rect.top - o.y) / zoom };
+    },
+    [origin, zoom],
+  );
 
   // ── Clean Professional CAD OSNAP & Inferencing Engine ──────────────────────
-  const computeSnap = useCallback((raw: Point2D): Snap => {
-    const snapR = SNAP_RADIUS_PX / zoom;
-    const alignTol = 10 / zoom; // screen-scaled tolerance for tracking & alignments
-    let minD = Infinity;
+  const computeSnap = useCallback(
+    (raw: Point2D): Snap => {
+      const snapR = SNAP_RADIUS_PX / zoom;
+      const alignTol = 10 / zoom; // screen-scaled tolerance for tracking & alignments
+      let minD = Infinity;
 
-    if (!snapEnabled) {
-      return { pt: raw, type: 'grid', guides: [] };
-    }
-
-    const activeStart = tempPts.length > 0 ? tempPts[tempPts.length - 1] : null;
-
-    // The origin is a snap CANDIDATE (below, same radius/priority as any other
-    // point) but must never magnetically grab the cursor on its own - it used
-    // to have an enlarged, always-on capture radius here, which made ordinary
-    // drawing near the middle of the canvas "snap to center" unexpectedly. A
-    // deliberate re-centre is still one double middle-click away (handleAuxClick).
-
-    // 2. COLLECT KEY GEOMETRIC VERTICES (Endpoints, Midpoints, Centers)
-    const keyPoints: { pt: Point2D; type: Snap['type'] }[] = [
-      { pt: { x: 0, y: 0 }, type: 'origin' },
-    ];
-
-    for (const e of cadState.entities) {
-      if (e.pts.length >= 2) {
-        keyPoints.push({ pt: e.pts[0], type: 'endpoint' });
-        keyPoints.push({ pt: e.pts[e.pts.length - 1], type: 'endpoint' });
-        for (let i = 0; i < e.pts.length - 1; i++) {
-          keyPoints.push({ pt: midpt(e.pts[i], e.pts[i + 1]), type: 'midpoint' });
-          if (i > 0 && i < e.pts.length - 1) {
-            keyPoints.push({ pt: e.pts[i], type: 'endpoint' });
-          }
-        }
-      }
-      if (e.type === 'circle' && e.pts[0]) {
-        keyPoints.push({ pt: e.pts[0], type: 'center' });
-        const c = e.pts[0];
-        const r = e.radius ?? (e.pts[1] ? dist(c, e.pts[1]) : 0);
-        if (r > 0) {
-          keyPoints.push({ pt: { x: +(c.x + r).toFixed(5), y: +c.y.toFixed(5) }, type: 'endpoint' });
-          keyPoints.push({ pt: { x: +(c.x - r).toFixed(5), y: +c.y.toFixed(5) }, type: 'endpoint' });
-          keyPoints.push({ pt: { x: +c.x.toFixed(5), y: +(c.y + r).toFixed(5) }, type: 'endpoint' });
-          keyPoints.push({ pt: { x: +c.x.toFixed(5), y: +(c.y - r).toFixed(5) }, type: 'endpoint' });
-        }
-      }
-      if (e.type === 'ellipse' && e.pts[0]) {
-        keyPoints.push({ pt: e.pts[0], type: 'center' });
-        if (typeof e.rx === 'number' && typeof e.ry === 'number') {
-          const c = e.pts[0];
-          const rx = e.rx;
-          const ry = e.ry;
-          const rot = e.rotation || 0;
-          const cosR = Math.cos(rot);
-          const sinR = Math.sin(rot);
-          keyPoints.push({ pt: { x: c.x + rx * cosR, y: c.y + rx * sinR }, type: 'endpoint' });
-          keyPoints.push({ pt: { x: c.x - rx * cosR, y: c.y - rx * sinR }, type: 'endpoint' });
-          keyPoints.push({ pt: { x: c.x - ry * sinR, y: c.y + ry * cosR }, type: 'endpoint' });
-          keyPoints.push({ pt: { x: c.x + ry * sinR, y: c.y - ry * cosR }, type: 'endpoint' });
-
-          // 4 true AXIS-ALIGNED quadrant points (extreme points of the ellipse in world x and y)
-          const tx = Math.atan2(-ry * sinR, rx * cosR);
-          const ty = Math.atan2(ry * cosR, rx * sinR);
-          const evalE = (t: number): Point2D => ({
-            x: +(c.x + rx * Math.cos(t) * cosR - ry * Math.sin(t) * sinR).toFixed(5),
-            y: +(c.y + rx * Math.cos(t) * sinR + ry * Math.sin(t) * cosR).toFixed(5),
-          });
-          keyPoints.push({ pt: evalE(tx), type: 'endpoint' });
-          keyPoints.push({ pt: evalE(tx + Math.PI), type: 'endpoint' });
-          keyPoints.push({ pt: evalE(ty), type: 'endpoint' });
-          keyPoints.push({ pt: evalE(ty + Math.PI), type: 'endpoint' });
-        }
-      }
-      if (e.type === 'arc' && e.pts[0]) {
-        keyPoints.push({ pt: e.pts[0], type: 'center' });
-        keyPoints.push({ pt: e.pts[1], type: 'endpoint' });
-        if (e.pts[2]) keyPoints.push({ pt: e.pts[2], type: 'endpoint' });
-      }
-    }
-
-    // Direct Vertex / Point Snapping (highest priority)
-    let directSnap: Snap | null = null;
-    for (const kp of keyPoints) {
-      const d = dist(raw, kp.pt);
-      if (d < snapR && d < minD) {
-        minD = d;
-        directSnap = { pt: kp.pt, type: kp.type, guides: [] };
-      }
-    }
-    if (directSnap) {
-      if (activeStart && dist(directSnap.pt, activeStart) > 1e-4) {
-        const dx = Math.abs(directSnap.pt.x - activeStart.x);
-        const dy = Math.abs(directSnap.pt.y - activeStart.y);
-        if (dx < alignTol) {
-          directSnap.guides = [{ type: 'vertical', from: activeStart, to: directSnap.pt }];
-        } else if (dy < alignTol) {
-          directSnap.guides = [{ type: 'horizontal', from: activeStart, to: directSnap.pt }];
-        }
-      }
-      return directSnap;
-    }
-
-    // 3. INFERENCING WHILE ACTIVELY DRAWING
-    if (activeStart && dist(raw, activeStart) > snapR) {
-      const dx = raw.x - activeStart.x;
-      const dy = raw.y - activeStart.y;
-      const absDx = Math.abs(dx);
-      const absDy = Math.abs(dy);
-
-      // Check if drawing near X-axis (y=0) or Y-axis (x=0)
-      const onXAxis = Math.abs(raw.y) < alignTol;
-      const onYAxis = Math.abs(raw.x) < alignTol;
-
-      // Check if moving predominantly horizontal or vertical from start
-      const isHorizontal = absDy < alignTol || onXAxis;
-      const isVertical = absDx < alignTol || onYAxis;
-
-      if (isHorizontal) {
-        const targetY = onXAxis ? 0 : activeStart.y;
-        let targetX = raw.x;
-        const guides: GuideLine[] = [
-          { type: onXAxis ? 'xaxis' : 'horizontal', from: activeStart, to: { x: targetX, y: targetY } },
-        ];
-
-        // Check if there is an opposing endpoint that aligns vertically with current cursor
-        let bestAlignX: Point2D | null = null;
-        let minDiffX = alignTol;
-        for (const kp of keyPoints) {
-          if (dist(kp.pt, activeStart) < 1e-4) continue;
-          const diff = Math.abs(raw.x - kp.pt.x);
-          if (diff < minDiffX) {
-            minDiffX = diff;
-            bestAlignX = kp.pt;
-          }
-        }
-
-        if (bestAlignX) {
-          targetX = bestAlignX.x;
-          guides[0].to.x = targetX;
-          guides.push({
-            type: 'vertical',
-            from: bestAlignX,
-            to: { x: targetX, y: targetY },
-          });
-        }
-
-        return {
-          pt: { x: +targetX.toFixed(5), y: +targetY.toFixed(5) },
-          type: 'alignment',
-          guides,
-        };
+      if (!snapEnabled) {
+        return { pt: raw, type: 'grid', guides: [] };
       }
 
-      if (isVertical) {
-        const targetX = onYAxis ? 0 : activeStart.x;
-        let targetY = raw.y;
-        const guides: GuideLine[] = [
-          { type: onYAxis ? 'yaxis' : 'vertical', from: activeStart, to: { x: targetX, y: targetY } },
-        ];
+      const activeStart = tempPts.length > 0 ? tempPts[tempPts.length - 1] : null;
 
-        // Check if there is an opposing endpoint that aligns horizontally with current cursor
-        let bestAlignY: Point2D | null = null;
-        let minDiffY = alignTol;
-        for (const kp of keyPoints) {
-          if (dist(kp.pt, activeStart) < 1e-4) continue;
-          const diff = Math.abs(raw.y - kp.pt.y);
-          if (diff < minDiffY) {
-            minDiffY = diff;
-            bestAlignY = kp.pt;
-          }
-        }
+      // The origin is a snap CANDIDATE (below, same radius/priority as any other
+      // point) but must never magnetically grab the cursor on its own - it used
+      // to have an enlarged, always-on capture radius here, which made ordinary
+      // drawing near the middle of the canvas "snap to center" unexpectedly. A
+      // deliberate re-centre is still one double middle-click away (handleAuxClick).
 
-        if (bestAlignY) {
-          targetY = bestAlignY.y;
-          guides[0].to.y = targetY;
-          guides.push({
-            type: 'horizontal',
-            from: bestAlignY,
-            to: { x: targetX, y: targetY },
-          });
-        }
-
-        return {
-          pt: { x: +targetX.toFixed(5), y: +targetY.toFixed(5) },
-          type: 'alignment',
-          guides,
-        };
-      }
-
-      // Check 90° Perpendicular and Parallel to existing segments (only when not H/V)
-      const curLen = Math.hypot(dx, dy);
-      const curAng = Math.atan2(dy, dx);
+      // 2. COLLECT KEY GEOMETRIC VERTICES (Endpoints, Midpoints, Centers)
+      const keyPoints: { pt: Point2D; type: Snap['type'] }[] = [
+        { pt: { x: 0, y: 0 }, type: 'origin' },
+      ];
 
       for (const e of cadState.entities) {
-        if (e.pts.length < 2) continue;
-        for (let i = 0; i < e.pts.length - 1; i++) {
-          const segA = e.pts[i];
-          const segB = e.pts[i + 1];
-          const segAng = Math.atan2(segB.y - segA.y, segB.x - segA.x);
+        if (e.pts.length >= 2) {
+          keyPoints.push({ pt: e.pts[0], type: 'endpoint' });
+          keyPoints.push({ pt: e.pts[e.pts.length - 1], type: 'endpoint' });
+          for (let i = 0; i < e.pts.length - 1; i++) {
+            keyPoints.push({ pt: midpt(e.pts[i], e.pts[i + 1]), type: 'midpoint' });
+            if (i > 0 && i < e.pts.length - 1) {
+              keyPoints.push({ pt: e.pts[i], type: 'endpoint' });
+            }
+          }
+        }
+        if (e.type === 'circle' && e.pts[0]) {
+          keyPoints.push({ pt: e.pts[0], type: 'center' });
+          const c = e.pts[0];
+          const r = e.radius ?? (e.pts[1] ? dist(c, e.pts[1]) : 0);
+          if (r > 0) {
+            keyPoints.push({
+              pt: { x: +(c.x + r).toFixed(5), y: +c.y.toFixed(5) },
+              type: 'endpoint',
+            });
+            keyPoints.push({
+              pt: { x: +(c.x - r).toFixed(5), y: +c.y.toFixed(5) },
+              type: 'endpoint',
+            });
+            keyPoints.push({
+              pt: { x: +c.x.toFixed(5), y: +(c.y + r).toFixed(5) },
+              type: 'endpoint',
+            });
+            keyPoints.push({
+              pt: { x: +c.x.toFixed(5), y: +(c.y - r).toFixed(5) },
+              type: 'endpoint',
+            });
+          }
+        }
+        if (e.type === 'ellipse' && e.pts[0]) {
+          keyPoints.push({ pt: e.pts[0], type: 'center' });
+          if (typeof e.rx === 'number' && typeof e.ry === 'number') {
+            const c = e.pts[0];
+            const rx = e.rx;
+            const ry = e.ry;
+            const rot = e.rotation || 0;
+            const cosR = Math.cos(rot);
+            const sinR = Math.sin(rot);
+            keyPoints.push({ pt: { x: c.x + rx * cosR, y: c.y + rx * sinR }, type: 'endpoint' });
+            keyPoints.push({ pt: { x: c.x - rx * cosR, y: c.y - rx * sinR }, type: 'endpoint' });
+            keyPoints.push({ pt: { x: c.x - ry * sinR, y: c.y + ry * cosR }, type: 'endpoint' });
+            keyPoints.push({ pt: { x: c.x + ry * sinR, y: c.y - ry * cosR }, type: 'endpoint' });
 
-          // 90° Perpendicular snap
-          const perp1 = segAng + Math.PI / 2;
-          const perp2 = segAng - Math.PI / 2;
-          const diffPerp1 = Math.abs(normalizeAngle(curAng - perp1));
-          const diffPerp2 = Math.abs(normalizeAngle(curAng - perp2));
-          if (diffPerp1 < 0.05 || diffPerp2 < 0.05) {
-            const targetAng = diffPerp1 < 0.05 ? perp1 : perp2;
-            const pt = {
-              x: +(activeStart.x + curLen * Math.cos(targetAng)).toFixed(5),
-              y: +(activeStart.y + curLen * Math.sin(targetAng)).toFixed(5),
-            };
-            return {
-              pt,
-              type: 'perpendicular',
-              guides: [{ type: 'perpendicular', from: activeStart, to: pt }],
-            };
+            // 4 true AXIS-ALIGNED quadrant points (extreme points of the ellipse in world x and y)
+            const tx = Math.atan2(-ry * sinR, rx * cosR);
+            const ty = Math.atan2(ry * cosR, rx * sinR);
+            const evalE = (t: number): Point2D => ({
+              x: +(c.x + rx * Math.cos(t) * cosR - ry * Math.sin(t) * sinR).toFixed(5),
+              y: +(c.y + rx * Math.cos(t) * sinR + ry * Math.sin(t) * cosR).toFixed(5),
+            });
+            keyPoints.push({ pt: evalE(tx), type: 'endpoint' });
+            keyPoints.push({ pt: evalE(tx + Math.PI), type: 'endpoint' });
+            keyPoints.push({ pt: evalE(ty), type: 'endpoint' });
+            keyPoints.push({ pt: evalE(ty + Math.PI), type: 'endpoint' });
+          }
+        }
+        if (e.type === 'arc' && e.pts[0]) {
+          keyPoints.push({ pt: e.pts[0], type: 'center' });
+          keyPoints.push({ pt: e.pts[1], type: 'endpoint' });
+          if (e.pts[2]) keyPoints.push({ pt: e.pts[2], type: 'endpoint' });
+        }
+      }
+
+      // Direct Vertex / Point Snapping (highest priority)
+      let directSnap: Snap | null = null;
+      for (const kp of keyPoints) {
+        const d = dist(raw, kp.pt);
+        if (d < snapR && d < minD) {
+          minD = d;
+          directSnap = { pt: kp.pt, type: kp.type, guides: [] };
+        }
+      }
+      if (directSnap) {
+        if (activeStart && dist(directSnap.pt, activeStart) > 1e-4) {
+          const dx = Math.abs(directSnap.pt.x - activeStart.x);
+          const dy = Math.abs(directSnap.pt.y - activeStart.y);
+          if (dx < alignTol) {
+            directSnap.guides = [{ type: 'vertical', from: activeStart, to: directSnap.pt }];
+          } else if (dy < alignTol) {
+            directSnap.guides = [{ type: 'horizontal', from: activeStart, to: directSnap.pt }];
+          }
+        }
+        return directSnap;
+      }
+
+      // 3. INFERENCING WHILE ACTIVELY DRAWING
+      if (activeStart && dist(raw, activeStart) > snapR) {
+        const dx = raw.x - activeStart.x;
+        const dy = raw.y - activeStart.y;
+        const absDx = Math.abs(dx);
+        const absDy = Math.abs(dy);
+
+        // Check if drawing near X-axis (y=0) or Y-axis (x=0)
+        const onXAxis = Math.abs(raw.y) < alignTol;
+        const onYAxis = Math.abs(raw.x) < alignTol;
+
+        // Check if moving predominantly horizontal or vertical from start
+        const isHorizontal = absDy < alignTol || onXAxis;
+        const isVertical = absDx < alignTol || onYAxis;
+
+        if (isHorizontal) {
+          const targetY = onXAxis ? 0 : activeStart.y;
+          let targetX = raw.x;
+          const guides: GuideLine[] = [
+            {
+              type: onXAxis ? 'xaxis' : 'horizontal',
+              from: activeStart,
+              to: { x: targetX, y: targetY },
+            },
+          ];
+
+          // Check if there is an opposing endpoint that aligns vertically with current cursor
+          let bestAlignX: Point2D | null = null;
+          let minDiffX = alignTol;
+          for (const kp of keyPoints) {
+            if (dist(kp.pt, activeStart) < 1e-4) continue;
+            const diff = Math.abs(raw.x - kp.pt.x);
+            if (diff < minDiffX) {
+              minDiffX = diff;
+              bestAlignX = kp.pt;
+            }
           }
 
-          // Parallel snap
-          const diffPar = Math.abs(normalizeAngle(curAng - segAng));
-          const diffParOpp = Math.abs(normalizeAngle(curAng - (segAng + Math.PI)));
-          if (diffPar < 0.05 || diffParOpp < 0.05) {
-            const targetAng = diffPar < 0.05 ? segAng : segAng + Math.PI;
-            const pt = {
-              x: +(activeStart.x + curLen * Math.cos(targetAng)).toFixed(5),
-              y: +(activeStart.y + curLen * Math.sin(targetAng)).toFixed(5),
-            };
-            return {
-              pt,
-              type: 'parallel',
-              guides: [{ type: 'parallel', from: activeStart, to: pt }],
-            };
+          if (bestAlignX) {
+            targetX = bestAlignX.x;
+            guides[0].to.x = targetX;
+            guides.push({
+              type: 'vertical',
+              from: bestAlignX,
+              to: { x: targetX, y: targetY },
+            });
+          }
+
+          return {
+            pt: { x: +targetX.toFixed(5), y: +targetY.toFixed(5) },
+            type: 'alignment',
+            guides,
+          };
+        }
+
+        if (isVertical) {
+          const targetX = onYAxis ? 0 : activeStart.x;
+          let targetY = raw.y;
+          const guides: GuideLine[] = [
+            {
+              type: onYAxis ? 'yaxis' : 'vertical',
+              from: activeStart,
+              to: { x: targetX, y: targetY },
+            },
+          ];
+
+          // Check if there is an opposing endpoint that aligns horizontally with current cursor
+          let bestAlignY: Point2D | null = null;
+          let minDiffY = alignTol;
+          for (const kp of keyPoints) {
+            if (dist(kp.pt, activeStart) < 1e-4) continue;
+            const diff = Math.abs(raw.y - kp.pt.y);
+            if (diff < minDiffY) {
+              minDiffY = diff;
+              bestAlignY = kp.pt;
+            }
+          }
+
+          if (bestAlignY) {
+            targetY = bestAlignY.y;
+            guides[0].to.y = targetY;
+            guides.push({
+              type: 'horizontal',
+              from: bestAlignY,
+              to: { x: targetX, y: targetY },
+            });
+          }
+
+          return {
+            pt: { x: +targetX.toFixed(5), y: +targetY.toFixed(5) },
+            type: 'alignment',
+            guides,
+          };
+        }
+
+        // Check 90° Perpendicular and Parallel to existing segments (only when not H/V)
+        const curLen = Math.hypot(dx, dy);
+        const curAng = Math.atan2(dy, dx);
+
+        for (const e of cadState.entities) {
+          if (e.pts.length < 2) continue;
+          for (let i = 0; i < e.pts.length - 1; i++) {
+            const segA = e.pts[i];
+            const segB = e.pts[i + 1];
+            const segAng = Math.atan2(segB.y - segA.y, segB.x - segA.x);
+
+            // 90° Perpendicular snap
+            const perp1 = segAng + Math.PI / 2;
+            const perp2 = segAng - Math.PI / 2;
+            const diffPerp1 = Math.abs(normalizeAngle(curAng - perp1));
+            const diffPerp2 = Math.abs(normalizeAngle(curAng - perp2));
+            if (diffPerp1 < 0.05 || diffPerp2 < 0.05) {
+              const targetAng = diffPerp1 < 0.05 ? perp1 : perp2;
+              const pt = {
+                x: +(activeStart.x + curLen * Math.cos(targetAng)).toFixed(5),
+                y: +(activeStart.y + curLen * Math.sin(targetAng)).toFixed(5),
+              };
+              return {
+                pt,
+                type: 'perpendicular',
+                guides: [{ type: 'perpendicular', from: activeStart, to: pt }],
+              };
+            }
+
+            // Parallel snap
+            const diffPar = Math.abs(normalizeAngle(curAng - segAng));
+            const diffParOpp = Math.abs(normalizeAngle(curAng - (segAng + Math.PI)));
+            if (diffPar < 0.05 || diffParOpp < 0.05) {
+              const targetAng = diffPar < 0.05 ? segAng : segAng + Math.PI;
+              const pt = {
+                x: +(activeStart.x + curLen * Math.cos(targetAng)).toFixed(5),
+                y: +(activeStart.y + curLen * Math.sin(targetAng)).toFixed(5),
+              };
+              return {
+                pt,
+                type: 'parallel',
+                guides: [{ type: 'parallel', from: activeStart, to: pt }],
+              };
+            }
           }
         }
       }
-    }
 
-    // Grid snap fallback
-    if (gridSnapEnabled) {
-      const rawStep = 40 / Math.max(zoom, 1e-6);
-      const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-      const norm = rawStep / mag;
-      let g = mag;
-      if (norm >= 5) g = 5 * mag;
-      else if (norm >= 2) g = 2 * mag;
-      else g = mag;
-      g = Math.max(0.0002, g); // Min grid snap step: 0.2 mm
+      // Grid snap fallback
+      if (gridSnapEnabled) {
+        const rawStep = 40 / Math.max(zoom, 1e-6);
+        const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+        const norm = rawStep / mag;
+        let g = mag;
+        if (norm >= 5) g = 5 * mag;
+        else if (norm >= 2) g = 2 * mag;
+        else g = mag;
+        g = Math.max(0.0002, g); // Min grid snap step: 0.2 mm
 
-      const gx = Math.round(raw.x / g) * g;
-      const gy = Math.round(raw.y / g) * g;
-      return { pt: { x: +gx.toFixed(6), y: +gy.toFixed(6) }, type: 'grid', guides: [] };
-    }
+        const gx = Math.round(raw.x / g) * g;
+        const gy = Math.round(raw.y / g) * g;
+        return { pt: { x: +gx.toFixed(6), y: +gy.toFixed(6) }, type: 'grid', guides: [] };
+      }
 
-    return { pt: raw, type: 'grid', guides: [] };
-  }, [cadState.entities, snapEnabled, gridSnapEnabled, tempPts, zoom]);
-
-
+      return { pt: raw, type: 'grid', guides: [] };
+    },
+    [cadState.entities, snapEnabled, gridSnapEnabled, tempPts, zoom],
+  );
 
   // ── Canvas render ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -2088,7 +1822,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     const ws = (wx: number, wy: number) => ({ x: o.x + wx * zoom, y: o.y - wy * zoom });
     const SCALE = zoom;
 
-    const glHaveField = glReady && showField && Array.isArray(fieldData?.fields?.[activeField]) &&
+    const glHaveField =
+      glReady &&
+      showField &&
+      Array.isArray(fieldData?.fields?.[activeField]) &&
       (!meshData?.nodes?.length || fieldData.fields[activeField].length === meshData.nodes.length);
 
     // Background
@@ -2121,8 +1858,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const ox = ((o.x % screenStep) + screenStep) % screenStep;
         const oy = ((o.y % screenStep) + screenStep) % screenStep;
         ctx.beginPath();
-        for (let x = ox; x < cw; x += screenStep) { ctx.moveTo(x, 0); ctx.lineTo(x, ch); }
-        for (let y = oy; y < ch; y += screenStep) { ctx.moveTo(0, y); ctx.lineTo(cw, y); }
+        for (let x = ox; x < cw; x += screenStep) {
+          ctx.moveTo(x, 0);
+          ctx.lineTo(x, ch);
+        }
+        for (let y = oy; y < ch; y += screenStep) {
+          ctx.moveTo(0, y);
+          ctx.lineTo(cw, y);
+        }
         ctx.stroke();
       };
       drawGridLines(minorStep, '#EBEBEB', 1);
@@ -2133,14 +1876,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.strokeStyle = '#F87171'; // Light red (tailwind red-400)
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(0, o.y); ctx.lineTo(cw, o.y);
+      ctx.moveTo(0, o.y);
+      ctx.lineTo(cw, o.y);
       ctx.stroke();
 
       // Y-axis (x = 0 line)
       ctx.strokeStyle = '#4ADE80'; // Light green (tailwind green-400)
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(o.x, 0); ctx.lineTo(o.x, ch);
+      ctx.moveTo(o.x, 0);
+      ctx.lineTo(o.x, ch);
       ctx.stroke();
 
       // Axis labels
@@ -2151,10 +1896,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.fillText('Y', o.x + 6, 14);
     }
 
-
     // Mesh mode reuses this CAD canvas, including its camera, pan and zoom.
     // Only the backend mesh is drawn; fields and streamlines are intentionally absent.
-    if (displayOnly && showMesh && liveHasContent && canvasMode === 'mesh' && meshData?.nodes?.length && meshData?.elements?.length) {
+    if (
+      displayOnly &&
+      showMesh &&
+      liveHasContent &&
+      canvasMode === 'mesh' &&
+      meshData?.nodes?.length &&
+      meshData?.elements?.length
+    ) {
       const nodes = meshData.nodes;
       const elements = meshData.elements;
 
@@ -2181,7 +1932,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       const qualityMode = !showField && !meshOnly && showMeshQuality && !!meshSkew;
       const liveMode = !!liveVals && liveVals.length === elements.length && !qualityMode;
       const liveLo = Number(liveRange[0]);
-      const liveSpan = (Number(liveRange[1]) - liveLo) || 1;
+      const liveSpan = Number(liveRange[1]) - liveLo || 1;
       ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.18)' : '#CBD5E1';
       ctx.lineWidth = haveField ? 0.45 : 0.65;
 
@@ -2191,7 +1942,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         elements.forEach((element: number[], elIdx: number) => {
           if (element.length < 3) return;
           if (element.some((ni: number) => !nodes[ni])) return; // guard: out-of-range node refs
-          const points = element.map((nodeIndex: number) => ws(nodes[nodeIndex][0], nodes[nodeIndex][1]));
+          const points = element.map((nodeIndex: number) =>
+            ws(nodes[nodeIndex][0], nodes[nodeIndex][1]),
+          );
 
           if (liveMode) {
             // flat per-cell fill; mesh wireframe stroke is independently toggled
@@ -2239,7 +1992,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             ctx.fill();
             if (shouldDrawWireframe) ctx.stroke();
           } else {
-            ctx.fillStyle = '#FFFFFF';
+            const blockCol = directionColors ? elementBlockColor?.[elIdx] : null;
+            ctx.fillStyle = blockCol ? blockCol + '26' : '#FFFFFF';
             ctx.strokeStyle = '#CBD5E1';
             ctx.lineWidth = 0.65;
             ctx.beginPath();
@@ -2269,7 +2023,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.stroke();
 
       // Streamlines overlay (Results) - only when showResultsStreamlines is toggled on
-      if (showField && showResultsStreamlines && Array.isArray(fieldData?.streamlines) && fieldData.streamlines.length > 0) {
+      if (
+        showField &&
+        showResultsStreamlines &&
+        Array.isArray(fieldData?.streamlines) &&
+        fieldData.streamlines.length > 0
+      ) {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
         ctx.lineWidth = 1.4;
         ctx.setLineDash([]);
@@ -2282,6 +2041,39 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             const pi = ws(line[i][0], line[i][1]);
             ctx.lineTo(pi.x, pi.y);
           }
+          ctx.stroke();
+        }
+      }
+
+      // Direction-group overlay: while the mesh-sizing step is open, trace
+      // the block edges in the same colors as the Direction A/B/C cards over
+      // the generated mesh (the per-cell block fill itself is painted in the
+      // main element loop above, directly on the real cells, not here).
+      if (directionColors && blocking && blocking.edges.length > 0) {
+        for (const edge of blocking.edges) {
+          // Boundary (patched) edges are already traced by the exterior-edge
+          // pass above, following the mesh's own node-by-node polyline. This
+          // overlay's edge.path is the coarser blocking representation of the
+          // same curve - stroking both independently at a kink in the wall
+          // left two not-quite-aligned lines fighting each other there. Only
+          // the interior (unpatched) block seams have no other outline, so
+          // only those need drawing here.
+          if (edge.patch) continue;
+          const v0 = blocking.vertices.find((v) => v.id === edge.v0);
+          const v1 = blocking.vertices.find((v) => v.id === edge.v1);
+          const col = directionColors[edge.id];
+          if (!v0 || !v1 || !col) continue;
+          const chain = [v0.pt, ...edge.path, v1.pt];
+          ctx.strokeStyle = col;
+          ctx.lineWidth = 2;
+          ctx.lineJoin = 'round';
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          chain.forEach((p, i) => {
+            const s = ws(p.x, p.y);
+            if (i === 0) ctx.moveTo(s.x, s.y);
+            else ctx.lineTo(s.x, s.y);
+          });
           ctx.stroke();
         }
       }
@@ -2333,18 +2125,28 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       // Draw entity geometry
       if (e.type === 'construction' && e.pts.length === 2) {
         // Infinite reference line: extend far past the viewport in both directions.
-        const a = e.pts[0], b = e.pts[1];
-        const dx = b.x - a.x, dy = b.y - a.y;
+        const a = e.pts[0],
+          b = e.pts[1];
+        const dx = b.x - a.x,
+          dy = b.y - a.y;
         const len = Math.hypot(dx, dy) || 1;
         const ext = 1e6;
-        const ux = (dx / len) * ext, uy = (dy / len) * ext;
+        const ux = (dx / len) * ext,
+          uy = (dy / len) * ext;
         const s0 = ws(a.x - ux, a.y - uy);
         const s1 = ws(b.x + ux, b.y + uy);
         ctx.beginPath();
         ctx.moveTo(s0.x, s0.y);
         ctx.lineTo(s1.x, s1.y);
         ctx.stroke();
-      } else if ((e.type === 'line' || e.type === 'polyline' || e.type === 'rectangle' || e.type === 'spline' || e.type === 'construction') && e.pts.length >= 2) {
+      } else if (
+        (e.type === 'line' ||
+          e.type === 'polyline' ||
+          e.type === 'rectangle' ||
+          e.type === 'spline' ||
+          e.type === 'construction') &&
+        e.pts.length >= 2
+      ) {
         ctx.beginPath();
         const p0 = ws(e.pts[0].x, e.pts[0].y);
         ctx.moveTo(p0.x, p0.y);
@@ -2362,7 +2164,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         // a big white box. On a selected entity each grip also gets a hollow
         // square so it is obvious which vertex a drag will grab.
         if (!isConst || showConstruction) {
-          const editable = tool === 'select' && !displayOnly && !isConst && e.role !== 'domain_boundary';
+          const editable =
+            tool === 'select' && !displayOnly && !isConst && e.role !== 'domain_boundary';
           for (const pt of e.pts) {
             const ps = ws(pt.x, pt.y);
             if (isSel && editable) {
@@ -2397,13 +2200,15 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.strokeStyle = ctx.strokeStyle;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(center.x - 5, center.y); ctx.lineTo(center.x + 5, center.y);
-        ctx.moveTo(center.x, center.y - 5); ctx.lineTo(center.x, center.y + 5);
+        ctx.moveTo(center.x - 5, center.y);
+        ctx.lineTo(center.x + 5, center.y);
+        ctx.moveTo(center.x, center.y - 5);
+        ctx.lineTo(center.x, center.y + 5);
         ctx.stroke();
       } else if (e.type === 'ellipse' && e.pts.length >= 2) {
         const center = ws(e.pts[0].x, e.pts[0].y);
         const rx = (e.rx ?? dist(e.pts[0], e.pts[1])) * SCALE;
-        const ry = (e.ry ?? (rx / SCALE * 0.5)) * SCALE;
+        const ry = (e.ry ?? (rx / SCALE) * 0.5) * SCALE;
         const rot = e.rotation ?? Math.atan2(e.pts[1].y - e.pts[0].y, e.pts[1].x - e.pts[0].x);
         ctx.beginPath();
         ctx.ellipse(center.x, center.y, Math.max(0.5, rx), Math.max(0.5, ry), -rot, 0, Math.PI * 2);
@@ -2412,8 +2217,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         // Center mark
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(center.x - 5, center.y); ctx.lineTo(center.x + 5, center.y);
-        ctx.moveTo(center.x, center.y - 5); ctx.lineTo(center.x, center.y + 5);
+        ctx.moveTo(center.x - 5, center.y);
+        ctx.lineTo(center.x + 5, center.y);
+        ctx.moveTo(center.x, center.y - 5);
+        ctx.lineTo(center.x, center.y + 5);
         ctx.stroke();
       } else if (e.type === 'arc' && e.pts.length >= 3) {
         const center = ws(e.pts[0].x, e.pts[0].y);
@@ -2473,7 +2280,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const m = ws(tempPts[1].x, tempPts[1].y);
         const rxWorld = dist(tempPts[0], tempPts[1]);
         const rot = Math.atan2(tempPts[1].y - tempPts[0].y, tempPts[1].x - tempPts[0].x);
-        const ryWorld = Math.abs(-(snap.pt.x - tempPts[0].x) * Math.sin(rot) + (snap.pt.y - tempPts[0].y) * Math.cos(rot));
+        const ryWorld = Math.abs(
+          -(snap.pt.x - tempPts[0].x) * Math.sin(rot) + (snap.pt.y - tempPts[0].y) * Math.cos(rot),
+        );
         const rx = rxWorld * SCALE;
         const ry = Math.max(0.5, ryWorld * SCALE);
         ctx.beginPath();
@@ -2498,7 +2307,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       } else if (tool === 'rectangle' && tempPts.length === 1) {
         const a = ws(tempPts[0].x, tempPts[0].y);
         const b = ws(snap.pt.x, snap.pt.y);
-        ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+        ctx.strokeRect(
+          Math.min(a.x, b.x),
+          Math.min(a.y, b.y),
+          Math.abs(b.x - a.x),
+          Math.abs(b.y - a.y),
+        );
       } else {
         const p0 = ws(tempPts[0].x, tempPts[0].y);
         ctx.beginPath();
@@ -2549,8 +2363,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.strokeStyle = '#DC2626';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(mid.x - 5, mid.y - 5); ctx.lineTo(mid.x + 5, mid.y + 5);
-      ctx.moveTo(mid.x + 5, mid.y - 5); ctx.lineTo(mid.x - 5, mid.y + 5);
+      ctx.moveTo(mid.x - 5, mid.y - 5);
+      ctx.lineTo(mid.x + 5, mid.y + 5);
+      ctx.moveTo(mid.x + 5, mid.y - 5);
+      ctx.lineTo(mid.x - 5, mid.y + 5);
       ctx.stroke();
     }
 
@@ -2615,8 +2431,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2);
         ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(sp.x - 8, sp.y); ctx.lineTo(sp.x + 8, sp.y);
-        ctx.moveTo(sp.x, sp.y - 8); ctx.lineTo(sp.x, sp.y + 8);
+        ctx.moveTo(sp.x - 8, sp.y);
+        ctx.lineTo(sp.x + 8, sp.y);
+        ctx.moveTo(sp.x, sp.y - 8);
+        ctx.lineTo(sp.x, sp.y + 8);
         ctx.stroke();
       } else if (snap.type === 'endpoint') {
         ctx.strokeStyle = '#16A34A';
@@ -2641,7 +2459,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, 1.5, 0, Math.PI * 2);
         ctx.fill();
-      } else if (snap.type === 'perpendicular' || snap.type === 'parallel' || snap.type === 'alignment') {
+      } else if (
+        snap.type === 'perpendicular' ||
+        snap.type === 'parallel' ||
+        snap.type === 'alignment'
+      ) {
         ctx.strokeStyle = '#0284C7';
         ctx.lineWidth = 1.8;
         ctx.beginPath();
@@ -2650,8 +2472,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       }
     }
 
-
-
     // ─── Cursor crosshair ─────────────────────────────────────────────────────
     if (tool !== 'select') {
       const sp = ws(snap.pt.x, snap.pt.y);
@@ -2659,8 +2479,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.lineWidth = 1;
       ctx.setLineDash([]);
       ctx.beginPath();
-      ctx.moveTo(sp.x - 12, sp.y); ctx.lineTo(sp.x + 12, sp.y);
-      ctx.moveTo(sp.x, sp.y - 12); ctx.lineTo(sp.x, sp.y + 12);
+      ctx.moveTo(sp.x - 12, sp.y);
+      ctx.lineTo(sp.x + 12, sp.y);
+      ctx.moveTo(sp.x, sp.y - 12);
+      ctx.lineTo(sp.x, sp.y + 12);
       ctx.stroke();
     }
 
@@ -2701,7 +2523,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const drawHandle = (
           pt: Point2D,
           key: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial',
-          tooltip: string
+          tooltip: string,
         ) => {
           const s = ws(pt.x, pt.y);
           const isHov = hoveredDomainHandle === key;
@@ -2740,13 +2562,29 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           drawHandle(
             { x: geometryBBox.centerX + Math.max(lUp, lDown, lLat), y: geometryBBox.centerY },
             'radial',
-            `Radius: ${upstreamChordFactor}c`
+            `Radius: ${upstreamChordFactor}c`,
           );
         } else {
-          drawHandle({ x: domainLeftX, y: geometryBBox.centerY }, 'upstream', `← ${upstreamChordFactor.toFixed(1)}c`);
-          drawHandle({ x: domainRightX, y: geometryBBox.centerY }, 'downstream', `→ ${downstreamChordFactor.toFixed(1)}c`);
-          drawHandle({ x: geometryBBox.centerX, y: domainTopY }, 'top', `↑ ${lateralHeightFactor.toFixed(1)}c`);
-          drawHandle({ x: geometryBBox.centerX, y: domainBottomY }, 'bottom', `↓ ${lateralHeightFactor.toFixed(1)}c`);
+          drawHandle(
+            { x: domainLeftX, y: geometryBBox.centerY },
+            'upstream',
+            `← ${upstreamChordFactor.toFixed(1)}c`,
+          );
+          drawHandle(
+            { x: domainRightX, y: geometryBBox.centerY },
+            'downstream',
+            `→ ${downstreamChordFactor.toFixed(1)}c`,
+          );
+          drawHandle(
+            { x: geometryBBox.centerX, y: domainTopY },
+            'top',
+            `↑ ${lateralHeightFactor.toFixed(1)}c`,
+          );
+          drawHandle(
+            { x: geometryBBox.centerX, y: domainBottomY },
+            'bottom',
+            `↓ ${lateralHeightFactor.toFixed(1)}c`,
+          );
         }
       }
     }
@@ -2782,7 +2620,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const colorConfig = BOUNDARY_COLORS[edge.tag] || BOUNDARY_COLORS.wall;
         // A circle is drawn as many short arc segments; only show a normal arrow
         // every so often so the outline does not turn into a sunburst.
-        const edgeEntType = cadState.entities.find(en => en.id === edge.entityId)?.type;
+        const edgeEntType = cadState.entities.find((en) => en.id === edge.entityId)?.type;
         const isCircleSeg = edgeEntType === 'circle' || edgeEntType === 'ellipse';
         const showArrow = !isCircleSeg || edge.edgeIndex % 8 === 0;
 
@@ -2821,7 +2659,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       for (const chain of chains) {
         const colorConfig = BOUNDARY_COLORS[chain.tag] || BOUNDARY_COLORS.wall;
         const mid = ws(chain.midpoint.x, chain.midpoint.y);
-        const isChainHovered = chain.edges.some(e => e.key === hoveredEdgeKey);
+        const isChainHovered = chain.edges.some((e) => e.key === hoveredEdgeKey);
         const badgeText = chain.tag.toUpperCase();
 
         ctx.save();
@@ -2832,7 +2670,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
         // Position badge strictly OUTSIDE domain with a clean 18px gap from the line
         // Project the badge box half-dimensions along the normal direction
-        const boxExtentAlongNormal = Math.abs(chain.outwardNormal.x) * (bw / 2) + Math.abs(chain.outwardNormal.y) * (bh / 2);
+        const boxExtentAlongNormal =
+          Math.abs(chain.outwardNormal.x) * (bw / 2) + Math.abs(chain.outwardNormal.y) * (bh / 2);
         const totalOffset = boxExtentAlongNormal + 18;
 
         const badgeCenter = {
@@ -2868,7 +2707,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     }
 
     // ─── Structured block topology overlay (mesh stage) ──────────────────────
-    if (showBlocking && blocking && blocking.edges.length > 0 && !(showMesh && canvasMode === 'mesh')) {
+    if (
+      showBlocking &&
+      blocking &&
+      blocking.edges.length > 0 &&
+      !(showMesh && canvasMode === 'mesh')
+    ) {
       ctx.save();
 
       // faint per-block fill so the multi-block layout reads at a glance
@@ -2876,6 +2720,13 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const poly = blockPolygon(blocking, blk);
         if (poly.length < 3) return;
         const hot = hoveredBlockIdx === bi;
+        const picked =
+          canvasMode === 'cad' &&
+          (selectedBlockId === blk.id || (blockTool === 'mergeB' && blockPick === blk.id));
+        const bad = badBlockIds.has(blk.id) || outsideBlockIds.has(blk.id);
+        const doomed = hot && blockTool === 'delete' && canvasMode === 'cad';
+        const target =
+          hot && canvasMode === 'cad' && (blockTool === 'ogrid' || blockTool === 'mergeB');
         ctx.beginPath();
         poly.forEach((p, i) => {
           const s = ws(p.x, p.y);
@@ -2883,8 +2734,22 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           else ctx.lineTo(s.x, s.y);
         });
         ctx.closePath();
-        ctx.fillStyle = hot ? 'rgba(124, 58, 237, 0.14)' : 'rgba(124, 58, 237, 0.05)';
+        ctx.fillStyle =
+          bad || doomed
+            ? 'rgba(220, 38, 38, 0.18)'
+            : picked || target
+              ? 'rgba(224, 90, 0, 0.16)'
+              : hot
+                ? 'rgba(124, 58, 237, 0.14)'
+                : 'rgba(124, 58, 237, 0.05)';
         ctx.fill();
+        if (picked) {
+          ctx.strokeStyle = '#E05A00';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
         // block number at the centroid
         const cx = poly.reduce((s, p) => s + p.x, 0) / poly.length;
         const cy = poly.reduce((s, p) => s + p.y, 0) / poly.length;
@@ -2901,7 +2766,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const v1 = blocking.vertices.find((v) => v.id === edge.v1);
         if (!v0 || !v1) continue;
         const chain = [v0.pt, ...edge.path, v1.pt];
-        const col = edge.patch ? (BOUNDARY_COLORS[edge.patch]?.hex ?? '#7C3AED') : '#7C3AED';
+        const col =
+          directionColors?.[edge.id] ??
+          (edge.patch ? (BOUNDARY_COLORS[edge.patch]?.hex ?? '#7C3AED') : '#7C3AED');
         ctx.strokeStyle = col;
         ctx.lineWidth = 2.5;
         ctx.setLineDash([]);
@@ -2913,8 +2780,17 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         });
         ctx.stroke();
 
-        // node ticks give a read on the cell count - walk the chain by arc length
-        const n = Math.max(2, Math.min(edge.nodes, 120));
+        // node ticks give a read on the cell count - walk the chain by arc length.
+        // Capped by on-screen length too: a short edge zoomed in tight (e.g. a
+        // narrow throat block) would otherwise cram dozens of ticks into a few
+        // pixels and smear into a solid black scribble instead of readable dots.
+        let screenLen = 0;
+        for (let i = 0; i + 1 < chain.length; i++) {
+          const sa = ws(chain[i].x, chain[i].y);
+          const sb = ws(chain[i + 1].x, chain[i + 1].y);
+          screenLen += Math.hypot(sb.x - sa.x, sb.y - sa.y);
+        }
+        const n = Math.max(2, Math.min(edge.nodes, 120, Math.floor(screenLen / 5) || 2));
         const segLen: number[] = [];
         let total = 0;
         for (let i = 0; i + 1 < chain.length; i++) {
@@ -2926,7 +2802,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         for (let k = 0; k < n; k++) {
           let target = (k / (n - 1)) * total;
           let si = 0;
-          while (si < segLen.length && target > segLen[si]) { target -= segLen[si]; si += 1; }
+          while (si < segLen.length && target > segLen[si]) {
+            target -= segLen[si];
+            si += 1;
+          }
           const a = chain[Math.min(si, chain.length - 1)];
           const b = chain[Math.min(si + 1, chain.length - 1)];
           const f = segLen[si] ? target / segLen[si] : 0;
@@ -2936,14 +2815,41 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           ctx.fill();
         }
       }
+      // Editor highlights on top of the edges: picked / selected / hovered edges,
+      // and (dashed red) boundary edges with no patch - they need associating.
+      if (canvasMode === 'cad') {
+        const vmap = new Map(blocking.vertices.map((v) => [v.id, v.pt] as const));
+        const strokeEdge = (id: string, color: string, width: number, dash: number[] = []) => {
+          const ed = blocking.edges.find((x) => x.id === id);
+          if (!ed) return;
+          const chain = [vmap.get(ed.v0)!, ...ed.path, vmap.get(ed.v1)!];
+          ctx.strokeStyle = color;
+          ctx.lineWidth = width;
+          ctx.setLineDash(dash);
+          ctx.beginPath();
+          chain.forEach((p, i) => {
+            const q = ws(p.x, p.y);
+            if (i === 0) ctx.moveTo(q.x, q.y);
+            else ctx.lineTo(q.x, q.y);
+          });
+          ctx.stroke();
+          ctx.setLineDash([]);
+        };
+        unpatchedEdgeIds.forEach((id) => strokeEdge(id, '#DC2626', 2, [5, 4]));
+        if (hoverEdgeId && !assocEdges.includes(hoverEdgeId) && hoverEdgeId !== selectedEdgeId)
+          strokeEdge(hoverEdgeId, 'rgba(224, 90, 0, 0.55)', 4);
+        assocEdges.forEach((id) => strokeEdge(id, '#E05A00', 4));
+        if (selectedEdgeId) strokeEdge(selectedEdgeId, '#E05A00', 4);
+      }
       // corner handles: a small dot per vertex. Hovering the one you are about to
       // grab draws a small solid-border square (no fill) tight around that dot.
       for (const v of blocking.vertices) {
         const s = ws(v.pt.x, v.pt.y);
-        const hot = hoveredBlockVtx === v.id;
+        const hot = hoveredBlockVtx === v.id || (blockTool === 'mergeV' && blockPick === v.id);
         ctx.beginPath();
         ctx.arc(s.x, s.y, hot ? 2.6 : 2.0, 0, Math.PI * 2);
-        ctx.fillStyle = hot ? '#E05A00' : '#7C3AED';
+        // associated (ICEM) vertices are green: they slide along their curve
+        ctx.fillStyle = hot ? '#E05A00' : v.curves?.length ? '#059669' : '#7C3AED';
         ctx.fill();
         if (hot) {
           ctx.strokeStyle = '#E05A00';
@@ -2952,8 +2858,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         }
       }
 
-      // alignment guides while dragging a block corner
-      if (blockDrag.current && blockSnapGuides.current.length) {
+      // alignment guides while dragging a block corner (or placing one)
+      if ((blockDrag.current || blockCursor) && blockSnapGuides.current.length) {
         ctx.strokeStyle = 'rgba(224, 90, 0, 0.7)';
         ctx.lineWidth = 1;
         ctx.setLineDash([5, 4]);
@@ -2966,6 +2872,77 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           ctx.stroke();
         }
         ctx.setLineDash([]);
+      }
+      ctx.restore();
+    }
+
+    // ─── Block editor previews (Blocks view) ───────────────────────────────────
+    if (showBlocking && canvasMode === 'cad') {
+      ctx.save();
+      if (blockTool === 'draw' && (blockDrawPts.length || blockCursor)) {
+        const pts = [...blockDrawPts, ...(blockCursor ? [blockCursor] : [])];
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+          const q = ws(p.x, p.y);
+          if (i === 0) ctx.moveTo(q.x, q.y);
+          else ctx.lineTo(q.x, q.y);
+        });
+        if (pts.length === 4) ctx.closePath();
+        ctx.strokeStyle = '#E05A00';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (pts.length === 4) {
+          ctx.fillStyle = 'rgba(224, 90, 0, 0.08)';
+          ctx.fill();
+        }
+        pts.forEach((p, i) => {
+          const q = ws(p.x, p.y);
+          ctx.beginPath();
+          ctx.arc(q.x, q.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = i < blockDrawPts.length ? '#E05A00' : '#FFFFFF';
+          ctx.fill();
+          ctx.strokeStyle = '#E05A00';
+          ctx.lineWidth = 1.2;
+          ctx.stroke();
+        });
+      }
+      if (blockTool === 'assoc' && hoverCurveId) {
+        const ent = cadState.entities.find((x) => x.id === hoverCurveId);
+        const c = ent ? curveOf(ent) : null;
+        if (c) {
+          ctx.strokeStyle = '#059669';
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          c.pts.forEach((p, i) => {
+            const q = ws(p.x, p.y);
+            if (i === 0) ctx.moveTo(q.x, q.y);
+            else ctx.lineTo(q.x, q.y);
+          });
+          if (c.closed) ctx.closePath();
+          ctx.stroke();
+        }
+      }
+      if (blockTool === 'split' && splitHover) {
+        ctx.strokeStyle = '#E05A00';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        for (const chain of splitHover.cut) {
+          ctx.beginPath();
+          chain.forEach((p, i) => {
+            const q = ws(p.x, p.y);
+            if (i === 0) ctx.moveTo(q.x, q.y);
+            else ctx.lineTo(q.x, q.y);
+          });
+          ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        const q = ws(splitHover.pt.x, splitHover.pt.y);
+        ctx.beginPath();
+        ctx.arc(q.x, q.y, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#E05A00';
+        ctx.fill();
       }
       ctx.restore();
     }
@@ -3026,551 +3003,912 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       }
       ctx.restore();
     }
-
-  }, [cadState.entities, tempPts, snap, isDrawing, pan, zoom, showGrid, showConstruction, tool, domainLength, domainHeight, marquee, currentStep, flowType, angleOfAttackDeg, freestreamVelocity, boundaryEdges, hoveredEdgeKey, geometryBBox, displayOnly, showMesh, canvasMode, meshData, domainBroken, editDragActive, showBlocking, blocking, hoveredBlockVtx, hoveredBlockIdx, hoveredVertex, meshOnly, showField, fieldData, activeField, colormap, showMeshWireframe, showResultsStreamlines, showMeshQuality, meshSkew, viewport.w, viewport.h, livePreview, liveField, liveMeshOn, activePlotLine, plotPickPreviewP1]);
-
-
+  }, [
+    cadState.entities,
+    tempPts,
+    snap,
+    isDrawing,
+    pan,
+    zoom,
+    showGrid,
+    showConstruction,
+    tool,
+    domainLength,
+    domainHeight,
+    marquee,
+    currentStep,
+    flowType,
+    angleOfAttackDeg,
+    freestreamVelocity,
+    boundaryEdges,
+    hoveredEdgeKey,
+    geometryBBox,
+    displayOnly,
+    showMesh,
+    canvasMode,
+    meshData,
+    domainBroken,
+    editDragActive,
+    showBlocking,
+    blocking,
+    directionColors,
+    hoveredBlockVtx,
+    hoveredBlockIdx,
+    hoveredVertex,
+    meshOnly,
+    blockTool,
+    blockDrawPts,
+    blockCursor,
+    splitHover,
+    selectedBlockId,
+    badBlockIds,
+    outsideBlockIds,
+    unpatchedEdgeIds,
+    hoverEdgeId,
+    assocEdges,
+    selectedEdgeId,
+    blockPick,
+    hoverCurveId,
+    showField,
+    fieldData,
+    activeField,
+    colormap,
+    showMeshWireframe,
+    showResultsStreamlines,
+    showMeshQuality,
+    meshSkew,
+    viewport.w,
+    viewport.h,
+    livePreview,
+    liveField,
+    liveMeshOn,
+    activePlotLine,
+    plotPickPreviewP1,
+  ]);
 
   // ── Mouse handlers ────────────────────────────────────────────────────────
 
-  const findEntityAt = useCallback((rawPt: Point2D): string | null => {
-    const hitR = 14 / zoom;
-    let bestId: string | null = null;
-    let bestD = Infinity;
-    for (const ent of cadState.entities) {
-      if (ent.pts.length === 0) continue;
-      for (let i = 0; i < ent.pts.length - 1; i++) {
-        const d = distToSegment(rawPt, ent.pts[i], ent.pts[i + 1]);
-        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
-      }
-      if (ent.isClosed && ent.pts.length >= 3) {
-        const d = distToSegment(rawPt, ent.pts[ent.pts.length - 1], ent.pts[0]);
-        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
-      }
-      if (ent.type === 'circle' && ent.pts.length >= 2) {
-        const r = ent.radius ?? dist(ent.pts[0], ent.pts[1]);
-        const radialD = Math.abs(dist(rawPt, ent.pts[0]) - r);
-        if (radialD < hitR && radialD < bestD) { bestD = radialD; bestId = ent.id; }
-      }
-      if (ent.type === 'ellipse' && ent.pts.length >= 2 && ent.rx != null && ent.ry != null) {
-        const c = ent.pts[0];
-        const rx = ent.rx;
-        const ry = ent.ry;
-        const rot = ent.rotation || 0;
-        const cosR = Math.cos(rot);
-        const sinR = Math.sin(rot);
-        const N = 32;
-        let minD = Infinity;
-        let prevP = {
-          x: c.x + rx * cosR,
-          y: c.y + rx * sinR,
-        };
-        for (let j = 1; j <= N; j++) {
-          const a = (2 * Math.PI * j) / N;
-          const lx = rx * Math.cos(a);
-          const ly = ry * Math.sin(a);
-          const curP = {
-            x: c.x + lx * cosR - ly * sinR,
-            y: c.y + lx * sinR + ly * cosR,
-          };
-          const d = distToSegment(rawPt, prevP, curP);
-          if (d < minD) minD = d;
-          prevP = curP;
+  const findEntityAt = useCallback(
+    (rawPt: Point2D): string | null => {
+      const hitR = 14 / zoom;
+      let bestId: string | null = null;
+      let bestD = Infinity;
+      for (const ent of cadState.entities) {
+        if (ent.pts.length === 0) continue;
+        for (let i = 0; i < ent.pts.length - 1; i++) {
+          const d = distToSegment(rawPt, ent.pts[i], ent.pts[i + 1]);
+          if (d < hitR && d < bestD) {
+            bestD = d;
+            bestId = ent.id;
+          }
         }
-        if (minD < hitR && minD < bestD) { bestD = minD; bestId = ent.id; }
-      }
-      for (const p of ent.pts) {
-        const d = dist(rawPt, p);
-        if (d < hitR && d < bestD) { bestD = d; bestId = ent.id; }
-      }
-    }
-    return bestId;
-  }, [cadState.entities, zoom]);
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const raw = toWorld(e.clientX, e.clientY);
-
-    // Structured block-vertex drag / hover (mesh stage).
-    if (showBlocking && blocking) {
-      if (blockDrag.current && onUpdateBlocking) {
-        const vid = blockDrag.current.vid;
-        const { pt, guides } = snapBlockVertex(raw, vid);
-        blockSnapGuides.current = guides;
-        onUpdateBlocking(applyVertexMove(blocking, vid, pt, cadState.entities));
-        return;
-      }
-      const vHit = 12 / zoom;
-      let hov: string | null = null;
-      let bd = vHit;
-      for (const v of blocking.vertices) {
-        const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
-        if (d < bd) { bd = d; hov = v.id; }
-      }
-      if (hov !== hoveredBlockVtx) setHoveredBlockVtx(hov);
-
-      let hb: number | null = null;
-      blocking.blocks.forEach((blk, bi) => {
-        const poly = blockPolygon(blocking, blk);
-        if (poly.length >= 3 && pointInPolygon(raw, poly)) hb = bi;
-      });
-      if (hb !== hoveredBlockIdx) setHoveredBlockIdx(hb);
-    }
-
-    const s = computeSnap(raw);
-    // Once the user has typed into the live dimension box, the mouse no
-    // longer drives the preview - the typed-value sync effect owns `snap`.
-    const dimIsManual = isDrawing && dimPrompt?.live && manualDim;
-    if (!dimIsManual) {
-      setSnap(s);
-    }
-
-    // Live-update the dimension box (Onshape/Fusion-style dynamic input)
-    // while a shape is being placed and the user hasn't started typing yet.
-    if (isDrawing && dimPrompt?.live && !manualDim && tempPts.length > 0) {
-      // The current segment's start: the last placed vertex (matters for
-      // polyline, which chains many segments through the same 'line' prompt;
-      // for line/rectangle/circle this is always tempPts[0] too).
-      const p0 = dimPrompt.basePt;
-      if (dimPrompt.type === 'line') {
-        const len = dist(p0, s.pt);
-        const angDeg = (Math.atan2(s.pt.y - p0.y, s.pt.x - p0.x) * 180) / Math.PI;
-        setInputVal1(len.toFixed(4));
-        setInputVal2(angDeg.toFixed(1));
-        setDimPrompt((prev) =>
-          prev && prev.live
-            ? { ...prev, val1: len.toFixed(4), val2: angDeg.toFixed(1), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
-            : prev,
-        );
-      } else if (dimPrompt.type === 'rectangle') {
-        const w = Math.abs(s.pt.x - p0.x);
-        const h = Math.abs(s.pt.y - p0.y);
-        setInputVal1(w.toFixed(4));
-        setInputVal2(h.toFixed(4));
-        setDimPrompt((prev) =>
-          prev && prev.live
-            ? { ...prev, val1: w.toFixed(4), val2: h.toFixed(4), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
-            : prev,
-        );
-      } else if (dimPrompt.type === 'circle') {
-        const r = dist(p0, s.pt);
-        setInputVal1(r.toFixed(4));
-        setInputVal2((r * 2).toFixed(4));
-        setDimPrompt((prev) =>
-          prev && prev.live
-            ? { ...prev, val1: r.toFixed(4), val2: (r * 2).toFixed(4), worldPos: { x: p0.x + r * 0.707, y: p0.y + r * 0.707 }, endPt: s.pt }
-            : prev,
-        );
-      } else if (dimPrompt.type === 'ellipse') {
-        if (tempPts.length === 1) {
-          const rx = dist(p0, s.pt);
-          const ry = rx * 0.5;
-          setInputVal1(rx.toFixed(4));
-          setInputVal2(ry.toFixed(4));
-          setDimPrompt((prev) =>
-            prev && prev.live
-              ? { ...prev, val1: rx.toFixed(4), val2: ry.toFixed(4), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
-              : prev,
-          );
-        } else if (tempPts.length === 2 && tempPts[1]) {
-          const rx = dist(p0, tempPts[1]);
-          const rot = Math.atan2(tempPts[1].y - p0.y, tempPts[1].x - p0.x);
-          const ry = Math.abs(-(s.pt.x - p0.x) * Math.sin(rot) + (s.pt.y - p0.y) * Math.cos(rot));
-          setInputVal1(rx.toFixed(4));
-          setInputVal2(ry.toFixed(4));
+        if (ent.isClosed && ent.pts.length >= 3) {
+          const d = distToSegment(rawPt, ent.pts[ent.pts.length - 1], ent.pts[0]);
+          if (d < hitR && d < bestD) {
+            bestD = d;
+            bestId = ent.id;
+          }
+        }
+        if (ent.type === 'circle' && ent.pts.length >= 2) {
+          const r = ent.radius ?? dist(ent.pts[0], ent.pts[1]);
+          const radialD = Math.abs(dist(rawPt, ent.pts[0]) - r);
+          if (radialD < hitR && radialD < bestD) {
+            bestD = radialD;
+            bestId = ent.id;
+          }
+        }
+        if (ent.type === 'ellipse' && ent.pts.length >= 2 && ent.rx != null && ent.ry != null) {
+          const c = ent.pts[0];
+          const rx = ent.rx;
+          const ry = ent.ry;
+          const rot = ent.rotation || 0;
           const cosR = Math.cos(rot);
           const sinR = Math.sin(rot);
-          const wpX = p0.x + (rx * 0.707) * cosR - (ry * 0.707) * sinR;
-          const wpY = p0.y + (rx * 0.707) * sinR + (ry * 0.707) * cosR;
+          const N = 32;
+          let minD = Infinity;
+          let prevP = {
+            x: c.x + rx * cosR,
+            y: c.y + rx * sinR,
+          };
+          for (let j = 1; j <= N; j++) {
+            const a = (2 * Math.PI * j) / N;
+            const lx = rx * Math.cos(a);
+            const ly = ry * Math.sin(a);
+            const curP = {
+              x: c.x + lx * cosR - ly * sinR,
+              y: c.y + lx * sinR + ly * cosR,
+            };
+            const d = distToSegment(rawPt, prevP, curP);
+            if (d < minD) minD = d;
+            prevP = curP;
+          }
+          if (minD < hitR && minD < bestD) {
+            bestD = minD;
+            bestId = ent.id;
+          }
+        }
+        for (const p of ent.pts) {
+          const d = dist(rawPt, p);
+          if (d < hitR && d < bestD) {
+            bestD = d;
+            bestId = ent.id;
+          }
+        }
+      }
+      return bestId;
+    },
+    [cadState.entities, zoom],
+  );
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      const raw = toWorld(e.clientX, e.clientY);
+
+      // Block editor previews: the snapped corner the Draw tool would place, and
+      // the edge point the Split tool would cut from.
+      if (showBlocking && canvasMode === 'cad' && blockTool === 'draw') {
+        const { pt, guides } = snapBlockVertex(raw, '');
+        blockSnapGuides.current = guides;
+        setBlockCursor(pt);
+      } else if (blockCursor) {
+        setBlockCursor(null);
+      }
+      if (showBlocking && canvasMode === 'cad' && blockTool === 'split' && blocking) {
+        const hit = pickEdge(blocking, raw, 10 / zoom);
+        if (
+          hit?.edgeId !== splitHover?.edgeId ||
+          (hit &&
+            splitHover &&
+            Math.hypot(hit.pt.x - splitHover.pt.x, hit.pt.y - splitHover.pt.y) > 1e-9)
+        ) {
+          let cut: Point2D[][] = [];
+          if (hit) {
+            // Preview the real split: its new cut edges join two new vertices.
+            const next = splitSheet(blocking, hit.edgeId, hit.pt);
+            if (next) {
+              const oldV = new Set(blocking.vertices.map((v) => v.id));
+              const vm = new Map(next.vertices.map((v) => [v.id, v.pt] as const));
+              cut = next.edges
+                .filter((ed) => !oldV.has(ed.v0) && !oldV.has(ed.v1))
+                .map((ed) => [vm.get(ed.v0)!, ...ed.path, vm.get(ed.v1)!]);
+            }
+          }
+          setSplitHover(hit ? { edgeId: hit.edgeId, pt: hit.pt, cut } : null);
+        }
+      } else if (splitHover) {
+        setSplitHover(null);
+      }
+      // Associate: the curve (stage 2) or block edge (stage 1) under the cursor;
+      // Select: the edge a click would pick for its params.
+      if (showBlocking && canvasMode === 'cad' && blocking) {
+        const curveStage = blockTool === 'assoc' && assocStage === 'curve';
+        const hc = curveStage ? pickCurve(raw, 10 / zoom) : null;
+        if (hc !== hoverCurveId) setHoverCurveId(hc);
+        const edgeStage =
+          (blockTool === 'assoc' && assocStage === 'edges') || blockTool === 'select';
+        const he =
+          edgeStage && !blockDrag.current
+            ? (pickEdge(blocking, raw, 8 / zoom)?.edgeId ?? null)
+            : null;
+        if (he !== hoverEdgeId) setHoverEdgeId(he);
+      }
+
+      // Structured block-vertex drag / hover (mesh stage).
+      if (showBlocking && blocking) {
+        if (blockDrag.current && onUpdateBlocking) {
+          const vid = blockDrag.current.vid;
+          const { pt, guides } = snapBlockVertex(raw, vid);
+          blockSnapGuides.current = guides;
+          onUpdateBlocking(applyVertexMove(blocking, vid, pt, cadState.entities));
+          return;
+        }
+        const vHit = 12 / zoom;
+        let hov: string | null = null;
+        let bd = blockTool === 'select' || blockTool === 'mergeV' ? vHit : 0;
+        for (const v of blocking.vertices) {
+          const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
+          if (d < bd) {
+            bd = d;
+            hov = v.id;
+          }
+        }
+        if (hov !== hoveredBlockVtx) setHoveredBlockVtx(hov);
+
+        let hb: number | null = null;
+        blocking.blocks.forEach((blk, bi) => {
+          const poly = blockPolygon(blocking, blk);
+          if (poly.length >= 3 && pointInPolygon(raw, poly)) hb = bi;
+        });
+        if (hb !== hoveredBlockIdx) setHoveredBlockIdx(hb);
+      }
+
+      const s = computeSnap(raw);
+      // Once the user has typed into the live dimension box, the mouse no
+      // longer drives the preview - the typed-value sync effect owns `snap`.
+      const dimIsManual = isDrawing && dimPrompt?.live && manualDim;
+      if (!dimIsManual) {
+        setSnap(s);
+      }
+
+      // Live-update the dimension box (Onshape/Fusion-style dynamic input)
+      // while a shape is being placed and the user hasn't started typing yet.
+      if (isDrawing && dimPrompt?.live && !manualDim && tempPts.length > 0) {
+        // The current segment's start: the last placed vertex (matters for
+        // polyline, which chains many segments through the same 'line' prompt;
+        // for line/rectangle/circle this is always tempPts[0] too).
+        const p0 = dimPrompt.basePt;
+        if (dimPrompt.type === 'line') {
+          const len = dist(p0, s.pt);
+          const angDeg = (Math.atan2(s.pt.y - p0.y, s.pt.x - p0.x) * 180) / Math.PI;
+          setInputVal1(len.toFixed(4));
+          setInputVal2(angDeg.toFixed(1));
           setDimPrompt((prev) =>
             prev && prev.live
-              ? { ...prev, val1: rx.toFixed(4), val2: ry.toFixed(4), worldPos: { x: wpX, y: wpY }, endPt: s.pt }
+              ? {
+                  ...prev,
+                  val1: len.toFixed(4),
+                  val2: angDeg.toFixed(1),
+                  worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 },
+                  endPt: s.pt,
+                }
+              : prev,
+          );
+        } else if (dimPrompt.type === 'rectangle') {
+          const w = Math.abs(s.pt.x - p0.x);
+          const h = Math.abs(s.pt.y - p0.y);
+          setInputVal1(w.toFixed(4));
+          setInputVal2(h.toFixed(4));
+          setDimPrompt((prev) =>
+            prev && prev.live
+              ? {
+                  ...prev,
+                  val1: w.toFixed(4),
+                  val2: h.toFixed(4),
+                  worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 },
+                  endPt: s.pt,
+                }
+              : prev,
+          );
+        } else if (dimPrompt.type === 'circle') {
+          const r = dist(p0, s.pt);
+          setInputVal1(r.toFixed(4));
+          setInputVal2((r * 2).toFixed(4));
+          setDimPrompt((prev) =>
+            prev && prev.live
+              ? {
+                  ...prev,
+                  val1: r.toFixed(4),
+                  val2: (r * 2).toFixed(4),
+                  worldPos: { x: p0.x + r * 0.707, y: p0.y + r * 0.707 },
+                  endPt: s.pt,
+                }
+              : prev,
+          );
+        } else if (dimPrompt.type === 'ellipse') {
+          if (tempPts.length === 1) {
+            const rx = dist(p0, s.pt);
+            const ry = rx * 0.5;
+            setInputVal1(rx.toFixed(4));
+            setInputVal2(ry.toFixed(4));
+            setDimPrompt((prev) =>
+              prev && prev.live
+                ? {
+                    ...prev,
+                    val1: rx.toFixed(4),
+                    val2: ry.toFixed(4),
+                    worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 },
+                    endPt: s.pt,
+                  }
+                : prev,
+            );
+          } else if (tempPts.length === 2 && tempPts[1]) {
+            const rx = dist(p0, tempPts[1]);
+            const rot = Math.atan2(tempPts[1].y - p0.y, tempPts[1].x - p0.x);
+            const ry = Math.abs(-(s.pt.x - p0.x) * Math.sin(rot) + (s.pt.y - p0.y) * Math.cos(rot));
+            setInputVal1(rx.toFixed(4));
+            setInputVal2(ry.toFixed(4));
+            const cosR = Math.cos(rot);
+            const sinR = Math.sin(rot);
+            const wpX = p0.x + rx * 0.707 * cosR - ry * 0.707 * sinR;
+            const wpY = p0.y + rx * 0.707 * sinR + ry * 0.707 * cosR;
+            setDimPrompt((prev) =>
+              prev && prev.live
+                ? {
+                    ...prev,
+                    val1: rx.toFixed(4),
+                    val2: ry.toFixed(4),
+                    worldPos: { x: wpX, y: wpY },
+                    endPt: s.pt,
+                  }
+                : prev,
+            );
+          }
+        } else if (dimPrompt.type === 'arc') {
+          // R was fixed the moment the start point was placed (tempPts[1]) -
+          // only the sweep angle tracks the mouse from here.
+          const r = dist(p0, tempPts[1] ?? s.pt);
+          const sa = Math.atan2((tempPts[1]?.y ?? s.pt.y) - p0.y, (tempPts[1]?.x ?? s.pt.x) - p0.x);
+          const ea = Math.atan2(s.pt.y - p0.y, s.pt.x - p0.x);
+          const sweepDeg = (((ea - sa) * 180) / Math.PI + 360) % 360;
+          setInputVal2(sweepDeg.toFixed(1));
+          setDimPrompt((prev) =>
+            prev && prev.live
+              ? {
+                  ...prev,
+                  val1: r.toFixed(4),
+                  val2: sweepDeg.toFixed(1),
+                  worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 },
+                  endPt: s.pt,
+                }
               : prev,
           );
         }
-      } else if (dimPrompt.type === 'arc') {
-        // R was fixed the moment the start point was placed (tempPts[1]) -
-        // only the sweep angle tracks the mouse from here.
-        const r = dist(p0, tempPts[1] ?? s.pt);
-        const sa = Math.atan2((tempPts[1]?.y ?? s.pt.y) - p0.y, (tempPts[1]?.x ?? s.pt.x) - p0.x);
-        const ea = Math.atan2(s.pt.y - p0.y, s.pt.x - p0.x);
-        const sweepDeg = ((ea - sa) * 180 / Math.PI + 360) % 360;
-        setInputVal2(sweepDeg.toFixed(1));
-        setDimPrompt((prev) =>
-          prev && prev.live
-            ? { ...prev, val1: r.toFixed(4), val2: sweepDeg.toFixed(1), worldPos: { x: (p0.x + s.pt.x) / 2, y: (p0.y + s.pt.y) / 2 }, endPt: s.pt }
-            : prev,
-        );
       }
-    }
 
-    const ang = tempPts.length > 0
-      ? ((Math.atan2(s.pt.y - tempPts[tempPts.length - 1].y, s.pt.x - tempPts[tempPts.length - 1].x) * 180) / Math.PI).toFixed(1)
-      : '-';
-    const L = tempPts.length > 0 ? dist(tempPts[tempPts.length - 1], s.pt).toFixed(3) : '-';
-    setHud({ length: L, angle: ang, x: s.pt.x.toFixed(4), y: s.pt.y.toFixed(4) });
+      const ang =
+        tempPts.length > 0
+          ? (
+              (Math.atan2(
+                s.pt.y - tempPts[tempPts.length - 1].y,
+                s.pt.x - tempPts[tempPts.length - 1].x,
+              ) *
+                180) /
+              Math.PI
+            ).toFixed(1)
+          : '-';
+      const L = tempPts.length > 0 ? dist(tempPts[tempPts.length - 1], s.pt).toFixed(3) : '-';
+      setHud({ length: L, angle: ang, x: s.pt.x.toFixed(4), y: s.pt.y.toFixed(4) });
 
-    // Step 2 Domain Handle Hover
-    if (!displayOnly && currentStep === 2 && flowType === 'external' && domainEntity?.autoDomain && !isDrawing) {
-      const c = geometryBBox.chord;
-      const h = geometryBBox.height;
-      const effH = Math.max(0.5 * c, h);
-      const lUp = upstreamChordFactor * c;
-      const lDown = downstreamChordFactor * c;
-      const lLat = lateralHeightFactor * effH;
+      // Step 2 Domain Handle Hover
+      if (
+        !displayOnly &&
+        currentStep === 2 &&
+        flowType === 'external' &&
+        domainEntity?.autoDomain &&
+        !isDrawing
+      ) {
+        const c = geometryBBox.chord;
+        const h = geometryBBox.height;
+        const effH = Math.max(0.5 * c, h);
+        const lUp = upstreamChordFactor * c;
+        const lDown = downstreamChordFactor * c;
+        const lLat = lateralHeightFactor * effH;
 
-      const handlePts: Record<'upstream' | 'downstream' | 'top' | 'bottom' | 'radial', Point2D> = {
-        upstream: { x: geometryBBox.minX - lUp, y: geometryBBox.centerY },
-        downstream: { x: geometryBBox.maxX + lDown, y: geometryBBox.centerY },
-        top: { x: geometryBBox.centerX, y: geometryBBox.centerY + lLat },
-        bottom: { x: geometryBBox.centerX, y: geometryBBox.centerY - lLat },
-        radial: { x: geometryBBox.centerX + Math.max(lUp, lDown, lLat), y: geometryBBox.centerY },
-      };
+        const handlePts: Record<'upstream' | 'downstream' | 'top' | 'bottom' | 'radial', Point2D> =
+          {
+            upstream: { x: geometryBBox.minX - lUp, y: geometryBBox.centerY },
+            downstream: { x: geometryBBox.maxX + lDown, y: geometryBBox.centerY },
+            top: { x: geometryBBox.centerX, y: geometryBBox.centerY + lLat },
+            bottom: { x: geometryBBox.centerX, y: geometryBBox.centerY - lLat },
+            radial: {
+              x: geometryBBox.centerX + Math.max(lUp, lDown, lLat),
+              y: geometryBBox.centerY,
+            },
+          };
 
-      // Skip hover detection while actively dragging
-      if (!draggingDomainHandle) {
-        // Check handle hover
-        const hitTolerance = 14 / zoom;
-        let foundHandle: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null = null;
-        if (domainShape === 'circle') {
-          if (dist(raw, handlePts.radial) < hitTolerance) foundHandle = 'radial';
-        } else {
-          if (dist(raw, handlePts.upstream) < hitTolerance) foundHandle = 'upstream';
-          else if (dist(raw, handlePts.downstream) < hitTolerance) foundHandle = 'downstream';
-          else if (dist(raw, handlePts.top) < hitTolerance) foundHandle = 'top';
-          else if (dist(raw, handlePts.bottom) < hitTolerance) foundHandle = 'bottom';
-        }
-        setHoveredDomainHandle(foundHandle);
-      }
-    } else {
-      if (hoveredDomainHandle) setHoveredDomainHandle(null);
-    }
-
-    // Trim hover preview
-    if (tool === 'trim') {
-      const target = getTrimTarget(raw, cadState.entities, zoom);
-      setHoveredTrim(target ? { p0: target.subSeg.p0, p1: target.subSeg.p1, polyline: target.subPolyline } : null);
-    } else if (hoveredTrim) {
-      setHoveredTrim(null);
-    }
-
-    // Hover: mark the single nearest entity vertex (Select tool) so you can see
-    // exactly which point a click / drag will grab.
-    if (tool === 'select' && !displayOnly && !isDrawing && !editDrag.current) {
-      const r = 11 / zoom;
-      let best: Point2D | null = null;
-      let bd = r;
-      for (const en of cadState.entities) {
-        if (en.layer === 'construction' && !showConstruction) continue;
-        for (const p of en.pts) {
-          const d = Math.hypot(p.x - raw.x, p.y - raw.y);
-          if (d < bd) { bd = d; best = p; }
-        }
-      }
-      const changed = (!best) !== (!hoveredVertex) || (best && hoveredVertex && (best.x !== hoveredVertex.x || best.y !== hoveredVertex.y));
-      if (changed) setHoveredVertex(best ? { x: best.x, y: best.y } : null);
-    } else if (hoveredVertex) {
-      setHoveredVertex(null);
-    }
-
-    // Pan (middle mouse or Alt+drag)
-    if (panning.current) {
-      const dx = e.clientX - panStart.current.x;
-      const dy = e.clientY - panStart.current.y;
-      pendingPanRef.current = { x: panOrigin.current.x + dx, y: panOrigin.current.y + dy };
-      if (!panRafRef.current) {
-        panRafRef.current = requestAnimationFrame(() => {
-          panRafRef.current = null;
-          if (pendingPanRef.current) {
-            setPan(pendingPanRef.current);
+        // Skip hover detection while actively dragging
+        if (!draggingDomainHandle) {
+          // Check handle hover
+          const hitTolerance = 14 / zoom;
+          let foundHandle: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial' | null = null;
+          if (domainShape === 'circle') {
+            if (dist(raw, handlePts.radial) < hitTolerance) foundHandle = 'radial';
+          } else {
+            if (dist(raw, handlePts.upstream) < hitTolerance) foundHandle = 'upstream';
+            else if (dist(raw, handlePts.downstream) < hitTolerance) foundHandle = 'downstream';
+            else if (dist(raw, handlePts.top) < hitTolerance) foundHandle = 'top';
+            else if (dist(raw, handlePts.bottom) < hitTolerance) foundHandle = 'bottom';
           }
-        });
-      }
-      return;
-    }
-
-    // Direct manipulation: vertex drag / move selection
-    if (editDrag.current) {
-      const d = editDrag.current;
-      const target = s.pt; // snapped world point
-      if (d.mode === 'vertex') {
-        dispatch({
-          type: 'REPLACE_ENTITIES',
-          entities: d.snapshot.map(en => {
-            const hits = d.targets.filter(t => t.id === en.id);
-            let out = en;
-            for (const t of hits) out = moveEntityVertex(out, t.idx, target);
-            return out;
-          }),
-        });
-        setCmdText(d.targets.length > 1 ? `Dragging ${d.targets.length} joined vertices` : 'Drag vertex - release to place.');
-      } else {
-        const dx = target.x - d.startWorld.x;
-        const dy = target.y - d.startWorld.y;
-        dispatch({
-          type: 'REPLACE_ENTITIES',
-          entities: d.snapshot.map(en => (en.selected ? translateEntity(en, dx, dy) : en)),
-        });
-        setCmdText(`Move Δ(${dx.toFixed(3)}, ${dy.toFixed(3)}) - release to drop.`);
-      }
-      return;
-    }
-
-    // Marquee update (select tool + LMB held)
-    if (dragSelecting.current && tool === 'select') {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const sx = dragStart.current.x - rect.left;
-      const sy = dragStart.current.y - rect.top;
-      const cx = e.clientX - rect.left;
-      const cy = e.clientY - rect.top;
-      setMarquee({ x: sx, y: sy, w: cx - sx, h: cy - sy });
-    }
-  }, [toWorld, computeSnap, tempPts, tool, cadState.entities, zoom, hoveredTrim, currentStep, flowType, isDrawing, geometryBBox, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, domainShape, draggingDomainHandle, setUpstreamChordFactor, setDownstreamChordFactor, setLateralHeightFactor, hoveredDomainHandle, showBlocking, blocking, onUpdateBlocking, hoveredBlockVtx, hoveredBlockIdx, dimPrompt, manualDim]);
-
-
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    userInteractedRef.current = true;
-    // Step 2: Domain Handle Drag start
-    if (!displayOnly && currentStep === 2 && hoveredDomainHandle) {
-      const hasDomain = cadState.entities.some(e => e.role === 'domain_boundary');
-      if (!hasDomain) {
-        const newDomain = createDomainEntity(
-          domainShape,
-          geometryBBox,
-          upstreamChordFactor,
-          downstreamChordFactor,
-          lateralHeightFactor
-        );
-        const otherEnts = cadState.entities.filter(e => e.role !== 'domain_boundary');
-        dispatch({ type: 'REPLACE_ENTITIES', entities: [...otherEnts, newDomain] });
-      }
-      draggingDomainHandleRef.current = hoveredDomainHandle;
-      setDraggingDomainHandle(hoveredDomainHandle);
-      e.preventDefault();
-      return;
-    }
-
-    // Middle mouse or Alt+LMB → pan
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
-      panning.current = true;
-      panStart.current = { x: e.clientX, y: e.clientY };
-      panOrigin.current = { ...pan };
-      e.preventDefault();
-      return;
-    }
-    // Structured block vertices are editable even in display-only (mesh) mode.
-    if (e.button === 0 && showBlocking && blocking && onUpdateBlocking) {
-      const raw = toWorld(e.clientX, e.clientY);
-      const vHit = 12 / zoom;
-      let best: string | null = null;
-      let bd = vHit;
-      for (const v of blocking.vertices) {
-        const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
-        if (d < bd) { bd = d; best = v.id; }
-      }
-      if (best) {
-        const bv = blocking.vertices.find((v) => v.id === best)!;
-        blockDrag.current = { vid: best, origin: { ...bv.pt }, recorded: false };
-        blockSnapGuides.current = [];
-        e.preventDefault();
-        return;
-      }
-    }
-
-    // Point picking for Plot Line probe (active in Results stage)
-    if (isPickingPlotPoints && onPickPlotPoint && e.button === 0) {
-      const raw = toWorld(e.clientX, e.clientY);
-      onPickPlotPoint([raw.x, raw.y]);
-      e.preventDefault();
-      return;
-    }
-
-    if (displayOnly) return;
-
-    if (e.button === 0 && tool === 'select') {
-      dragStart.current = { x: e.clientX, y: e.clientY };
-      const raw = toWorld(e.clientX, e.clientY);
-      const selected = cadState.entities.filter(en => en.selected && en.layer !== 'construction');
-      const vHit = 12 / zoom;
-
-      // 1. Grab a vertex of ANY entity (not just selected) → resize / reshape.
-      // Every other vertex on the same point moves with it, so joined segments
-      // stay joined. The nearest vertex to the click wins.
-      let grabbed: Point2D | null = null;
-      let grabbedDist = Infinity;
-      let grabbedId: string | null = null;
-      for (const en of cadState.entities) {
-        if (en.layer === 'construction' || en.type === 'circle' || en.type === 'ellipse') continue;
-        for (let i = 0; i < en.pts.length; i++) {
-          const d = Math.hypot(en.pts[i].x - raw.x, en.pts[i].y - raw.y);
-          if (d < vHit && d < grabbedDist) { grabbedDist = d; grabbed = en.pts[i]; grabbedId = en.id; }
+          setHoveredDomainHandle(foundHandle);
         }
+      } else {
+        if (hoveredDomainHandle) setHoveredDomainHandle(null);
       }
-      if (grabbed) {
-        const glue = Math.max(1e-4, 3 / zoom); // vertices within ~3px count as joined
-        const targets: { id: string; idx: number }[] = [];
+
+      // Trim hover preview
+      if (tool === 'trim') {
+        const target = getTrimTarget(raw, cadState.entities, zoom);
+        setHoveredTrim(
+          target
+            ? { p0: target.subSeg.p0, p1: target.subSeg.p1, polyline: target.subPolyline }
+            : null,
+        );
+      } else if (hoveredTrim) {
+        setHoveredTrim(null);
+      }
+
+      // Hover: mark the single nearest entity vertex (Select tool) so you can see
+      // exactly which point a click / drag will grab.
+      if (tool === 'select' && !displayOnly && !isDrawing && !editDrag.current) {
+        const r = 11 / zoom;
+        let best: Point2D | null = null;
+        let bd = r;
         for (const en of cadState.entities) {
-          if (en.layer === 'construction' || en.autoDomain) continue;
-          en.pts.forEach((p, i) => {
-            if (Math.hypot(p.x - grabbed!.x, p.y - grabbed!.y) <= glue) targets.push({ id: en.id, idx: i });
+          if (en.layer === 'construction' && !showConstruction) continue;
+          for (const p of en.pts) {
+            const d = Math.hypot(p.x - raw.x, p.y - raw.y);
+            if (d < bd) {
+              bd = d;
+              best = p;
+            }
+          }
+        }
+        const changed =
+          !best !== !hoveredVertex ||
+          (best && hoveredVertex && (best.x !== hoveredVertex.x || best.y !== hoveredVertex.y));
+        if (changed) setHoveredVertex(best ? { x: best.x, y: best.y } : null);
+      } else if (hoveredVertex) {
+        setHoveredVertex(null);
+      }
+
+      // Pan (middle mouse or Alt+drag)
+      if (panning.current) {
+        const dx = e.clientX - panStart.current.x;
+        const dy = e.clientY - panStart.current.y;
+        pendingPanRef.current = { x: panOrigin.current.x + dx, y: panOrigin.current.y + dy };
+        if (!panRafRef.current) {
+          panRafRef.current = requestAnimationFrame(() => {
+            panRafRef.current = null;
+            if (pendingPanRef.current) {
+              setPan(pendingPanRef.current);
+            }
           });
         }
-        if (grabbedId && !cadState.entities.find(en => en.id === grabbedId)?.selected) {
-          dispatch({ type: 'SELECT_ENTITY', id: grabbedId });
+        return;
+      }
+
+      // Direct manipulation: vertex drag / move selection
+      if (editDrag.current) {
+        const d = editDrag.current;
+        const target = s.pt; // snapped world point
+        if (d.mode === 'vertex') {
+          dispatch({
+            type: 'REPLACE_ENTITIES',
+            entities: d.snapshot.map((en) => {
+              const hits = d.targets.filter((t) => t.id === en.id);
+              let out = en;
+              for (const t of hits) out = moveEntityVertex(out, t.idx, target);
+              return out;
+            }),
+          });
+          setCmdText(
+            d.targets.length > 1
+              ? `Dragging ${d.targets.length} joined vertices`
+              : 'Drag vertex - release to place.',
+          );
+        } else {
+          const dx = target.x - d.startWorld.x;
+          const dy = target.y - d.startWorld.y;
+          dispatch({
+            type: 'REPLACE_ENTITIES',
+            entities: d.snapshot.map((en) => (en.selected ? translateEntity(en, dx, dy) : en)),
+          });
+          setCmdText(`Move Δ(${dx.toFixed(3)}, ${dy.toFixed(3)}) - release to drop.`);
         }
-        editDrag.current = {
-          mode: 'vertex', targets,
-          startWorld: raw, snapshot: cadState.entities.map(x => ({ ...x, pts: x.pts.map(p => ({ ...p })) })),
-        };
-        setEditDragActive(true);
+        return;
+      }
+
+      // Marquee update (select tool + LMB held)
+      if (dragSelecting.current && tool === 'select') {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const sx = dragStart.current.x - rect.left;
+        const sy = dragStart.current.y - rect.top;
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        setMarquee({ x: sx, y: sy, w: cx - sx, h: cy - sy });
+      }
+    },
+    [
+      toWorld,
+      computeSnap,
+      tempPts,
+      tool,
+      cadState.entities,
+      zoom,
+      hoveredTrim,
+      currentStep,
+      flowType,
+      isDrawing,
+      geometryBBox,
+      upstreamChordFactor,
+      downstreamChordFactor,
+      lateralHeightFactor,
+      domainShape,
+      draggingDomainHandle,
+      setUpstreamChordFactor,
+      setDownstreamChordFactor,
+      setLateralHeightFactor,
+      hoveredDomainHandle,
+      showBlocking,
+      blocking,
+      onUpdateBlocking,
+      hoveredBlockVtx,
+      hoveredBlockIdx,
+      dimPrompt,
+      manualDim,
+      canvasMode,
+      blockTool,
+      blockCursor,
+      splitHover,
+      snapBlockVertex,
+      assocStage,
+      pickCurve,
+      hoverCurveId,
+      hoverEdgeId,
+    ],
+  );
+
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      userInteractedRef.current = true;
+      // Step 2: Domain Handle Drag start
+      if (!displayOnly && currentStep === 2 && hoveredDomainHandle) {
+        const hasDomain = cadState.entities.some((e) => e.role === 'domain_boundary');
+        if (!hasDomain) {
+          const newDomain = createDomainEntity(
+            domainShape,
+            geometryBBox,
+            upstreamChordFactor,
+            downstreamChordFactor,
+            lateralHeightFactor,
+          );
+          const otherEnts = cadState.entities.filter((e) => e.role !== 'domain_boundary');
+          dispatch({ type: 'REPLACE_ENTITIES', entities: [...otherEnts, newDomain] });
+        }
+        draggingDomainHandleRef.current = hoveredDomainHandle;
+        setDraggingDomainHandle(hoveredDomainHandle);
         e.preventDefault();
         return;
       }
 
-      // 2. Press on the body of a selected entity → move the whole selection
-      if (selected.length > 0) {
-        const onId = findEntityAt(raw);
-        if (onId && selected.some(en => en.id === onId)) {
+      // Middle mouse or Alt+LMB → pan
+      if (e.button === 1 || (e.button === 0 && e.altKey)) {
+        panning.current = true;
+        panStart.current = { x: e.clientX, y: e.clientY };
+        panOrigin.current = { ...pan };
+        e.preventDefault();
+        return;
+      }
+      // Block editor tools (Blocks view). The geometry is never editable here.
+      if (
+        e.button === 0 &&
+        showBlocking &&
+        canvasMode === 'cad' &&
+        onUpdateBlocking &&
+        blockTool !== 'select'
+      ) {
+        const raw = toWorld(e.clientX, e.clientY);
+        if (blockTool === 'draw') {
+          addBlockCorner(snapBlockVertex(raw, '').pt);
+        } else if (blockTool === 'split') {
+          if (splitHover) splitAtHover();
+        } else if (blockTool === 'delete' && blocking) {
+          const id = blockAt(blocking, raw);
+          if (id) deleteBlockById(id);
+        } else if (blockTool === 'ogrid' && blocking) {
+          const id = blockAt(blocking, raw);
+          if (id) {
+            applyBlockOp(
+              ogridBlock(blocking, id, ogridScale, currentCellSize(blocking)),
+              'O-grid added.',
+            );
+          }
+        } else if (blockTool === 'mergeV' && blocking) {
+          let vid: string | null = null;
+          let bd = 12 / zoom;
+          for (const v of blocking.vertices) {
+            const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
+            if (d < bd) {
+              bd = d;
+              vid = v.id;
+            }
+          }
+          if (vid && !blockPick) {
+            setBlockPick(vid);
+          } else if (vid && blockPick) {
+            applyBlockOp(mergeVertices(blocking, blockPick, vid), 'Vertices merged.');
+            setBlockPick(null);
+          }
+        } else if (blockTool === 'mergeB' && blocking) {
+          const id = blockAt(blocking, raw);
+          if (id && !blockPick) {
+            setBlockPick(id);
+          } else if (id && blockPick) {
+            applyBlockOp(mergeBlocks(blocking, blockPick, id), 'Blocks merged.');
+            setBlockPick(null);
+          }
+        } else if (blockTool === 'assoc' && blocking) {
+          if (assocStage === 'edges') {
+            const hit = pickEdge(blocking, raw, 8 / zoom);
+            if (hit) {
+              const next = assocEdges.includes(hit.edgeId)
+                ? assocEdges.filter((x) => x !== hit.edgeId)
+                : [...assocEdges, hit.edgeId];
+              setAssocEdges(next);
+            }
+          } else {
+            const cid = pickCurve(raw, 10 / zoom);
+            if (cid) associateTo(cid);
+          }
+        }
+        e.preventDefault();
+        return;
+      }
+      // Structured block vertices are editable even in display-only (mesh) mode.
+      if (e.button === 0 && showBlocking && blocking && onUpdateBlocking) {
+        const raw = toWorld(e.clientX, e.clientY);
+        const vHit = 12 / zoom;
+        let best: string | null = null;
+        let bd = vHit;
+        for (const v of blocking.vertices) {
+          const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
+          if (d < bd) {
+            bd = d;
+            best = v.id;
+          }
+        }
+        if (best) {
+          const bv = blocking.vertices.find((v) => v.id === best)!;
+          blockDrag.current = { vid: best, origin: { ...bv.pt }, recorded: false };
+          blockSnapGuides.current = [];
+          e.preventDefault();
+          return;
+        }
+        // Clicking an edge selects it (edge params); inside a block selects the
+        // block (Delete key removes it).
+        if (canvasMode === 'cad') {
+          const hit = pickEdge(blocking, raw, 6 / zoom);
+          setSelectedEdgeId(hit?.edgeId ?? null);
+          setSelectedBlockId(hit ? null : blockAt(blocking, raw));
+        }
+      }
+
+      // Point picking for Plot Line probe (active in Results stage)
+      if (isPickingPlotPoints && onPickPlotPoint && e.button === 0) {
+        const raw = toWorld(e.clientX, e.clientY);
+        onPickPlotPoint([raw.x, raw.y]);
+        e.preventDefault();
+        return;
+      }
+
+      if (displayOnly) return;
+
+      if (e.button === 0 && tool === 'select') {
+        dragStart.current = { x: e.clientX, y: e.clientY };
+        const raw = toWorld(e.clientX, e.clientY);
+        const selected = cadState.entities.filter(
+          (en) => en.selected && en.layer !== 'construction',
+        );
+        const vHit = 12 / zoom;
+
+        // 1. Grab a vertex of ANY entity (not just selected) → resize / reshape.
+        // Every other vertex on the same point moves with it, so joined segments
+        // stay joined. The nearest vertex to the click wins.
+        let grabbed: Point2D | null = null;
+        let grabbedDist = Infinity;
+        let grabbedId: string | null = null;
+        for (const en of cadState.entities) {
+          if (en.layer === 'construction' || en.type === 'circle' || en.type === 'ellipse')
+            continue;
+          for (let i = 0; i < en.pts.length; i++) {
+            const d = Math.hypot(en.pts[i].x - raw.x, en.pts[i].y - raw.y);
+            if (d < vHit && d < grabbedDist) {
+              grabbedDist = d;
+              grabbed = en.pts[i];
+              grabbedId = en.id;
+            }
+          }
+        }
+        if (grabbed) {
+          const glue = Math.max(1e-4, 3 / zoom); // vertices within ~3px count as joined
+          const targets: { id: string; idx: number }[] = [];
+          for (const en of cadState.entities) {
+            if (en.layer === 'construction' || en.autoDomain) continue;
+            en.pts.forEach((p, i) => {
+              if (Math.hypot(p.x - grabbed!.x, p.y - grabbed!.y) <= glue)
+                targets.push({ id: en.id, idx: i });
+            });
+          }
+          if (grabbedId && !cadState.entities.find((en) => en.id === grabbedId)?.selected) {
+            dispatch({ type: 'SELECT_ENTITY', id: grabbedId });
+          }
           editDrag.current = {
-            mode: 'move', startWorld: raw,
-            snapshot: cadState.entities.map(x => ({ ...x, pts: x.pts.map(p => ({ ...p })) })),
+            mode: 'vertex',
+            targets,
+            startWorld: raw,
+            snapshot: cadState.entities.map((x) => ({ ...x, pts: x.pts.map((p) => ({ ...p })) })),
           };
           setEditDragActive(true);
           e.preventDefault();
           return;
         }
-      }
 
-      // 3. Otherwise → marquee select
-      dragSelecting.current = true;
-      setMarquee(null);
-    }
-  }, [pan, tool, currentStep, hoveredDomainHandle, displayOnly, toWorld, cadState.entities, zoom, findEntityAt, showBlocking, blocking, onUpdateBlocking, isPickingPlotPoints, onPickPlotPoint]);
+        // 2. Press on the body of a selected entity → move the whole selection
+        if (selected.length > 0) {
+          const onId = findEntityAt(raw);
+          if (onId && selected.some((en) => en.id === onId)) {
+            editDrag.current = {
+              mode: 'move',
+              startWorld: raw,
+              snapshot: cadState.entities.map((x) => ({ ...x, pts: x.pts.map((p) => ({ ...p })) })),
+            };
+            setEditDragActive(true);
+            e.preventDefault();
+            return;
+          }
+        }
 
-  const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    panning.current = false;
-    if (panRafRef.current) {
-      cancelAnimationFrame(panRafRef.current);
-      panRafRef.current = null;
-    }
-    if (pendingPanRef.current) {
-      setPan(pendingPanRef.current);
-      pendingPanRef.current = null;
-    }
-
-    if (blockDrag.current) {
-      const moved = Boolean(blockDrag.current.recorded);
-      blockDrag.current = null;
-      blockSnapGuides.current = [];
-      if (moved && blocking && onUpdateBlocking) {
-        onUpdateBlocking(cleanBlocking(propagateNodeCounts(blocking)));
-      }
-      setCmdText('Block corner moved.');
-      return;
-    }
-
-    // Finish a vertex drag / move (the entities are already updated live).
-    if (editDrag.current) {
-      const wasMove = editDrag.current.mode === 'move';
-      editDrag.current = null;
-      setEditDragActive(false);
-      setCmdText(wasMove ? 'Moved.' : 'Vertex placed.');
-      return;
-    }
-
-    // Domain handle drag is managed by document-level listeners (draggingDomainHandleRef)
-    // so we only need to handle AoA here
-
-    if (draggingAoAHandle) {
-      setDraggingAoAHandle(false);
-      return;
-    }
-
-    // Finish marquee selection
-    if (dragSelecting.current && tool === 'select') {
-      dragSelecting.current = false;
-      if (!marquee) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const o = { x: canvas.clientWidth / 2 + pan.x, y: canvas.clientHeight / 2 + pan.y };
-
-      const toW = (sx: number, sy: number): Point2D => ({
-        x: (sx - o.x) / zoom,
-        y: -(sy - o.y) / zoom,
-      });
-
-      const crossing = marquee.w < 0;
-      const mx = marquee.w >= 0 ? marquee.x : marquee.x + marquee.w;
-      const my = marquee.h >= 0 ? marquee.y : marquee.y + marquee.h;
-      const mw = Math.abs(marquee.w);
-      const mh = Math.abs(marquee.h);
-
-      // Ignore tiny accidental drags (< 4px)
-      if (mw < 4 && mh < 4) {
+        // 3. Otherwise → marquee select
+        dragSelecting.current = true;
         setMarquee(null);
+      }
+    },
+    [
+      pan,
+      tool,
+      currentStep,
+      hoveredDomainHandle,
+      displayOnly,
+      toWorld,
+      cadState.entities,
+      zoom,
+      findEntityAt,
+      showBlocking,
+      blocking,
+      onUpdateBlocking,
+      isPickingPlotPoints,
+      onPickPlotPoint,
+      canvasMode,
+      blockTool,
+      addBlockCorner,
+      snapBlockVertex,
+      splitHover,
+      splitAtHover,
+      deleteBlockById,
+      applyBlockOp,
+      ogridScale,
+      blockPick,
+      assocStage,
+      assocEdges,
+      pickCurve,
+      associateTo,
+    ],
+  );
+
+  const handleMouseUp = useCallback(
+    (e: React.MouseEvent) => {
+      panning.current = false;
+      if (panRafRef.current) {
+        cancelAnimationFrame(panRafRef.current);
+        panRafRef.current = null;
+      }
+      if (pendingPanRef.current) {
+        setPan(pendingPanRef.current);
+        pendingPanRef.current = null;
+      }
+
+      if (blockDrag.current) {
+        const moved = Boolean(blockDrag.current.recorded);
+        blockDrag.current = null;
+        blockSnapGuides.current = [];
+        if (moved && blocking && onUpdateBlocking) {
+          onUpdateBlocking(cleanBlocking(propagateNodeCounts(blocking)));
+        }
+        setCmdText('Block corner moved.');
         return;
       }
 
-      const worldMin = toW(mx, my + mh);
-      const worldMax = toW(mx + mw, my);
+      // Finish a vertex drag / move (the entities are already updated live).
+      if (editDrag.current) {
+        const wasMove = editDrag.current.mode === 'move';
+        editDrag.current = null;
+        setEditDragActive(false);
+        setCmdText(wasMove ? 'Moved.' : 'Vertex placed.');
+        return;
+      }
 
-      const updated = cadState.entities.map(ent => {
-        if (crossing) {
-          // Crossing (right-to-left): select if ANY point is inside box
-          const touches = ent.pts.some(p =>
-            p.x >= worldMin.x && p.x <= worldMax.x && p.y >= worldMin.y && p.y <= worldMax.y
-          );
-          return { ...ent, selected: e.shiftKey ? (ent.selected || touches) : touches };
-        } else {
-          // Window (left-to-right): select only if ALL points are inside box
-          const inside = ent.pts.every(p =>
-            p.x >= worldMin.x && p.x <= worldMax.x && p.y >= worldMin.y && p.y <= worldMax.y
-          );
-          return { ...ent, selected: e.shiftKey ? (ent.selected || inside) : inside };
+      // Domain handle drag is managed by document-level listeners (draggingDomainHandleRef)
+      // so we only need to handle AoA here
+
+      if (draggingAoAHandle) {
+        setDraggingAoAHandle(false);
+        return;
+      }
+
+      // Finish marquee selection
+      if (dragSelecting.current && tool === 'select') {
+        dragSelecting.current = false;
+        if (!marquee) return;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const o = { x: canvas.clientWidth / 2 + pan.x, y: canvas.clientHeight / 2 + pan.y };
+
+        const toW = (sx: number, sy: number): Point2D => ({
+          x: (sx - o.x) / zoom,
+          y: -(sy - o.y) / zoom,
+        });
+
+        const crossing = marquee.w < 0;
+        const mx = marquee.w >= 0 ? marquee.x : marquee.x + marquee.w;
+        const my = marquee.h >= 0 ? marquee.y : marquee.y + marquee.h;
+        const mw = Math.abs(marquee.w);
+        const mh = Math.abs(marquee.h);
+
+        // Ignore tiny accidental drags (< 4px)
+        if (mw < 4 && mh < 4) {
+          setMarquee(null);
+          return;
         }
-      });
 
-      dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
-      const selCount = updated.filter(e => e.selected).length;
-      setCmdText(`Selected ${selCount} entit${selCount === 1 ? 'y' : 'ies'}.${crossing ? ' (crossing)' : ' (window)'}`);
-      setMarquee(null);
-    }
-  }, [tool, marquee, cadState.entities, pan, zoom, blocking, onUpdateBlocking]);
+        const worldMin = toW(mx, my + mh);
+        const worldMax = toW(mx + mw, my);
 
+        const updated = cadState.entities.map((ent) => {
+          if (crossing) {
+            // Crossing (right-to-left): select if ANY point is inside box
+            const touches = ent.pts.some(
+              (p) =>
+                p.x >= worldMin.x && p.x <= worldMax.x && p.y >= worldMin.y && p.y <= worldMax.y,
+            );
+            return { ...ent, selected: e.shiftKey ? ent.selected || touches : touches };
+          } else {
+            // Window (left-to-right): select only if ALL points are inside box
+            const inside = ent.pts.every(
+              (p) =>
+                p.x >= worldMin.x && p.x <= worldMax.x && p.y >= worldMin.y && p.y <= worldMax.y,
+            );
+            return { ...ent, selected: e.shiftKey ? ent.selected || inside : inside };
+          }
+        });
 
+        dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
+        const selCount = updated.filter((e) => e.selected).length;
+        setCmdText(
+          `Selected ${selCount} entit${selCount === 1 ? 'y' : 'ies'}.${crossing ? ' (crossing)' : ' (window)'}`,
+        );
+        setMarquee(null);
+      }
+    },
+    [tool, marquee, cadState.entities, pan, zoom, blocking, onUpdateBlocking],
+  );
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    userInteractedRef.current = true;
-    e.preventDefault();
-    const factor = e.deltaY < 0 ? 1.15 : 0.87;
-    const c = canvasRef.current;
-    if (c) {
-      const rect = c.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const originX = c.clientWidth / 2 + pan.x;
-      const originY = c.clientHeight / 2 + pan.y;
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      userInteractedRef.current = true;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.15 : 0.87;
+      const c = canvasRef.current;
+      if (c) {
+        const rect = c.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const originX = c.clientWidth / 2 + pan.x;
+        const originY = c.clientHeight / 2 + pan.y;
 
-      const newZoom = Math.max(0.5, Math.min(25000, zoom * factor));
-      const zoomRatio = newZoom / zoom;
+        const newZoom = Math.max(0.5, Math.min(25000, zoom * factor));
+        const zoomRatio = newZoom / zoom;
 
-      // Pin mouse pointer in world coordinates during zoom
-      const newPanX = mouseX - c.clientWidth / 2 - (mouseX - originX) * zoomRatio;
-      const newPanY = mouseY - c.clientHeight / 2 - (mouseY - originY) * zoomRatio;
+        // Pin mouse pointer in world coordinates during zoom
+        const newPanX = mouseX - c.clientWidth / 2 - (mouseX - originX) * zoomRatio;
+        const newPanY = mouseY - c.clientHeight / 2 - (mouseY - originY) * zoomRatio;
 
-      setZoom(newZoom);
-      setPan({ x: newPanX, y: newPanY });
-    } else {
-      setZoom(z => Math.max(0.5, Math.min(25000, z * factor)));
-    }
-  }, [pan, zoom]);
+        setZoom(newZoom);
+        setPan({ x: newPanX, y: newPanY });
+      } else {
+        setZoom((z) => Math.max(0.5, Math.min(25000, z * factor)));
+      }
+    },
+    [pan, zoom],
+  );
 
   /** Find entity closest to raw world point */
   const openDimPromptForEntity = useCallback((ent: CadEntity) => {
     if (ent.type === 'line' && ent.pts.length === 2) {
-      const p0 = ent.pts[0], p1 = ent.pts[1];
+      const p0 = ent.pts[0],
+        p1 = ent.pts[1];
       const len = dist(p0, p1);
       const ang = (Math.atan2(p1.y - p0.y, p1.x - p0.x) * 180) / Math.PI;
       setDimPrompt({
@@ -3607,12 +3945,13 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     } else if (ent.type === 'ellipse' && ent.pts.length >= 1) {
       const c = ent.pts[0];
       const rx = ent.rx ?? (ent.pts[1] ? dist(c, ent.pts[1]) : 1);
-      const ry = ent.ry ?? (rx * 0.5);
-      const rot = ent.rotation ?? (ent.pts[1] ? Math.atan2(ent.pts[1].y - c.y, ent.pts[1].x - c.x) : 0);
+      const ry = ent.ry ?? rx * 0.5;
+      const rot =
+        ent.rotation ?? (ent.pts[1] ? Math.atan2(ent.pts[1].y - c.y, ent.pts[1].x - c.x) : 0);
       const cosR = Math.cos(rot);
       const sinR = Math.sin(rot);
-      const wpX = c.x + (rx * 0.707) * cosR - (ry * 0.707) * sinR;
-      const wpY = c.y + (rx * 0.707) * sinR + (ry * 0.707) * cosR;
+      const wpX = c.x + rx * 0.707 * cosR - ry * 0.707 * sinR;
+      const wpY = c.y + rx * 0.707 * sinR + ry * 0.707 * cosR;
       setDimPrompt({
         entityId: ent.id,
         type: 'ellipse',
@@ -3628,7 +3967,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setInputVal1(rx.toFixed(4));
       setInputVal2(ry.toFixed(4));
     } else if (ent.type === 'rectangle' && ent.pts.length >= 3) {
-      const p0 = ent.pts[0], p2 = ent.pts[2];
+      const p0 = ent.pts[0],
+        p2 = ent.pts[2];
       const w = Math.abs(p2.x - p0.x);
       const h = Math.abs(p2.y - p0.y);
       setDimPrompt({
@@ -3650,7 +3990,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       const r = dist(c, s);
       const sa = ent.startAngle ?? Math.atan2(s.y - c.y, s.x - c.x);
       const ea = ent.endAngle ?? Math.atan2(e.y - c.y, e.x - c.x);
-      const sweepDeg = ((ea - sa) * 180 / Math.PI + 360) % 360;
+      const sweepDeg = (((ea - sa) * 180) / Math.PI + 360) % 360;
       setDimPrompt({
         entityId: ent.id,
         type: 'arc',
@@ -3668,126 +4008,142 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     }
   }, []);
 
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
-    if (displayOnly) return;
-    // Only the select tool reacts to double-click. While a draw/modify tool is
-    // active, the two quick clicks that place a rectangle/arc corner must not
-    // also be read as a double-click (which used to recenter the view / open a
-    // dimension prompt and make it look like the tool "did nothing").
-    if (tool !== 'select') return;
-    const rawPt = toWorld(e.clientX, e.clientY);
-    const clickedId = findEntityAt(rawPt);
-    if (clickedId) {
-      const ent = cadState.entities.find(el => el.id === clickedId);
-      if (ent) {
-        dispatch({ type: 'SELECT_ENTITY', id: clickedId });
-        openDimPromptForEntity(ent);
-        setTool('select');
-        setCmdText('Edit dimensions with Tab+Enter, or Esc to close.');
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (displayOnly) return;
+      // Only the select tool reacts to double-click. While a draw/modify tool is
+      // active, the two quick clicks that place a rectangle/arc corner must not
+      // also be read as a double-click (which used to recenter the view / open a
+      // dimension prompt and make it look like the tool "did nothing").
+      if (tool !== 'select') return;
+      const rawPt = toWorld(e.clientX, e.clientY);
+      const clickedId = findEntityAt(rawPt);
+      if (clickedId) {
+        const ent = cadState.entities.find((el) => el.id === clickedId);
+        if (ent) {
+          dispatch({ type: 'SELECT_ENTITY', id: clickedId });
+          openDimPromptForEntity(ent);
+          setTool('select');
+          setCmdText('Edit dimensions with Tab+Enter, or Esc to close.');
+          return;
+        }
+      }
+      // Double click on empty space -> center to origin
+      setPan({ x: 0, y: 0 });
+      setZoom(INITIAL_ZOOM);
+      setCmdText('View centered to origin (0, 0).');
+    },
+    [tool, toWorld, findEntityAt, cadState.entities, openDimPromptForEntity],
+  );
+
+  const commitDimension = useCallback(
+    (prompt: DynamicDimPrompt, val1Str: string, val2Str?: string) => {
+      const v1 = parseFloat(val1Str);
+      const v2 = val2Str !== undefined ? parseFloat(val2Str) : NaN;
+      if (isNaN(v1) || v1 <= 0) {
+        setDimPrompt(null);
         return;
       }
-    }
-    // Double click on empty space -> center to origin
-    setPan({ x: 0, y: 0 });
-    setZoom(INITIAL_ZOOM);
-    setCmdText('View centered to origin (0, 0).');
-  }, [tool, toWorld, findEntityAt, cadState.entities, openDimPromptForEntity]);
 
+      const { entityId, type, basePt, endPt } = prompt;
 
+      if (type === 'line' && endPt) {
+        const currentAng = Math.atan2(endPt.y - basePt.y, endPt.x - basePt.x);
+        const rad = !isNaN(v2) ? (v2 * Math.PI) / 180 : currentAng;
+        const newEnd: Point2D = {
+          x: +(basePt.x + v1 * Math.cos(rad)).toFixed(5),
+          y: +(basePt.y + v1 * Math.sin(rad)).toFixed(5),
+        };
+        dispatch({
+          type: 'REPLACE_ENTITIES',
+          entities: cadState.entities.map((e) =>
+            e.id === entityId ? { ...e, pts: [basePt, newEnd] } : e,
+          ),
+        });
+        // Shift start point of next chained line to the updated endpoint
+        setTempPts((prev) => {
+          if (prev.length > 0 && dist(prev[prev.length - 1], endPt) < 1e-3) {
+            return [newEnd];
+          }
+          return prev;
+        });
+        setCmdText(
+          `Line dimensioned: L=${v1}m, ∠=${(!isNaN(v2) ? v2 : (currentAng * 180) / Math.PI).toFixed(1)}°`,
+        );
+      } else if (type === 'rectangle' && endPt) {
+        const w = v1 * Math.sign(endPt.x - basePt.x || 1);
+        const h =
+          (!isNaN(v2) && v2 > 0 ? v2 : Math.abs(endPt.y - basePt.y)) *
+          Math.sign(endPt.y - basePt.y || 1);
+        const p0 = basePt;
+        const p1 = { x: +(p0.x + w).toFixed(5), y: p0.y };
+        const p2 = { x: +(p0.x + w).toFixed(5), y: +(p0.y + h).toFixed(5) };
+        const p3 = { x: p0.x, y: +(p0.y + h).toFixed(5) };
+        dispatch({
+          type: 'REPLACE_ENTITIES',
+          entities: cadState.entities.map((e) =>
+            e.id === entityId ? { ...e, pts: [p0, p1, p2, p3] } : e,
+          ),
+        });
+        setCmdText(`Rectangle dimensioned: W=${Math.abs(w)}m, H=${Math.abs(h)}m`);
+      } else if (type === 'circle') {
+        const r = v1;
+        dispatch({
+          type: 'REPLACE_ENTITIES',
+          entities: cadState.entities.map((e) =>
+            e.id === entityId
+              ? { ...e, radius: r, pts: [basePt, { x: basePt.x + r, y: basePt.y }] }
+              : e,
+          ),
+        });
+        setCmdText(`Circle dimensioned: R=${r}m (Ø=${(r * 2).toFixed(3)}m)`);
+      } else if (type === 'ellipse') {
+        const rx = v1;
+        const ry = !isNaN(v2) && v2 > 0 ? v2 : rx * 0.5;
+        dispatch({
+          type: 'REPLACE_ENTITIES',
+          entities: cadState.entities.map((e) => {
+            if (e.id !== entityId) return e;
+            const rot = e.rotation || 0;
+            const p1 = {
+              x: +(basePt.x + rx * Math.cos(rot)).toFixed(5),
+              y: +(basePt.y + rx * Math.sin(rot)).toFixed(5),
+            };
+            return {
+              ...e,
+              rx,
+              ry,
+              pts: [basePt, p1],
+            };
+          }),
+        });
+        setCmdText(`Ellipse dimensioned: Rx=${rx}m, Ry=${ry}m`);
+      } else if (type === 'arc' && endPt) {
+        const r = v1;
+        const sa = Math.atan2(endPt.y - basePt.y, endPt.x - basePt.x);
+        const sweepRad = !isNaN(v2) ? (v2 * Math.PI) / 180 : Math.PI / 2;
+        const ea = sa + sweepRad;
+        const p1 = {
+          x: +(basePt.x + r * Math.cos(sa)).toFixed(5),
+          y: +(basePt.y + r * Math.sin(sa)).toFixed(5),
+        };
+        const p2 = {
+          x: +(basePt.x + r * Math.cos(ea)).toFixed(5),
+          y: +(basePt.y + r * Math.sin(ea)).toFixed(5),
+        };
+        dispatch({
+          type: 'REPLACE_ENTITIES',
+          entities: cadState.entities.map((e) =>
+            e.id === entityId ? { ...e, pts: [basePt, p1, p2], startAngle: sa, endAngle: ea } : e,
+          ),
+        });
+        setCmdText(`Arc dimensioned: R=${r}m, ∠=${(!isNaN(v2) ? v2 : 90).toFixed(1)}°`);
+      }
 
-  const commitDimension = useCallback((prompt: DynamicDimPrompt, val1Str: string, val2Str?: string) => {
-    const v1 = parseFloat(val1Str);
-    const v2 = val2Str !== undefined ? parseFloat(val2Str) : NaN;
-    if (isNaN(v1) || v1 <= 0) {
       setDimPrompt(null);
-      return;
-    }
-
-    const { entityId, type, basePt, endPt } = prompt;
-
-    if (type === 'line' && endPt) {
-      const currentAng = Math.atan2(endPt.y - basePt.y, endPt.x - basePt.x);
-      const rad = !isNaN(v2) ? (v2 * Math.PI) / 180 : currentAng;
-      const newEnd: Point2D = {
-        x: +(basePt.x + v1 * Math.cos(rad)).toFixed(5),
-        y: +(basePt.y + v1 * Math.sin(rad)).toFixed(5),
-      };
-      dispatch({
-        type: 'REPLACE_ENTITIES',
-        entities: cadState.entities.map(e =>
-          e.id === entityId ? { ...e, pts: [basePt, newEnd] } : e
-        ),
-      });
-      // Shift start point of next chained line to the updated endpoint
-      setTempPts(prev => {
-        if (prev.length > 0 && dist(prev[prev.length - 1], endPt) < 1e-3) {
-          return [newEnd];
-        }
-        return prev;
-      });
-      setCmdText(`Line dimensioned: L=${v1}m, ∠=${(!isNaN(v2) ? v2 : (currentAng * 180 / Math.PI)).toFixed(1)}°`);
-    } else if (type === 'rectangle' && endPt) {
-      const w = v1 * Math.sign(endPt.x - basePt.x || 1);
-      const h = (!isNaN(v2) && v2 > 0 ? v2 : Math.abs(endPt.y - basePt.y)) * Math.sign(endPt.y - basePt.y || 1);
-      const p0 = basePt;
-      const p1 = { x: +(p0.x + w).toFixed(5), y: p0.y };
-      const p2 = { x: +(p0.x + w).toFixed(5), y: +(p0.y + h).toFixed(5) };
-      const p3 = { x: p0.x, y: +(p0.y + h).toFixed(5) };
-      dispatch({
-        type: 'REPLACE_ENTITIES',
-        entities: cadState.entities.map(e =>
-          e.id === entityId ? { ...e, pts: [p0, p1, p2, p3] } : e
-        ),
-      });
-      setCmdText(`Rectangle dimensioned: W=${Math.abs(w)}m, H=${Math.abs(h)}m`);
-    } else if (type === 'circle') {
-      const r = v1;
-      dispatch({
-        type: 'REPLACE_ENTITIES',
-        entities: cadState.entities.map(e =>
-          e.id === entityId ? { ...e, radius: r, pts: [basePt, { x: basePt.x + r, y: basePt.y }] } : e
-        ),
-      });
-      setCmdText(`Circle dimensioned: R=${r}m (Ø=${(r * 2).toFixed(3)}m)`);
-    } else if (type === 'ellipse') {
-      const rx = v1;
-      const ry = !isNaN(v2) && v2 > 0 ? v2 : (rx * 0.5);
-      dispatch({
-        type: 'REPLACE_ENTITIES',
-        entities: cadState.entities.map(e => {
-          if (e.id !== entityId) return e;
-          const rot = e.rotation || 0;
-          const p1 = {
-            x: +(basePt.x + rx * Math.cos(rot)).toFixed(5),
-            y: +(basePt.y + rx * Math.sin(rot)).toFixed(5),
-          };
-          return {
-            ...e,
-            rx,
-            ry,
-            pts: [basePt, p1],
-          };
-        }),
-      });
-      setCmdText(`Ellipse dimensioned: Rx=${rx}m, Ry=${ry}m`);
-    } else if (type === 'arc' && endPt) {
-      const r = v1;
-      const sa = Math.atan2(endPt.y - basePt.y, endPt.x - basePt.x);
-      const sweepRad = !isNaN(v2) ? (v2 * Math.PI) / 180 : Math.PI / 2;
-      const ea = sa + sweepRad;
-      const p1 = { x: +(basePt.x + r * Math.cos(sa)).toFixed(5), y: +(basePt.y + r * Math.sin(sa)).toFixed(5) };
-      const p2 = { x: +(basePt.x + r * Math.cos(ea)).toFixed(5), y: +(basePt.y + r * Math.sin(ea)).toFixed(5) };
-      dispatch({
-        type: 'REPLACE_ENTITIES',
-        entities: cadState.entities.map(e =>
-          e.id === entityId ? { ...e, pts: [basePt, p1, p2], startAngle: sa, endAngle: ea } : e
-        ),
-      });
-      setCmdText(`Arc dimensioned: R=${r}m, ∠=${(!isNaN(v2) ? v2 : 90).toFixed(1)}°`);
-    }
-
-    setDimPrompt(null);
-  }, [cadState.entities]);
+    },
+    [cadState.entities],
+  );
 
   // Autofocus the first dimension field whenever a dimension prompt opens
   useEffect(() => {
@@ -3829,9 +4185,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         pt = { x: p0.x + v1 * Math.cos(ang), y: p0.y + v1 * Math.sin(ang) };
       } else if (tempPts.length === 2 && !isNaN(v2) && tempPts[1]) {
         const rot = Math.atan2(tempPts[1].y - p0.y, tempPts[1].x - p0.x);
-        const side = Math.sign(-(dir.x - p0.x) * Math.sin(rot) + (dir.y - p0.y) * Math.cos(rot)) || 1;
+        const side =
+          Math.sign(-(dir.x - p0.x) * Math.sin(rot) + (dir.y - p0.y) * Math.cos(rot)) || 1;
         pt = {
-          x: p0.x + side * v2 * (-Math.sin(rot)),
+          x: p0.x + side * v2 * -Math.sin(rot),
           y: p0.y + side * v2 * Math.cos(rot),
         };
       }
@@ -3877,83 +4234,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     }
   };
 
-  const commitPoint = useCallback((pt: Point2D) => {
-    const layer = constructionMode ? 'construction' : 'default';
+  const commitPoint = useCallback(
+    (pt: Point2D) => {
+      const layer = constructionMode ? 'construction' : 'default';
 
-    if (tool === 'line') {
-      if (!isDrawing) {
-        setTempPts([pt]);
-        setIsDrawing(true);
-        setManualDim(false);
-        setDimPrompt({
-          entityId: uid(),
-          type: 'line',
-          live: true,
-          worldPos: pt,
-          val1: '0.0000',
-          val2: '0.0',
-          label1: 'L',
-          label2: '∠',
-          basePt: pt,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1('0.0000');
-        setInputVal2('0.0');
-        setCmdText('LINE: Type Length, press Tab for Angle, Enter to commit - or click second point.');
-      } else {
-        const newId = uid();
-        const p0 = tempPts[0];
-        dispatch({ type: 'ADD_ENTITY', entity: { id: newId, type: 'line', layer, pts: [p0, pt] } });
-        const len = dist(p0, pt);
-        const ang = (Math.atan2(pt.y - p0.y, pt.x - p0.x) * 180) / Math.PI;
-        setDimPrompt({
-          entityId: newId,
-          type: 'line',
-          worldPos: { x: (p0.x + pt.x) / 2, y: (p0.y + pt.y) / 2 },
-          val1: len.toFixed(4),
-          val2: ang.toFixed(1),
-          label1: 'L',
-          label2: '∠',
-          basePt: p0,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1(len.toFixed(4));
-        setInputVal2(ang.toFixed(1));
-        setManualDim(false);
-        setTempPts([pt]); // chain: start next line from here
-        setCmdText('LINE: Type Length, press Tab for Angle, Enter to commit.');
-      }
-    } else if (tool === 'polyline') {
-      if (!isDrawing) {
-        setTempPts([pt]);
-        setIsDrawing(true);
-        setManualDim(false);
-        setDimPrompt({
-          entityId: uid(),
-          type: 'line',
-          live: true,
-          worldPos: pt,
-          val1: '0.0000',
-          val2: '0.0',
-          label1: 'L',
-          label2: '∠',
-          basePt: pt,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1('0.0000');
-        setInputVal2('0.0');
-        setCmdText('POLYLINE: Type Length, press Tab for Angle, Enter for next vertex - or click.');
-      } else {
-        const s = tempPts[0];
-        if (tempPts.length >= 2 && dist(pt, s) < 12 / zoom) {
-          dispatch({ type: 'ADD_ENTITY', entity: { id: uid(), type: 'polyline', layer, pts: tempPts, isClosed: true } });
-          setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false);
-          setCmdText('POLYLINE: Closed. Pick first point for next polyline.');
-        } else {
-          setTempPts(prev => [...prev, pt]);
+      if (tool === 'line') {
+        if (!isDrawing) {
+          setTempPts([pt]);
+          setIsDrawing(true);
           setManualDim(false);
           setDimPrompt({
             entityId: uid(),
@@ -3970,412 +4258,671 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           });
           setInputVal1('0.0000');
           setInputVal2('0.0');
-          setCmdText('POLYLINE: Type Length, press Tab for Angle, Enter for next vertex - or click near start to close.');
-        }
-      }
-    } else if (tool === 'rectangle') {
-      if (!isDrawing) {
-        setTempPts([pt]);
-        setIsDrawing(true);
-        setManualDim(false);
-        setDimPrompt({
-          entityId: uid(),
-          type: 'rectangle',
-          live: true,
-          worldPos: pt,
-          val1: '0.0000',
-          val2: '0.0000',
-          label1: 'W',
-          label2: 'H',
-          basePt: pt,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1('0.0000');
-        setInputVal2('0.0000');
-        setCmdText('RECTANGLE: Type Width, press Tab for Height, Enter to commit - or pick opposite corner.');
-      } else {
-        const p0 = tempPts[0];
-        const newId = uid();
-        const w = +(pt.x - p0.x).toFixed(5);
-        const h = +(pt.y - p0.y).toFixed(5);
-        dispatch({ type: 'ADD_ENTITY', entity: { id: newId, type: 'rectangle', layer, pts: [p0, { x: pt.x, y: p0.y }, pt, { x: p0.x, y: pt.y }], isClosed: true } });
-        setDimPrompt({
-          entityId: newId,
-          type: 'rectangle',
-          worldPos: { x: (p0.x + pt.x) / 2, y: (p0.y + pt.y) / 2 },
-          val1: Math.abs(w).toFixed(4),
-          val2: Math.abs(h).toFixed(4),
-          label1: 'W',
-          label2: 'H',
-          basePt: p0,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1(Math.abs(w).toFixed(4));
-        setInputVal2(Math.abs(h).toFixed(4));
-        setManualDim(false);
-        setIsDrawing(false); setTempPts([]);
-        setCmdText('RECTANGLE: Type Width, press Tab for Height, Enter to commit.');
-      }
-    } else if (tool === 'circle_center_radius') {
-      if (!isDrawing) {
-        setTempPts([pt]);
-        setIsDrawing(true);
-        setManualDim(false);
-        setDimPrompt({
-          entityId: uid(),
-          type: 'circle',
-          live: true,
-          worldPos: pt,
-          val1: '0.0000',
-          val2: '0.0000',
-          label1: 'R',
-          label2: 'Ø',
-          basePt: pt,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1('0.0000');
-        setInputVal2('0.0000');
-        setCmdText('CIRCLE: Type Radius, Enter to commit - or pick point on circumference.');
-      } else {
-        const c = tempPts[0];
-        const r = dist(c, pt);
-        const newId = uid();
-        dispatch({ type: 'ADD_ENTITY', entity: { id: newId, type: 'circle', layer, pts: [c, pt], radius: r, isClosed: true } });
-        setDimPrompt({
-          entityId: newId,
-          type: 'circle',
-          worldPos: { x: c.x + r * 0.707, y: c.y + r * 0.707 },
-          val1: r.toFixed(4),
-          val2: (r * 2).toFixed(4),
-          label1: 'R',
-          label2: 'Ø',
-          basePt: c,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1(r.toFixed(4));
-        setInputVal2((r * 2).toFixed(4));
-        setManualDim(false);
-        setIsDrawing(false); setTempPts([]);
-        setCmdText('CIRCLE: Type Radius, press Enter to commit.');
-      }
-    } else if (tool === 'ellipse_center') {
-      if (!isDrawing || tempPts.length === 0) {
-        setTempPts([pt]);
-        setIsDrawing(true);
-        setManualDim(false);
-        setDimPrompt({
-          entityId: uid(),
-          type: 'ellipse',
-          live: true,
-          worldPos: pt,
-          val1: '0.0000',
-          val2: '0.0000',
-          label1: 'Rx',
-          label2: 'Ry',
-          basePt: pt,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1('0.0000');
-        setInputVal2('0.0000');
-        setCmdText('ELLIPSE: Specify endpoint of major axis (or type Rx and press Tab/Enter).');
-      } else if (tempPts.length === 1) {
-        const c = tempPts[0];
-        const v1Typed = parseFloat(inputVal1);
-        let majorEnd = pt;
-        if (manualDim && !isNaN(v1Typed) && v1Typed > 0) {
-          const dir = dimPrompt?.endPt ?? pt;
-          const ang = Math.atan2(dir.y - c.y, dir.x - c.x);
-          majorEnd = { x: c.x + v1Typed * Math.cos(ang), y: c.y + v1Typed * Math.sin(ang) };
-        }
-        const rx = dist(c, majorEnd);
-        if (rx < 1e-4) return;
-        setTempPts([c, majorEnd]);
-        const defaultRy = rx * 0.5;
-        setDimPrompt({
-          entityId: uid(),
-          type: 'ellipse',
-          live: true,
-          worldPos: pt,
-          val1: rx.toFixed(4),
-          val2: defaultRy.toFixed(4),
-          label1: 'Rx',
-          label2: 'Ry',
-          basePt: c,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1(rx.toFixed(4));
-        setInputVal2(defaultRy.toFixed(4));
-        setManualDim(false);
-        setCmdText('ELLIPSE: Specify distance for other axis (or type Ry and press Enter).');
-      } else {
-        const c = tempPts[0];
-        const majorEnd = tempPts[1];
-        const rx = dist(c, majorEnd);
-        const rot = Math.atan2(majorEnd.y - c.y, majorEnd.x - c.x);
-        const v2Typed = parseFloat(inputVal2);
-        let ry: number;
-        if (manualDim && !isNaN(v2Typed) && v2Typed > 0) {
-          ry = v2Typed;
+          setCmdText(
+            'LINE: Type Length, press Tab for Angle, Enter to commit - or click second point.',
+          );
         } else {
-          const ryCalc = Math.abs(-(pt.x - c.x) * Math.sin(rot) + (pt.y - c.y) * Math.cos(rot));
-          ry = ryCalc < 1e-4 ? Math.max(1e-4, rx * 0.5) : ryCalc;
-        }
-        const newId = uid();
-        dispatch({
-          type: 'ADD_ENTITY',
-          entity: {
-            id: newId,
-            type: 'ellipse',
+          const newId = uid();
+          const p0 = tempPts[0];
+          dispatch({
+            type: 'ADD_ENTITY',
+            entity: { id: newId, type: 'line', layer, pts: [p0, pt] },
+          });
+          const len = dist(p0, pt);
+          const ang = (Math.atan2(pt.y - p0.y, pt.x - p0.x) * 180) / Math.PI;
+          setDimPrompt({
+            entityId: newId,
+            type: 'line',
+            worldPos: { x: (p0.x + pt.x) / 2, y: (p0.y + pt.y) / 2 },
+            val1: len.toFixed(4),
+            val2: ang.toFixed(1),
+            label1: 'L',
+            label2: '∠',
+            basePt: p0,
+            endPt: pt,
             layer,
-            pts: [c, majorEnd],
-            rx,
-            ry,
-            rotation: rot,
-            isClosed: true,
-          },
-        });
-        setDimPrompt(null);
-        setManualDim(false);
-        setIsDrawing(false);
-        setTempPts([]);
-        setCmdText('ELLIPSE: Created.');
-      }
-    } else if (tool === 'arc_center') {
-      if (tempPts.length === 0) {
-        setTempPts([pt]); setIsDrawing(true);
-        setDimPrompt(null);
-        setCmdText('ARC: Pick start point on arc');
-      } else if (tempPts.length === 1) {
-        const c = tempPts[0];
-        const r = dist(c, pt);
-        setTempPts(prev => [...prev, pt]);
-        setManualDim(false);
-        setDimPrompt({
-          entityId: uid(),
-          type: 'arc',
-          live: true,
-          worldPos: pt,
-          val1: r.toFixed(4),
-          val2: '90.0',
-          label1: 'R',
-          label2: '∠',
-          basePt: c,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1(r.toFixed(4));
-        setInputVal2('90.0');
-        setCmdText('ARC: Type Radius, press Tab for Sweep, Enter to commit - or pick end point.');
-      } else {
-        const [c, s, _] = tempPts;
-        const sa = Math.atan2(s.y - c.y, s.x - c.x);
-        const ea = Math.atan2(pt.y - c.y, pt.x - c.x);
-        // A typed Radius during the live sweep-picking step overrides the
-        // start point's own distance from the centre (it moves the start
-        // point out/in along `sa` to match, same as the post-commit editor).
-        const typedR = dimPrompt?.live && dimPrompt.type === 'arc' ? parseFloat(dimPrompt.val1) : NaN;
-        const r = !isNaN(typedR) && typedR > 0 ? typedR : dist(c, s);
-        const sNew = !isNaN(typedR) && typedR > 0 ? { x: c.x + r * Math.cos(sa), y: c.y + r * Math.sin(sa) } : s;
-        const sweepDeg = ((ea - sa) * 180 / Math.PI + 360) % 360;
-        const newId = uid();
-        dispatch({ type: 'ADD_ENTITY', entity: { id: newId, type: 'arc', layer, pts: [c, sNew, pt], startAngle: sa, endAngle: ea } });
-        setManualDim(false);
-        setDimPrompt({
-          entityId: newId,
-          type: 'arc',
-          worldPos: { x: (c.x + pt.x) / 2, y: (c.y + pt.y) / 2 },
-          val1: r.toFixed(4),
-          val2: sweepDeg.toFixed(1),
-          label1: 'R',
-          label2: '∠',
-          basePt: c,
-          endPt: pt,
-          layer,
-        });
-        setInputVal1(r.toFixed(4));
-        setInputVal2(sweepDeg.toFixed(1));
-        setIsDrawing(false); setTempPts([]);
-        setCmdText('ARC: Type Radius, press Tab for Angle, Enter to commit.');
-      }
-    } else if (tool === 'construction_line') {
-      if (!isDrawing) {
-        setTempPts([pt]); setIsDrawing(true);
-        setDimPrompt(null);
-        setCmdText('XLINE: Pick second point to define infinite construction line direction');
-      } else {
-        dispatch({ type: 'ADD_ENTITY', entity: { id: uid(), type: 'construction', layer: 'construction', pts: [tempPts[0], pt] } });
-        setIsDrawing(false); setTempPts([]);
-        setCmdText('XLINE: Pick first point');
-      }
-    }
-  }, [tool, isDrawing, tempPts, zoom, constructionMode, dimPrompt]);
-
-
-  const handleCanvasClick = useCallback((e: React.MouseEvent) => {
-    if (displayOnly) return;
-    if (panning.current) return;
-    if (e.button !== 0) return;
-
-    // If this click ended a marquee drag, don't also do a point-click action
-    const dragDist = Math.hypot(e.clientX - dragStart.current.x, e.clientY - dragStart.current.y);
-    if (tool === 'select' && dragDist > 4) return;
-
-    const rawPt = toWorld(e.clientX, e.clientY);
-    const snapPt = snap.pt;
-    const hitR = 14 / zoom; // 14px pick tolerance in world coordinates
-
-    // Tag a boundary edge ONLY when a tag tool is armed (a tag picked from the
-    // palette) and the Select tool is active. Otherwise Select just selects and
-    // drawing tools just draw - nothing is ever auto-tagged.
-    if (activeTagTool && tool === 'select') {
-      for (const edge of boundaryEdges) {
-        const d = distToSegment(rawPt, edge.p0, edge.p1);
-        if (d < 18 / zoom) {
-          const ent = cadState.entities.find(en => en.id === edge.entityId);
-          const wholeEntity = ent?.type === 'circle' || ent?.type === 'ellipse';
-          const targetKey = wholeEntity ? `${edge.entityId}_0` : edge.key;
-          setEdgeTagMap(prev => ({ ...prev, [targetKey]: activeTagTool }));
-          setCmdText(`Tagged ${wholeEntity ? (ent?.type === 'ellipse' ? 'ellipse' : 'circle') : 'edge'} as ${activeTagTool.toUpperCase()}.`);
-          return;
+          });
+          setInputVal1(len.toFixed(4));
+          setInputVal2(ang.toFixed(1));
+          setManualDim(false);
+          setTempPts([pt]); // chain: start next line from here
+          setCmdText('LINE: Type Length, press Tab for Angle, Enter to commit.');
+        }
+      } else if (tool === 'polyline') {
+        if (!isDrawing) {
+          setTempPts([pt]);
+          setIsDrawing(true);
+          setManualDim(false);
+          setDimPrompt({
+            entityId: uid(),
+            type: 'line',
+            live: true,
+            worldPos: pt,
+            val1: '0.0000',
+            val2: '0.0',
+            label1: 'L',
+            label2: '∠',
+            basePt: pt,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1('0.0000');
+          setInputVal2('0.0');
+          setCmdText(
+            'POLYLINE: Type Length, press Tab for Angle, Enter for next vertex - or click.',
+          );
+        } else {
+          const s = tempPts[0];
+          if (tempPts.length >= 2 && dist(pt, s) < 12 / zoom) {
+            dispatch({
+              type: 'ADD_ENTITY',
+              entity: { id: uid(), type: 'polyline', layer, pts: tempPts, isClosed: true },
+            });
+            setIsDrawing(false);
+            setTempPts([]);
+            setDimPrompt(null);
+            setManualDim(false);
+            setCmdText('POLYLINE: Closed. Pick first point for next polyline.');
+          } else {
+            setTempPts((prev) => [...prev, pt]);
+            setManualDim(false);
+            setDimPrompt({
+              entityId: uid(),
+              type: 'line',
+              live: true,
+              worldPos: pt,
+              val1: '0.0000',
+              val2: '0.0',
+              label1: 'L',
+              label2: '∠',
+              basePt: pt,
+              endPt: pt,
+              layer,
+            });
+            setInputVal1('0.0000');
+            setInputVal2('0.0');
+            setCmdText(
+              'POLYLINE: Type Length, press Tab for Angle, Enter for next vertex - or click near start to close.',
+            );
+          }
+        }
+      } else if (tool === 'rectangle') {
+        if (!isDrawing) {
+          setTempPts([pt]);
+          setIsDrawing(true);
+          setManualDim(false);
+          setDimPrompt({
+            entityId: uid(),
+            type: 'rectangle',
+            live: true,
+            worldPos: pt,
+            val1: '0.0000',
+            val2: '0.0000',
+            label1: 'W',
+            label2: 'H',
+            basePt: pt,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1('0.0000');
+          setInputVal2('0.0000');
+          setCmdText(
+            'RECTANGLE: Type Width, press Tab for Height, Enter to commit - or pick opposite corner.',
+          );
+        } else {
+          const p0 = tempPts[0];
+          const newId = uid();
+          const w = +(pt.x - p0.x).toFixed(5);
+          const h = +(pt.y - p0.y).toFixed(5);
+          dispatch({
+            type: 'ADD_ENTITY',
+            entity: {
+              id: newId,
+              type: 'rectangle',
+              layer,
+              pts: [p0, { x: pt.x, y: p0.y }, pt, { x: p0.x, y: pt.y }],
+              isClosed: true,
+            },
+          });
+          setDimPrompt({
+            entityId: newId,
+            type: 'rectangle',
+            worldPos: { x: (p0.x + pt.x) / 2, y: (p0.y + pt.y) / 2 },
+            val1: Math.abs(w).toFixed(4),
+            val2: Math.abs(h).toFixed(4),
+            label1: 'W',
+            label2: 'H',
+            basePt: p0,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1(Math.abs(w).toFixed(4));
+          setInputVal2(Math.abs(h).toFixed(4));
+          setManualDim(false);
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText('RECTANGLE: Type Width, press Tab for Height, Enter to commit.');
+        }
+      } else if (tool === 'circle_center_radius') {
+        if (!isDrawing) {
+          setTempPts([pt]);
+          setIsDrawing(true);
+          setManualDim(false);
+          setDimPrompt({
+            entityId: uid(),
+            type: 'circle',
+            live: true,
+            worldPos: pt,
+            val1: '0.0000',
+            val2: '0.0000',
+            label1: 'R',
+            label2: 'Ø',
+            basePt: pt,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1('0.0000');
+          setInputVal2('0.0000');
+          setCmdText('CIRCLE: Type Radius, Enter to commit - or pick point on circumference.');
+        } else {
+          const c = tempPts[0];
+          const r = dist(c, pt);
+          const newId = uid();
+          dispatch({
+            type: 'ADD_ENTITY',
+            entity: { id: newId, type: 'circle', layer, pts: [c, pt], radius: r, isClosed: true },
+          });
+          setDimPrompt({
+            entityId: newId,
+            type: 'circle',
+            worldPos: { x: c.x + r * 0.707, y: c.y + r * 0.707 },
+            val1: r.toFixed(4),
+            val2: (r * 2).toFixed(4),
+            label1: 'R',
+            label2: 'Ø',
+            basePt: c,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1(r.toFixed(4));
+          setInputVal2((r * 2).toFixed(4));
+          setManualDim(false);
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText('CIRCLE: Type Radius, press Enter to commit.');
+        }
+      } else if (tool === 'ellipse_center') {
+        if (!isDrawing || tempPts.length === 0) {
+          setTempPts([pt]);
+          setIsDrawing(true);
+          setManualDim(false);
+          setDimPrompt({
+            entityId: uid(),
+            type: 'ellipse',
+            live: true,
+            worldPos: pt,
+            val1: '0.0000',
+            val2: '0.0000',
+            label1: 'Rx',
+            label2: 'Ry',
+            basePt: pt,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1('0.0000');
+          setInputVal2('0.0000');
+          setCmdText('ELLIPSE: Specify endpoint of major axis (or type Rx and press Tab/Enter).');
+        } else if (tempPts.length === 1) {
+          const c = tempPts[0];
+          const v1Typed = parseFloat(inputVal1);
+          let majorEnd = pt;
+          if (manualDim && !isNaN(v1Typed) && v1Typed > 0) {
+            const dir = dimPrompt?.endPt ?? pt;
+            const ang = Math.atan2(dir.y - c.y, dir.x - c.x);
+            majorEnd = { x: c.x + v1Typed * Math.cos(ang), y: c.y + v1Typed * Math.sin(ang) };
+          }
+          const rx = dist(c, majorEnd);
+          if (rx < 1e-4) return;
+          setTempPts([c, majorEnd]);
+          const defaultRy = rx * 0.5;
+          setDimPrompt({
+            entityId: uid(),
+            type: 'ellipse',
+            live: true,
+            worldPos: pt,
+            val1: rx.toFixed(4),
+            val2: defaultRy.toFixed(4),
+            label1: 'Rx',
+            label2: 'Ry',
+            basePt: c,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1(rx.toFixed(4));
+          setInputVal2(defaultRy.toFixed(4));
+          setManualDim(false);
+          setCmdText('ELLIPSE: Specify distance for other axis (or type Ry and press Enter).');
+        } else {
+          const c = tempPts[0];
+          const majorEnd = tempPts[1];
+          const rx = dist(c, majorEnd);
+          const rot = Math.atan2(majorEnd.y - c.y, majorEnd.x - c.x);
+          const v2Typed = parseFloat(inputVal2);
+          let ry: number;
+          if (manualDim && !isNaN(v2Typed) && v2Typed > 0) {
+            ry = v2Typed;
+          } else {
+            const ryCalc = Math.abs(-(pt.x - c.x) * Math.sin(rot) + (pt.y - c.y) * Math.cos(rot));
+            ry = ryCalc < 1e-4 ? Math.max(1e-4, rx * 0.5) : ryCalc;
+          }
+          const newId = uid();
+          dispatch({
+            type: 'ADD_ENTITY',
+            entity: {
+              id: newId,
+              type: 'ellipse',
+              layer,
+              pts: [c, majorEnd],
+              rx,
+              ry,
+              rotation: rot,
+              isClosed: true,
+            },
+          });
+          setDimPrompt(null);
+          setManualDim(false);
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText('ELLIPSE: Created.');
+        }
+      } else if (tool === 'arc_center') {
+        if (tempPts.length === 0) {
+          setTempPts([pt]);
+          setIsDrawing(true);
+          setDimPrompt(null);
+          setCmdText('ARC: Pick start point on arc');
+        } else if (tempPts.length === 1) {
+          const c = tempPts[0];
+          const r = dist(c, pt);
+          setTempPts((prev) => [...prev, pt]);
+          setManualDim(false);
+          setDimPrompt({
+            entityId: uid(),
+            type: 'arc',
+            live: true,
+            worldPos: pt,
+            val1: r.toFixed(4),
+            val2: '90.0',
+            label1: 'R',
+            label2: '∠',
+            basePt: c,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1(r.toFixed(4));
+          setInputVal2('90.0');
+          setCmdText('ARC: Type Radius, press Tab for Sweep, Enter to commit - or pick end point.');
+        } else {
+          const [c, s, _] = tempPts;
+          const sa = Math.atan2(s.y - c.y, s.x - c.x);
+          const ea = Math.atan2(pt.y - c.y, pt.x - c.x);
+          // A typed Radius during the live sweep-picking step overrides the
+          // start point's own distance from the centre (it moves the start
+          // point out/in along `sa` to match, same as the post-commit editor).
+          const typedR =
+            dimPrompt?.live && dimPrompt.type === 'arc' ? parseFloat(dimPrompt.val1) : NaN;
+          const r = !isNaN(typedR) && typedR > 0 ? typedR : dist(c, s);
+          const sNew =
+            !isNaN(typedR) && typedR > 0
+              ? { x: c.x + r * Math.cos(sa), y: c.y + r * Math.sin(sa) }
+              : s;
+          const sweepDeg = (((ea - sa) * 180) / Math.PI + 360) % 360;
+          const newId = uid();
+          dispatch({
+            type: 'ADD_ENTITY',
+            entity: {
+              id: newId,
+              type: 'arc',
+              layer,
+              pts: [c, sNew, pt],
+              startAngle: sa,
+              endAngle: ea,
+            },
+          });
+          setManualDim(false);
+          setDimPrompt({
+            entityId: newId,
+            type: 'arc',
+            worldPos: { x: (c.x + pt.x) / 2, y: (c.y + pt.y) / 2 },
+            val1: r.toFixed(4),
+            val2: sweepDeg.toFixed(1),
+            label1: 'R',
+            label2: '∠',
+            basePt: c,
+            endPt: pt,
+            layer,
+          });
+          setInputVal1(r.toFixed(4));
+          setInputVal2(sweepDeg.toFixed(1));
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText('ARC: Type Radius, press Tab for Angle, Enter to commit.');
+        }
+      } else if (tool === 'construction_line') {
+        if (!isDrawing) {
+          setTempPts([pt]);
+          setIsDrawing(true);
+          setDimPrompt(null);
+          setCmdText('XLINE: Pick second point to define infinite construction line direction');
+        } else {
+          dispatch({
+            type: 'ADD_ENTITY',
+            entity: {
+              id: uid(),
+              type: 'construction',
+              layer: 'construction',
+              pts: [tempPts[0], pt],
+            },
+          });
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText('XLINE: Pick first point');
         }
       }
-    }
+    },
+    [tool, isDrawing, tempPts, zoom, constructionMode, dimPrompt],
+  );
 
-    if (tool === 'select') {
-      const clickedId = findEntityAt(rawPt);
-      dispatch({ type: 'SELECT_ENTITY', id: clickedId, multi: e.shiftKey });
-      setDimPrompt(null);
-      setCmdText(clickedId ? 'Entity selected. Double-click to edit dimensions, or Del to delete.' : 'SELECT: Click entity or drag box to select.');
-      return;
-    }
+  const handleCanvasClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (displayOnly) return;
+      if (panning.current) return;
+      if (e.button !== 0) return;
 
+      // If this click ended a marquee drag, don't also do a point-click action
+      const dragDist = Math.hypot(e.clientX - dragStart.current.x, e.clientY - dragStart.current.y);
+      if (tool === 'select' && dragDist > 4) return;
 
+      const rawPt = toWorld(e.clientX, e.clientY);
+      const snapPt = snap.pt;
+      const hitR = 14 / zoom; // 14px pick tolerance in world coordinates
 
+      // Tag a boundary edge ONLY when a tag tool is armed (a tag picked from the
+      // palette) and the Select tool is active. Otherwise Select just selects and
+      // drawing tools just draw - nothing is ever auto-tagged.
+      if (activeTagTool && tool === 'select') {
+        for (const edge of boundaryEdges) {
+          const d = distToSegment(rawPt, edge.p0, edge.p1);
+          if (d < 18 / zoom) {
+            const ent = cadState.entities.find((en) => en.id === edge.entityId);
+            const wholeEntity = ent?.type === 'circle' || ent?.type === 'ellipse';
+            const targetKey = wholeEntity ? `${edge.entityId}_0` : edge.key;
+            setEdgeTagMap((prev) => ({ ...prev, [targetKey]: activeTagTool }));
+            setCmdText(
+              `Tagged ${wholeEntity ? (ent?.type === 'ellipse' ? 'ellipse' : 'circle') : 'edge'} as ${activeTagTool.toUpperCase()}.`,
+            );
+            return;
+          }
+        }
+      }
 
-    if (tool === 'trim') {
-      const target = getTrimTarget(rawPt, cadState.entities, zoom);
-      if (!target) {
-        setCmdText('TRIM: click on a line to trim it.');
+      if (tool === 'select') {
+        const clickedId = findEntityAt(rawPt);
+        dispatch({ type: 'SELECT_ENTITY', id: clickedId, multi: e.shiftKey });
+        setDimPrompt(null);
+        setCmdText(
+          clickedId
+            ? 'Entity selected. Double-click to edit dimensions, or Del to delete.'
+            : 'SELECT: Click entity or drag box to select.',
+        );
         return;
       }
 
-      const { targetEnt, targetSegIdx, preservedSegs, preservedPolylines } = target;
-      const otherEntities = cadState.entities.filter(e => e.id !== targetEnt.id);
-      const newSegments: CadEntity[] = [];
-
-      if (preservedPolylines !== undefined) {
-        for (const arc of preservedPolylines) {
-          newSegments.push({
-            id: uid(),
-            type: 'polyline',
-            layer: targetEnt.layer,
-            pts: arc,
-            isClosed: false,
-            ...(targetEnt.role ? { role: targetEnt.role } : {}),
-          });
+      if (tool === 'trim') {
+        const target = getTrimTarget(rawPt, cadState.entities, zoom);
+        if (!target) {
+          setCmdText('TRIM: click on a line to trim it.');
+          return;
         }
-      } else {
-        // If targetEnt was a multi-segment polyline/rectangle, preserve all other unmodified segments as individual lines
-        if (targetEnt.pts.length > 2) {
-          for (let i = 0; i < targetEnt.pts.length - 1; i++) {
-            if (i !== targetSegIdx) {
-              newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [targetEnt.pts[i], targetEnt.pts[i + 1]] });
+
+        const { targetEnt, targetSegIdx, preservedSegs, preservedPolylines } = target;
+        const otherEntities = cadState.entities.filter((e) => e.id !== targetEnt.id);
+        const newSegments: CadEntity[] = [];
+
+        if (preservedPolylines !== undefined) {
+          for (const arc of preservedPolylines) {
+            newSegments.push({
+              id: uid(),
+              type: 'polyline',
+              layer: targetEnt.layer,
+              pts: arc,
+              isClosed: false,
+              ...(targetEnt.role ? { role: targetEnt.role } : {}),
+            });
+          }
+        } else {
+          // If targetEnt was a multi-segment polyline/rectangle, preserve all other unmodified segments as individual lines
+          if (targetEnt.pts.length > 2) {
+            for (let i = 0; i < targetEnt.pts.length - 1; i++) {
+              if (i !== targetSegIdx) {
+                newSegments.push({
+                  id: uid(),
+                  type: 'line',
+                  layer: targetEnt.layer,
+                  pts: [targetEnt.pts[i], targetEnt.pts[i + 1]],
+                });
+              }
+            }
+            if (targetEnt.isClosed && targetSegIdx !== targetEnt.pts.length - 1) {
+              newSegments.push({
+                id: uid(),
+                type: 'line',
+                layer: targetEnt.layer,
+                pts: [targetEnt.pts[targetEnt.pts.length - 1], targetEnt.pts[0]],
+              });
             }
           }
-          if (targetEnt.isClosed && targetSegIdx !== targetEnt.pts.length - 1) {
-            newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [targetEnt.pts[targetEnt.pts.length - 1], targetEnt.pts[0]] });
+
+          // Add the preserved sub-segments
+          for (const seg of preservedSegs) {
+            newSegments.push({
+              id: uid(),
+              type: 'line',
+              layer: targetEnt.layer,
+              pts: [seg.p0, seg.p1],
+            });
           }
         }
 
-        // Add the preserved sub-segments
-        for (const seg of preservedSegs) {
-          newSegments.push({ id: uid(), type: 'line', layer: targetEnt.layer, pts: [seg.p0, seg.p1] });
+        dispatch({ type: 'REPLACE_ENTITIES', entities: [...otherEntities, ...newSegments] });
+        setHoveredTrim(null);
+        setCmdText('TRIM: Portion trimmed at intersection.');
+        return;
+      }
+
+      commitPoint(snapPt);
+    },
+    [snap, tool, cadState.entities, commitPoint, zoom, toWorld],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      // Never let canvas shortcuts (Delete, tool letters, Space/Enter, F-keys) fire
+      // while the user is typing in a form field anywhere in the app. This is what
+      // caused "backspace in a mesh input deleted my whole geometry".
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT' ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      // Outside the geometry stage the canvas is display-only: the CAD shortcuts
+      // (Delete, tool letters) must not touch the geometry. In the Blocks view the
+      // keys drive the block editor instead. Undo/redo still fall through.
+      if (displayOnly && !e.ctrlKey && !e.metaKey) {
+        if (showBlocking && canvasMode === 'cad') {
+          const k = e.key.toLowerCase();
+          if (e.key === 'Escape') {
+            if (blockDrawPts.length) setBlockDrawPts([]);
+            else if (blockPick) setBlockPick(null);
+            else if (assocStage === 'curve') setAssocStage('edges');
+            else if (assocEdges.length) setAssocEdges([]);
+            else setBlockTool('select');
+            setBlockMsg(null);
+          } else if (
+            e.key === 'Enter' &&
+            blockTool === 'assoc' &&
+            assocStage === 'edges' &&
+            assocEdges.length
+          ) {
+            setAssocStage('curve');
+          } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlockId) {
+            e.preventDefault();
+            deleteBlockById(selectedBlockId);
+          } else if (k === 'v') setBlockTool('select');
+          else if (k === 'b') {
+            setBlockTool('draw');
+            setBlockDrawPts([]);
+          } else if (k === 'k') setBlockTool('split');
+          else if (k === 'x') setBlockTool('delete');
+          else if (k === 'o') setBlockTool('ogrid');
+          else if (k === 'm') setBlockTool('mergeV');
+          else if (k === 'j') setBlockTool('mergeB');
+          else if (k === 'a') setBlockTool('assoc');
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (isDrawing || tempPts.length > 0) {
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText(`${tool.toUpperCase()}: Cancelled. Press Esc again to return to Select.`);
+        } else {
+          // Nothing in progress -> return to select tool and clear any active selection
+          dispatch({ type: 'SELECT_ENTITY', id: null });
+          setTool('select');
+          setCmdText('SELECT: Click entity/vertex or drag box to select.');
         }
       }
 
-      dispatch({ type: 'REPLACE_ENTITIES', entities: [...otherEntities, ...newSegments] });
-      setHoveredTrim(null);
-      setCmdText('TRIM: Portion trimmed at intersection.');
-      return;
-    }
-
-
-    commitPoint(snapPt);
-  }, [snap, tool, cadState.entities, commitPoint, zoom, toWorld]);
-
-
-
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // Never let canvas shortcuts (Delete, tool letters, Space/Enter, F-keys) fire
-    // while the user is typing in a form field anywhere in the app. This is what
-    // caused "backspace in a mesh input deleted my whole geometry".
-    const t = e.target as HTMLElement | null;
-    if (
-      t &&
-      (t.tagName === 'INPUT' ||
-        t.tagName === 'TEXTAREA' ||
-        t.tagName === 'SELECT' ||
-        t.isContentEditable)
-    ) {
-      return;
-    }
-    if (e.key === 'Escape') {
-      if (isDrawing || tempPts.length > 0) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        // End polyline without closing, or confirm
+        if (tool === 'polyline' && isDrawing && tempPts.length >= 2) {
+          const layer = constructionMode ? 'construction' : 'default';
+          dispatch({
+            type: 'ADD_ENTITY',
+            entity: { id: uid(), type: 'polyline', layer, pts: tempPts, isClosed: false },
+          });
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText('POLYLINE: Done. Pick first point.');
+        }
+        if (tool === 'line' && isDrawing) {
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText('LINE: Done. Pick start point.');
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        if (lastEditRef.current === 'blocks' && blockUndoRef.current.length) {
+          if (!undoBlocking()) undo();
+        } else undo();
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+        e.preventDefault();
+        if (lastEditRef.current === 'blocks' && blockRedoRef.current.length) {
+          if (!redoBlocking()) redo();
+        } else redo();
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        dispatch({ type: 'DELETE_SELECTED' });
+      }
+      if (e.key === 'F8') setOrtho((o) => !o);
+      if (e.key === 'F3') setSnapEnabled((s) => !s);
+      if (e.key === 'F7') setShowGrid((g) => !g);
+      if (e.key === 'l' || e.key === 'L') {
+        setTool('line');
         setIsDrawing(false);
         setTempPts([]);
-        setCmdText(`${tool.toUpperCase()}: Cancelled. Press Esc again to return to Select.`);
-      } else {
-        // Nothing in progress -> return to select tool and clear any active selection
-        dispatch({ type: 'SELECT_ENTITY', id: null });
+        setDimPrompt(null);
+        setManualDim(false);
+      }
+      if (e.key === 'p' || e.key === 'P') {
+        setTool('polyline');
+        setIsDrawing(false);
+        setTempPts([]);
+        setDimPrompt(null);
+        setManualDim(false);
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        setTool('rectangle');
+        setIsDrawing(false);
+        setTempPts([]);
+        setDimPrompt(null);
+        setManualDim(false);
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        setTool('circle_center_radius');
+        setIsDrawing(false);
+        setTempPts([]);
+        setDimPrompt(null);
+        setManualDim(false);
+      }
+      if (e.key === 'e' || e.key === 'E') {
+        setTool('ellipse_center');
+        setIsDrawing(false);
+        setTempPts([]);
+        setDimPrompt(null);
+        setManualDim(false);
+      }
+      if (e.key === 'a' || e.key === 'A') {
+        setTool('arc_center');
+        setIsDrawing(false);
+        setTempPts([]);
+        setDimPrompt(null);
+        setManualDim(false);
+      }
+      if (e.key === 's' || e.key === 'S') {
         setTool('select');
-        setCmdText('SELECT: Click entity/vertex or drag box to select.');
+        setIsDrawing(false);
+        setTempPts([]);
+        setDimPrompt(null);
+        setManualDim(false);
       }
-    }
-
-    if (e.key === 'Enter' || e.key === ' ') {
-      // End polyline without closing, or confirm
-      if (tool === 'polyline' && isDrawing && tempPts.length >= 2) {
-        const layer = constructionMode ? 'construction' : 'default';
-        dispatch({ type: 'ADD_ENTITY', entity: { id: uid(), type: 'polyline', layer, pts: tempPts, isClosed: false } });
-        setIsDrawing(false); setTempPts([]);
-        setCmdText('POLYLINE: Done. Pick first point.');
+      if (e.key === 't' || e.key === 'T') {
+        setTool('trim');
+        setIsDrawing(false);
+        setTempPts([]);
+        setDimPrompt(null);
+        setManualDim(false);
       }
-      if (tool === 'line' && isDrawing) {
-        setIsDrawing(false); setTempPts([]);
-        setCmdText('LINE: Done. Pick start point.');
-      }
-    }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-      e.preventDefault();
-      if (lastEditRef.current === 'blocks' && blockUndoRef.current.length) {
-        if (!undoBlocking()) undo();
-      } else undo();
-    }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
-      e.preventDefault();
-      if (lastEditRef.current === 'blocks' && blockRedoRef.current.length) {
-        if (!redoBlocking()) redo();
-      } else redo();
-    }
-    if (e.key === 'Delete' || e.key === 'Backspace') { dispatch({ type: 'DELETE_SELECTED' }); }
-    if (e.key === 'F8') setOrtho(o => !o);
-    if (e.key === 'F3') setSnapEnabled(s => !s);
-    if (e.key === 'F7') setShowGrid(g => !g);
-    if (e.key === 'l' || e.key === 'L') { setTool('line'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-    if (e.key === 'p' || e.key === 'P') { setTool('polyline'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-    if (e.key === 'r' || e.key === 'R') { setTool('rectangle'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-    if (e.key === 'c' || e.key === 'C') { setTool('circle_center_radius'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-    if (e.key === 'e' || e.key === 'E') { setTool('ellipse_center'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-    if (e.key === 'a' || e.key === 'A') { setTool('arc_center'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-    if (e.key === 's' || e.key === 'S') { setTool('select'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-    if (e.key === 't' || e.key === 'T') { setTool('trim'); setIsDrawing(false); setTempPts([]); setDimPrompt(null); setManualDim(false); }
-  }, [tool, isDrawing, tempPts, constructionMode, undo, redo, undoBlocking, redoBlocking]);
+    },
+    [
+      tool,
+      isDrawing,
+      tempPts,
+      constructionMode,
+      undo,
+      redo,
+      undoBlocking,
+      redoBlocking,
+      displayOnly,
+      showBlocking,
+      canvasMode,
+      blockDrawPts,
+      selectedBlockId,
+      deleteBlockById,
+      blockPick,
+      assocStage,
+      assocEdges,
+      blockTool,
+    ],
+  );
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -4417,12 +4964,26 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         } else if (pendingImportFile.type === 'dxf' && pendingImportFile.file) {
           const res = await uploadAndParseDxf(pendingImportFile.file);
           const newEnts: CadEntity[] = [];
-          for (const p of (res.polylines || [])) {
+          for (const p of res.polylines || []) {
             const pts: Point2D[] = p.points.map(([x, y]: number[]) => ({ x, y }));
-            newEnts.push({ id: uid(), type: 'polyline', layer: 'default', pts, isClosed: p.is_closed });
+            newEnts.push({
+              id: uid(),
+              type: 'polyline',
+              layer: 'default',
+              pts,
+              isClosed: p.is_closed,
+            });
           }
-          for (const l of (res.lines || [])) {
-            newEnts.push({ id: uid(), type: 'line', layer: 'default', pts: [{ x: l.x1, y: l.y1 }, { x: l.x2, y: l.y2 }] });
+          for (const l of res.lines || []) {
+            newEnts.push({
+              id: uid(),
+              type: 'line',
+              layer: 'default',
+              pts: [
+                { x: l.x1, y: l.y1 },
+                { x: l.x2, y: l.y2 },
+              ],
+            });
           }
           if (newEnts.length) {
             dispatch({ type: 'REPLACE_ENTITIES', entities: newEnts });
@@ -4439,7 +5000,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     load();
   }, [pendingImportFile, onClearPendingImport]);
 
-
   // ── Apply fillet ─────────────────────────────────────────────────────────────
   const applyFillet = async () => {
     setIsLoading(true);
@@ -4447,9 +5007,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     for (let i = 0; i < updated.length; i++) {
       if (updated[i].pts.length >= 3) {
         try {
-          const res = await requestFillet(updated[i].pts.map(p => [p.x, p.y]), filletR);
+          const res = await requestFillet(
+            updated[i].pts.map((p) => [p.x, p.y]),
+            filletR,
+          );
           updated[i] = { ...updated[i], pts: res.map(([x, y]: number[]) => ({ x, y })) };
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
     }
     dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
@@ -4463,9 +5028,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     for (let i = 0; i < updated.length; i++) {
       if (updated[i].pts.length >= 2) {
         try {
-          const res = await requestOffset(updated[i].pts.map(p => [p.x, p.y]), offsetD);
+          const res = await requestOffset(
+            updated[i].pts.map((p) => [p.x, p.y]),
+            offsetD,
+          );
           updated[i] = { ...updated[i], pts: res.map(([x, y]: number[]) => ({ x, y })) };
-        } catch { /* skip */ }
+        } catch {
+          /* skip */
+        }
       }
     }
     dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
@@ -4476,21 +5046,26 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // ── 6-Step Workflow Actions ──────────────────────────────────────────────────
 
   const handleGenerateDomain = useCallback(() => {
-    const existingDomain = cadState.entities.find(e => e.role === 'domain_boundary');
+    const existingDomain = cadState.entities.find((e) => e.role === 'domain_boundary');
     const newDomain = createDomainEntity(
       domainShape,
       geometryBBox,
       upstreamChordFactor,
       downstreamChordFactor,
       lateralHeightFactor,
-      existingDomain?.id
+      existingDomain?.id,
     );
-    const otherEnts = cadState.entities.filter(e => e.role !== 'domain_boundary');
+    const otherEnts = cadState.entities.filter((e) => e.role !== 'domain_boundary');
     dispatch({ type: 'REPLACE_ENTITIES', entities: [...otherEnts, newDomain] });
-    setCmdText(`DOMAIN: Generated ${domainShape.toUpperCase().replace('_', '-')} domain (←${upstreamChordFactor}c, →${downstreamChordFactor}c, ↕${lateralHeightFactor}c).`);
+    setCmdText(
+      `DOMAIN: Generated ${domainShape.toUpperCase().replace('_', '-')} domain (←${upstreamChordFactor}c, →${downstreamChordFactor}c, ↕${lateralHeightFactor}c).`,
+    );
 
     // Auto-fit camera so the generated domain completely comes into picture
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
     for (const p of newDomain.pts) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
@@ -4498,7 +5073,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       if (p.y > maxY) maxY = p.y;
     }
     if (minX !== Infinity) {
-      fitBoundingBox({ minX, maxX, minY, maxY }, 0.70);
+      fitBoundingBox({ minX, maxX, minY, maxY }, 0.7);
     }
 
     // Subtle outward expansion animation
@@ -4516,16 +5091,26 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       }
     };
     requestAnimationFrame(animate);
-  }, [domainShape, geometryBBox, upstreamChordFactor, downstreamChordFactor, lateralHeightFactor, cadState.entities, fitBoundingBox]);
+  }, [
+    domainShape,
+    geometryBBox,
+    upstreamChordFactor,
+    downstreamChordFactor,
+    lateralHeightFactor,
+    cadState.entities,
+    fitBoundingBox,
+  ]);
 
   const handleSetSelectedAsDomain = useCallback(() => {
-    const selIds = new Set(cadState.entities.filter(e => e.selected).map(e => e.id));
+    const selIds = new Set(cadState.entities.filter((e) => e.selected).map((e) => e.id));
     if (selIds.size === 0) {
-      setCmdText('DOMAIN: Select the loop (or all its segments) first, then click "Use selected loop as the domain".');
+      setCmdText(
+        'DOMAIN: Select the loop (or all its segments) first, then click "Use selected loop as the domain".',
+      );
       toast('Select the boundary loop on the canvas first.', 'info');
       return;
     }
-    const updated = cadState.entities.map(e => {
+    const updated = cadState.entities.map((e) => {
       if (selIds.has(e.id)) {
         // Manual domain: never gets autoDomain, so it is never regenerated.
         const { autoDomain, ...rest } = e;
@@ -4539,17 +5124,21 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       return e;
     });
     dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
-    setCmdText(`DOMAIN: ${selIds.size} ${selIds.size === 1 ? 'edge' : 'edges'} set as the fluid domain boundary.`);
+    setCmdText(
+      `DOMAIN: ${selIds.size} ${selIds.size === 1 ? 'edge' : 'edges'} set as the fluid domain boundary.`,
+    );
     toast('Fluid domain defined.', 'success');
   }, [cadState.entities]);
 
   const handleSetSelectedAsGeometry = useCallback(() => {
-    const selectedCount = cadState.entities.filter(e => e.selected).length;
+    const selectedCount = cadState.entities.filter((e) => e.selected).length;
     if (selectedCount === 0) {
-      setCmdText('GEOMETRY: Select one or more curves/entities on canvas first, then click "Set Selected as Geometry".');
+      setCmdText(
+        'GEOMETRY: Select one or more curves/entities on canvas first, then click "Set Selected as Geometry".',
+      );
       return;
     }
-    const updated = cadState.entities.map(e => {
+    const updated = cadState.entities.map((e) => {
       if (e.selected) {
         return { ...e, role: 'geometry' as const, layer: 'geometry' as const };
       }
@@ -4560,12 +5149,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   }, [cadState.entities]);
 
   const handleSelectAllGeometry = useCallback(() => {
-    const geomCount = cadState.entities.filter(e => e.layer !== 'construction' && e.role !== 'domain_boundary').length;
+    const geomCount = cadState.entities.filter(
+      (e) => e.layer !== 'construction' && e.role !== 'domain_boundary',
+    ).length;
     if (geomCount === 0) {
       setCmdText('GEOMETRY: No obstacle geometry found on canvas.');
       return;
     }
-    const updated = cadState.entities.map(e => ({
+    const updated = cadState.entities.map((e) => ({
       ...e,
       selected: e.layer !== 'construction' && e.role !== 'domain_boundary',
     }));
@@ -4574,19 +5165,23 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   }, [cadState.entities]);
 
   const handleClearGeometry = useCallback(() => {
-    const remaining = cadState.entities.filter(e => e.role === 'domain_boundary');
+    const remaining = cadState.entities.filter((e) => e.role === 'domain_boundary');
     dispatch({ type: 'REPLACE_ENTITIES', entities: remaining });
     setCmdText('GEOMETRY: Cleared all obstacle geometry from canvas.');
   }, [cadState.entities]);
 
   const handleAutoSuggestTags = useCallback(() => {
     const suggested = autoSuggestBoundaryTags(boundaryEdges, angleOfAttackDeg, flowType);
-    setEdgeTagMap(prev => ({ ...prev, ...suggested }));
-    setCmdText(`TAGGING: Auto-suggested boundary conditions for AoA = ${angleOfAttackDeg.toFixed(1)}°.`);
+    setEdgeTagMap((prev) => ({ ...prev, ...suggested }));
+    setCmdText(
+      `TAGGING: Auto-suggested boundary conditions for AoA = ${angleOfAttackDeg.toFixed(1)}°.`,
+    );
   }, [boundaryEdges, angleOfAttackDeg, flowType]);
 
   const handleMeshHandoff = useCallback(async () => {
-    const geomProfile = cadState.entities.find(e => e.layer !== 'construction' && e.role !== 'domain_boundary' && e.pts.length >= 2);
+    const geomProfile = cadState.entities.find(
+      (e) => e.layer !== 'construction' && e.role !== 'domain_boundary' && e.pts.length >= 2,
+    );
     if (!geomProfile && flowType === 'external') {
       setCmdText('ERROR: No obstacle geometry profile found in canvas.');
       return;
@@ -4594,7 +5189,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     setIsLoading(true);
     setCmdText('Extruding 2D sketch to OpenFOAM 2D mesh (1 cell in Z)...');
     try {
-      const pts = geomProfile ? geomProfile.pts.map(p => [p.x, p.y]) : [[0, 0], [1, 0], [1, 0.2], [0, 0.2]];
+      const pts = geomProfile
+        ? geomProfile.pts.map((p) => [p.x, p.y])
+        : [
+            [0, 0],
+            [1, 0],
+            [1, 0.2],
+            [0, 0.2],
+          ];
       const mesh = await requestMeshFromSketch({
         sketch_points: pts,
         domain_length: domainLength,
@@ -4608,7 +5210,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setCmdText(`Meshing error: ${err.message}`);
     }
     setIsLoading(false);
-  }, [cadState.entities, flowType, domainLength, domainHeight, resolution, firstLayerMm, onApplySketchMesh, cadName]);
+  }, [
+    cadState.entities,
+    flowType,
+    domainLength,
+    domainHeight,
+    resolution,
+    firstLayerMm,
+    onApplySketchMesh,
+    cadName,
+  ]);
 
   const handleDownloadBlockMeshDict = useCallback(() => {
     const content = `/*--------------------------------*- C++ -*----------------------------------*\\
@@ -4704,21 +5315,39 @@ boundary
   // Synchronize actions to parent refs for LeftStagePanel triggers
   useEffect(() => {
     if (onRequestGenerateDomainRef) onRequestGenerateDomainRef.current = handleGenerateDomain;
-    if (onRequestSetSelectedAsDomainRef) onRequestSetSelectedAsDomainRef.current = handleSetSelectedAsDomain;
-    if (onRequestSetSelectedAsGeometryRef) onRequestSetSelectedAsGeometryRef.current = handleSetSelectedAsGeometry;
-    if (onRequestSelectAllGeometryRef) onRequestSelectAllGeometryRef.current = handleSelectAllGeometry;
+    if (onRequestSetSelectedAsDomainRef)
+      onRequestSetSelectedAsDomainRef.current = handleSetSelectedAsDomain;
+    if (onRequestSetSelectedAsGeometryRef)
+      onRequestSetSelectedAsGeometryRef.current = handleSetSelectedAsGeometry;
+    if (onRequestSelectAllGeometryRef)
+      onRequestSelectAllGeometryRef.current = handleSelectAllGeometry;
     if (onRequestClearGeometryRef) onRequestClearGeometryRef.current = handleClearGeometry;
     if (onRequestAutoSuggestTagsRef) onRequestAutoSuggestTagsRef.current = handleAutoSuggestTags;
     if (onRequestMeshHandoffRef) onRequestMeshHandoffRef.current = handleMeshHandoff;
-    if (onRequestDownloadBlockMeshDictRef) onRequestDownloadBlockMeshDictRef.current = handleDownloadBlockMeshDict;
+    if (onRequestDownloadBlockMeshDictRef)
+      onRequestDownloadBlockMeshDictRef.current = handleDownloadBlockMeshDict;
   });
 
   // ── Toolbar button helper ─────────────────────────────────────────────────────
-  const Btn = ({ t, icon, label, kbd }: { t: CadTool; icon: React.ReactNode; label: string; kbd?: string }) => (
-
+  const Btn = ({
+    t,
+    icon,
+    label,
+    kbd,
+  }: {
+    t: CadTool;
+    icon: React.ReactNode;
+    label: string;
+    kbd?: string;
+  }) => (
     <button
       title={`${label}${kbd ? ` [${kbd}]` : ''}`}
-      onClick={() => { setTool(t); setIsDrawing(false); setTempPts([]); setCmdText(`${label}: ${prompt_for(t)}`); }}
+      onClick={() => {
+        setTool(t);
+        setIsDrawing(false);
+        setTempPts([]);
+        setCmdText(`${label}: ${prompt_for(t)}`);
+      }}
       className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors min-w-[42px] ${
         tool === t
           ? 'bg-[#2563EB] text-white '
@@ -4745,28 +5374,49 @@ boundary
     return m[t] ?? '';
   };
 
-  const selectedCount = cadState.entities.filter(e => e.selected).length;
+  const selectedCount = cadState.entities.filter((e) => e.selected).length;
 
   return (
-    <div className="relative w-full h-full flex flex-col bg-white overflow-hidden" style={{ fontFamily: 'Inter, sans-serif' }}>
-
+    <div
+      className="relative w-full h-full flex flex-col bg-white overflow-hidden"
+      style={{ fontFamily: 'Inter, sans-serif' }}
+    >
       {/* ═══════════════════════════════ CAD TOOLBAR ═══════════════════════════════ */}
-      <div className={`shrink-0 bg-[#F5F6F8] border-b border-[#E1E4E8] px-2 py-1 flex items-center gap-1 flex-wrap ${displayOnly ? 'hidden' : ''}`}>
-
+      <div
+        className={`shrink-0 bg-[#F5F6F8] border-b border-[#E1E4E8] px-2 py-1 flex items-center gap-1 flex-wrap ${displayOnly ? 'hidden' : ''}`}
+      >
         {/* ── File/Edit Group ────── */}
         <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <button title="Undo [Ctrl+Z]" onClick={undo} className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors">
+          <button
+            title="Undo [Ctrl+Z]"
+            onClick={undo}
+            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
+          >
             <Undo2 className="w-4 h-4" />
           </button>
-          <button title="Redo [Ctrl+Y]" onClick={redo} className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors">
+          <button
+            title="Redo [Ctrl+Y]"
+            onClick={redo}
+            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
+          >
             <Redo2 className="w-4 h-4" />
           </button>
-          <button title="Delete Selected [Del]" onClick={() => dispatch({ type: 'DELETE_SELECTED' })} disabled={selectedCount === 0}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#DC2626] disabled:opacity-30 transition-colors">
+          <button
+            title="Delete Selected [Del]"
+            onClick={() => dispatch({ type: 'DELETE_SELECTED' })}
+            disabled={selectedCount === 0}
+            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#DC2626] disabled:opacity-30 transition-colors"
+          >
             <Trash2 className="w-4 h-4" />
           </button>
-          <button title="Clear All" onClick={() => { dispatch({ type: 'CLEAR' }); setCmdText('Canvas cleared.'); }}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#DC2626] transition-colors">
+          <button
+            title="Clear All"
+            onClick={() => {
+              dispatch({ type: 'CLEAR' });
+              setCmdText('Canvas cleared.');
+            }}
+            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#DC2626] transition-colors"
+          >
             <Eraser className="w-4 h-4" />
           </button>
         </div>
@@ -4777,27 +5427,49 @@ boundary
         </div>
 
         {/* ── Create Group ─────── */}
-        <span className="text-[9px] font-semibold text-[#A5ACB5] uppercase tracking-wider px-1">Draw</span>
+        <span className="text-[9px] font-semibold text-[#A5ACB5] uppercase tracking-wider px-1">
+          Draw
+        </span>
         <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <Btn t="line"                icon={<Minus className="w-4 h-4" />}           label="Line"    kbd="L" />
-          <Btn t="polyline"            icon={<ArrowUpRight className="w-4 h-4" />}    label="Pline"   kbd="P" />
-          <Btn t="rectangle"           icon={<Square className="w-4 h-4" />}          label="Rect"    kbd="R" />
-          <Btn t="circle_center_radius" icon={<Circle className="w-4 h-4" />}         label="Circle"  kbd="C" />
-          <Btn t="ellipse_center"      icon={<CircleDot className="w-4 h-4" />}       label="Ellipse" kbd="E" />
-          <Btn t="arc_center"          icon={<TriangleRight className="w-4 h-4" />}   label="Arc"     kbd="A" />
-          <Btn t="construction_line"   icon={<ScanLine className="w-4 h-4" />}        label="XLine"   />
+          <Btn t="line" icon={<Minus className="w-4 h-4" />} label="Line" kbd="L" />
+          <Btn t="polyline" icon={<ArrowUpRight className="w-4 h-4" />} label="Pline" kbd="P" />
+          <Btn t="rectangle" icon={<Square className="w-4 h-4" />} label="Rect" kbd="R" />
+          <Btn
+            t="circle_center_radius"
+            icon={<Circle className="w-4 h-4" />}
+            label="Circle"
+            kbd="C"
+          />
+          <Btn
+            t="ellipse_center"
+            icon={<CircleDot className="w-4 h-4" />}
+            label="Ellipse"
+            kbd="E"
+          />
+          <Btn t="arc_center" icon={<TriangleRight className="w-4 h-4" />} label="Arc" kbd="A" />
+          <Btn t="construction_line" icon={<ScanLine className="w-4 h-4" />} label="XLine" />
         </div>
 
         {/* ── Modify Group ────── */}
-        <span className="text-[9px] font-semibold text-[#A5ACB5] uppercase tracking-wider px-1">Modify</span>
+        <span className="text-[9px] font-semibold text-[#A5ACB5] uppercase tracking-wider px-1">
+          Modify
+        </span>
         <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <button title="Fillet" onClick={applyFillet} disabled={isLoading}
-            className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${isLoading ? 'opacity-40' : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'}`}>
+          <button
+            title="Fillet"
+            onClick={applyFillet}
+            disabled={isLoading}
+            className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${isLoading ? 'opacity-40' : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'}`}
+          >
             <CornerUpRight className="w-4 h-4" />
             <span>Fillet</span>
           </button>
-          <button title="Offset" onClick={applyOffset} disabled={isLoading}
-            className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${isLoading ? 'opacity-40' : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'}`}>
+          <button
+            title="Offset"
+            onClick={applyOffset}
+            disabled={isLoading}
+            className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${isLoading ? 'opacity-40' : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'}`}
+          >
             <Maximize2 className="w-4 h-4" />
             <span>Offset</span>
           </button>
@@ -4807,23 +5479,41 @@ boundary
         {/* ── Modify Params ──── */}
         <div className="flex items-center gap-2 text-[10px] font-mono text-[#69717D] pr-2 border-r border-[#E1E4E8] mr-1">
           <label className="flex items-center gap-1">
-            R: <input type="number" step="0.005" value={filletR} onChange={e => setFilletR(+e.target.value)}
-              className="w-14 px-1 py-0.5 bg-white border border-[#E1E4E8] rounded text-right text-[#171A1F] font-mono text-[10px]" />
+            R:{' '}
+            <input
+              type="number"
+              step="0.005"
+              value={filletR}
+              onChange={(e) => setFilletR(+e.target.value)}
+              className="w-14 px-1 py-0.5 bg-white border border-[#E1E4E8] rounded text-right text-[#171A1F] font-mono text-[10px]"
+            />
           </label>
           <label className="flex items-center gap-1">
-            Δd: <input type="number" step="0.005" value={offsetD} onChange={e => setOffsetD(+e.target.value)}
-              className="w-14 px-1 py-0.5 bg-white border border-[#E1E4E8] rounded text-right text-[#171A1F] font-mono text-[10px]" />
+            Δd:{' '}
+            <input
+              type="number"
+              step="0.005"
+              value={offsetD}
+              onChange={(e) => setOffsetD(+e.target.value)}
+              className="w-14 px-1 py-0.5 bg-white border border-[#E1E4E8] rounded text-right text-[#171A1F] font-mono text-[10px]"
+            />
           </label>
         </div>
 
         {/* ── View Controls ──── */}
         <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <button title="Zoom In" onClick={() => setZoom(z => Math.min(25000, z * 1.35))}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors">
+          <button
+            title="Zoom In"
+            onClick={() => setZoom((z) => Math.min(25000, z * 1.35))}
+            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
+          >
             <ZoomIn className="w-4 h-4" />
           </button>
-          <button title="Zoom Out" onClick={() => setZoom(z => Math.max(0.5, z / 1.35))}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors">
+          <button
+            title="Zoom Out"
+            onClick={() => setZoom((z) => Math.max(0.5, z / 1.35))}
+            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
+          >
             <ZoomOut className="w-4 h-4" />
           </button>
           <button
@@ -4832,12 +5522,23 @@ boundary
               if (showMesh && meshData?.nodes?.length) {
                 const xs = meshData.nodes.map((node: number[]) => node[0]);
                 const ys = meshData.nodes.map((node: number[]) => node[1]);
-                fitBoundingBox({ minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }, 0.72);
+                fitBoundingBox(
+                  {
+                    minX: Math.min(...xs),
+                    maxX: Math.max(...xs),
+                    minY: Math.min(...ys),
+                    maxY: Math.max(...ys),
+                  },
+                  0.72,
+                );
                 return;
               }
-              const allGeom = cadState.entities.filter(e => e.layer !== 'construction');
+              const allGeom = cadState.entities.filter((e) => e.layer !== 'construction');
               if (allGeom.length > 0) {
-                let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+                let minX = Infinity,
+                  maxX = -Infinity,
+                  minY = Infinity,
+                  maxY = -Infinity;
                 for (const ent of allGeom) {
                   for (const p of ent.pts) {
                     if (p.x < minX) minX = p.x;
@@ -4851,7 +5552,10 @@ boundary
                   return;
                 }
               }
-              const bottomBarPx = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar')) || 32;
+              const bottomBarPx =
+                parseFloat(
+                  getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar'),
+                ) || 32;
               setZoom(INITIAL_ZOOM);
               setPan({ x: 0, y: -(bottomBarPx / 2) });
             }}
@@ -4864,24 +5568,51 @@ boundary
         {/* ── Snap Toggles ──── */}
         <div className="flex items-center gap-1">
           {[
-            { label: 'GRID', title: 'Toggle Grid (F7)', state: showGrid, toggle: () => setShowGrid(g => !g), icon: <Grid3x3 className="w-3 h-3" /> },
-            { label: 'SNAP', title: 'Toggle OSNAP (F3)', state: snapEnabled, toggle: () => setSnapEnabled(s => !s), icon: <Magnet className="w-3 h-3" /> },
-            { label: 'ORTHO', title: 'Ortho Lock (F8)', state: ortho, toggle: () => setOrtho(o => !o), icon: <Crosshair className="w-3 h-3" /> },
-            { label: 'CONSTR', title: 'Construction layer: new geometry is drawn as non-solid reference lines', state: constructionMode, toggle: () => setConstructionMode(c => !c), icon: <ScanLine className="w-3 h-3" /> },
+            {
+              label: 'GRID',
+              title: 'Toggle Grid (F7)',
+              state: showGrid,
+              toggle: () => setShowGrid((g) => !g),
+              icon: <Grid3x3 className="w-3 h-3" />,
+            },
+            {
+              label: 'SNAP',
+              title: 'Toggle OSNAP (F3)',
+              state: snapEnabled,
+              toggle: () => setSnapEnabled((s) => !s),
+              icon: <Magnet className="w-3 h-3" />,
+            },
+            {
+              label: 'ORTHO',
+              title: 'Ortho Lock (F8)',
+              state: ortho,
+              toggle: () => setOrtho((o) => !o),
+              icon: <Crosshair className="w-3 h-3" />,
+            },
+            {
+              label: 'CONSTR',
+              title: 'Construction layer: new geometry is drawn as non-solid reference lines',
+              state: constructionMode,
+              toggle: () => setConstructionMode((c) => !c),
+              icon: <ScanLine className="w-3 h-3" />,
+            },
           ].map(({ label, title, state: on, toggle, icon }) => (
-            <button key={label} title={title} onClick={toggle}
+            <button
+              key={label}
+              title={title}
+              onClick={toggle}
               className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors ${
-                on ? 'bg-[#2563EB] text-white border-[#2563EB]' : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#2563EB]'
-              }`}>
+                on
+                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                  : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#2563EB]'
+              }`}
+            >
               {icon}
               <span>{label}</span>
             </button>
           ))}
         </div>
       </div>
-
-
-
 
       {/* ════════════════════ CANVAS ════════════════════════════════════════════ */}
       <div
@@ -4891,14 +5622,22 @@ boundary
           cursor: isPickingPlotPoints
             ? 'crosshair'
             : draggingDomainHandle
-            ? (draggingDomainHandle === 'top' || draggingDomainHandle === 'bottom' ? 'ns-resize' : 'ew-resize')
-            : hoveredDomainHandle
-            ? (hoveredDomainHandle === 'top' || hoveredDomainHandle === 'bottom' ? 'ns-resize' : 'ew-resize')
-            : draggingAoAHandle || hoveredAoAHandle
-            ? 'crosshair'
-            : tool === 'select'
-            ? 'default'
-            : 'crosshair',
+              ? draggingDomainHandle === 'top' || draggingDomainHandle === 'bottom'
+                ? 'ns-resize'
+                : 'ew-resize'
+              : hoveredDomainHandle
+                ? hoveredDomainHandle === 'top' || hoveredDomainHandle === 'bottom'
+                  ? 'ns-resize'
+                  : 'ew-resize'
+                : draggingAoAHandle || hoveredAoAHandle
+                  ? 'crosshair'
+                  : showBlocking && canvasMode === 'cad' && blockTool !== 'select'
+                    ? blockTool === 'delete'
+                      ? 'pointer'
+                      : 'crosshair'
+                    : tool === 'select'
+                      ? 'default'
+                      : 'crosshair',
         }}
       >
         {/* Top Controls Bar - only when it actually has controls (blocks/mesh
@@ -4908,45 +5647,43 @@ boundary
           <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-xs select-none">
             {!meshOnly ? (
               <>
-                {(
-                  [
-                    // "Blocks" only exists for structured meshing (showBlocking).
-                    ...(showBlocking
-                      ? [
-                          {
-                            id: 'blocks',
-                            label: 'Blocks',
-                            active: canvasMode === 'cad',
-                            disabled: false,
-                            title: undefined as string | undefined,
-                            onClick: () => setCanvasMode('cad'),
-                          },
-                        ]
-                      : []),
-                    {
-                      id: 'mesh',
-                      label: 'Mesh',
-                      active: canvasMode === 'mesh' && !showMeshQuality,
-                      disabled: !meshData || meshStale,
-                      title: undefined as string | undefined,
-                      onClick: () => {
-                        setCanvasMode('mesh');
-                        setShowMeshQuality(false);
-                      },
+                {[
+                  // "Blocks" only exists for structured meshing (showBlocking).
+                  ...(showBlocking
+                    ? [
+                        {
+                          id: 'blocks',
+                          label: 'Blocks',
+                          active: canvasMode === 'cad',
+                          disabled: false,
+                          title: undefined as string | undefined,
+                          onClick: () => setCanvasMode('cad'),
+                        },
+                      ]
+                    : []),
+                  {
+                    id: 'mesh',
+                    label: 'Mesh',
+                    active: canvasMode === 'mesh' && !showMeshQuality,
+                    disabled: !meshData || meshStale,
+                    title: undefined as string | undefined,
+                    onClick: () => {
+                      setCanvasMode('mesh');
+                      setShowMeshQuality(false);
                     },
-                    {
-                      id: 'quality',
-                      label: 'Quality',
-                      active: canvasMode === 'mesh' && showMeshQuality,
-                      disabled: !meshData || meshStale,
-                      title: 'Colour each cell by skewness - spot bad cells before solving',
-                      onClick: () => {
-                        setCanvasMode('mesh');
-                        setShowMeshQuality(true);
-                      },
+                  },
+                  {
+                    id: 'quality',
+                    label: 'Quality',
+                    active: canvasMode === 'mesh' && showMeshQuality,
+                    disabled: !meshData || meshStale,
+                    title: 'Colour each cell by skewness - spot bad cells before solving',
+                    onClick: () => {
+                      setCanvasMode('mesh');
+                      setShowMeshQuality(true);
                     },
-                  ]
-                ).map((m) => (
+                  },
+                ].map((m) => (
                   <button
                     key={m.id}
                     onClick={() => !m.disabled && m.onClick()}
@@ -4962,7 +5699,9 @@ boundary
                   </button>
                 ))}
                 {meshStale && showMesh && (
-                  <span className="ml-1 text-[10px] text-[#D97706] font-medium">stale - regenerate</span>
+                  <span className="ml-1 text-[10px] text-[#D97706] font-medium">
+                    stale - regenerate
+                  </span>
                 )}
               </>
             ) : showField ? (
@@ -5000,6 +5739,312 @@ boundary
         {/* Solver stage: live cell-based field preview controls - mesh
             wireframe and field colouring are independent toggles, not a
             single radio group, and each field button re-clicks off. */}
+        {/* Block editor tools - Blocks view only. Geometry is locked here; these
+            edit the block topology, ICEM CFD Hexa style. */}
+        {displayOnly &&
+          showBlocking &&
+          canvasMode === 'cad' &&
+          blockMode === 'manual' &&
+          onUpdateBlocking &&
+          (() => {
+            const tools = [
+              { id: 'select', label: 'Select', key: 'V' },
+              { id: 'draw', label: 'Draw', key: 'B' },
+              { id: 'split', label: 'Split', key: 'K' },
+              { id: 'ogrid', label: 'O-grid', key: 'O' },
+              { id: 'assoc', label: 'Associate', key: 'A' },
+              { id: 'mergeV', label: 'Merge vtx', key: 'M' },
+              { id: 'mergeB', label: 'Merge blk', key: 'J' },
+              { id: 'delete', label: 'Delete', key: 'X' },
+            ] as const;
+            const selEdge = selectedEdgeId
+              ? blocking?.edges.find((x) => x.id === selectedEdgeId)
+              : undefined;
+            const curveNames = (ids?: string[]) =>
+              (ids ?? [])
+                .map((id) => {
+                  const ent = cadState.entities.find((x) => x.id === id);
+                  return ent
+                    ? `${ent.type}${ent.role === 'domain_boundary' ? ' (domain)' : ''}`
+                    : 'missing curve';
+                })
+                .join(', ');
+            const btn =
+              'px-2 py-0.5 rounded font-medium text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed';
+            return (
+              <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1 select-none max-w-[calc(100%-14rem)]">
+                <div className="flex items-center gap-1.5">
+                  <span className="px-1.5 py-0.5 rounded border border-[#F59E0B] text-[#B45309] bg-[#FFFBEB] text-[9px] font-semibold uppercase tracking-wider">
+                    Beta
+                  </span>
+                  <div className="flex items-center gap-0.5 flex-wrap bg-white border border-[#E1E4E8] rounded px-1.5 py-1 text-[11px]">
+                    {tools.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => {
+                          setBlockTool(t.id);
+                          setBlockDrawPts([]);
+                          setBlockMsg(null);
+                        }}
+                        className={`px-2 py-0.5 rounded font-medium ${
+                          blockTool === t.id
+                            ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
+                            : 'text-[#69717D] hover:text-[#171A1F]'
+                        }`}
+                      >
+                        {t.label}
+                        <span className="ml-1 text-[9px] text-[#9AA1AB]">{t.key}</span>
+                      </button>
+                    ))}
+                    <span className="w-px h-4 bg-[#E1E4E8] mx-0.5" />
+                    <button onClick={initializeBlocks} className={btn}>
+                      Initialize
+                    </button>
+                    <button
+                      onClick={snapProject}
+                      disabled={!blocking?.vertices.some((v) => v.curves?.length)}
+                      className={btn}
+                    >
+                      Snap project
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!blocking?.blocks.length) return;
+                        if (blockMsg?.text !== 'Click again to clear.') {
+                          setBlockMsg({ text: 'Click again to clear.', error: true });
+                          return;
+                        }
+                        onUpdateBlocking(emptyBlocking());
+                        setBlockTool('draw');
+                        setBlockDrawPts([]);
+                        setBlockMsg({ text: 'All blocks cleared.', error: false });
+                      }}
+                      disabled={!blocking?.blocks.length}
+                      className="px-2 py-0.5 rounded font-medium text-[#69717D] hover:text-[#DC2626] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                </div>
+
+                {/* Tool options */}
+                {blockTool === 'ogrid' && (
+                  <div className="flex items-center gap-2 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-[11px]">
+                    <span className="text-[#434A54]">Centre block size</span>
+                    <input
+                      type="range"
+                      min={0.2}
+                      max={0.8}
+                      step={0.05}
+                      value={ogridScale}
+                      onChange={(ev) => setOgridScale(parseFloat(ev.target.value))}
+                      className="w-28 accent-[#2563EB]"
+                    />
+                    <span className="font-mono text-[#171A1F] w-8">{ogridScale.toFixed(2)}</span>
+                    <span className="text-[#9AA1AB]">of the block</span>
+                  </div>
+                )}
+                {blockTool === 'assoc' && (
+                  <div className="flex items-center gap-1 flex-wrap bg-white border border-[#E1E4E8] rounded px-2 py-1 text-[11px]">
+                    <span
+                      className={
+                        assocStage === 'edges' ? 'font-semibold text-[#171A1F]' : 'text-[#69717D]'
+                      }
+                    >
+                      1 Pick edges ({assocEdges.length})
+                    </span>
+                    <span className="text-[#9AA1AB]">then</span>
+                    <span
+                      className={
+                        assocStage === 'curve' ? 'font-semibold text-[#171A1F]' : 'text-[#69717D]'
+                      }
+                    >
+                      2 Click a curve
+                    </span>
+                    <span className="w-px h-4 bg-[#E1E4E8] mx-1" />
+                    {assocStage === 'edges' ? (
+                      <button
+                        disabled={!assocEdges.length}
+                        onClick={() => {
+                          setAssocStage('curve');
+                        }}
+                        className="px-2 py-0.5 rounded bg-[#2563EB] text-white font-medium disabled:opacity-40"
+                      >
+                        Pick curve (Enter)
+                      </button>
+                    ) : (
+                      <button onClick={() => setAssocStage('edges')} className={btn}>
+                        Back to edges
+                      </button>
+                    )}
+                    <button
+                      disabled={!assocEdges.length}
+                      onClick={() => {
+                        if (!blocking) return;
+                        onUpdateBlocking(disassociateEdges(blocking, assocEdges));
+                        setBlockMsg({
+                          text: `${assocEdges.length} edge${assocEdges.length > 1 ? 's' : ''} disassociated.`,
+                          error: false,
+                        });
+                        setAssocEdges([]);
+                      }}
+                      className={btn}
+                    >
+                      Disassociate
+                    </button>
+                    <button
+                      disabled={!assocEdges.length}
+                      onClick={() => setAssocEdges([])}
+                      className={btn}
+                    >
+                      Clear picks
+                    </button>
+                  </div>
+                )}
+                {blockTool === 'select' && selEdge && blocking && (
+                  <div className="bg-white border border-[#E1E4E8] rounded px-2 py-1.5 text-[11px] space-y-1.5 w-[300px]">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-[#171A1F]">Edge params</span>
+                      <span className="text-[#9AA1AB]">
+                        {selEdge.patch ??
+                          (unpatchedEdgeIds.has(selEdge.id) ? 'no patch' : 'internal')}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5 items-end">
+                      <label className="flex flex-col gap-0.5">
+                        <span className="text-[10px] text-[#69717D]">Nodes</span>
+                        <input
+                          type="number"
+                          min={2}
+                          step={1}
+                          defaultValue={selEdge.nodes}
+                          key={`n-${selEdge.id}-${selEdge.nodes}`}
+                          onBlur={(ev) => {
+                            const n = parseInt(ev.target.value, 10);
+                            if (n >= 2 && n !== selEdge.nodes)
+                              onUpdateBlocking(setEdgeParams(blocking, selEdge.id, { nodes: n }));
+                          }}
+                          onKeyDown={(ev) => {
+                            if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
+                          }}
+                          className="px-1.5 py-0.5 border border-[#E1E4E8] rounded font-mono"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-0.5">
+                        <span className="text-[10px] text-[#69717D]">Spacing law</span>
+                        <select
+                          value={selEdge.law}
+                          onChange={(ev) =>
+                            onUpdateBlocking(
+                              setEdgeParams(blocking, selEdge.id, {
+                                law: ev.target.value as typeof selEdge.law,
+                              }),
+                            )
+                          }
+                          className="px-1 py-0.5 border border-[#E1E4E8] rounded bg-white"
+                        >
+                          <option value="uniform">Uniform</option>
+                          <option value="geometric">Geometric</option>
+                          <option value="bump">Bump</option>
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-0.5">
+                        <span className="text-[10px] text-[#69717D]">Ratio</span>
+                        <input
+                          type="number"
+                          min={0.01}
+                          step={0.1}
+                          defaultValue={selEdge.ratio}
+                          key={`r-${selEdge.id}-${selEdge.ratio}`}
+                          disabled={selEdge.law === 'uniform'}
+                          onBlur={(ev) => {
+                            const r = parseFloat(ev.target.value);
+                            if (r > 0 && r !== selEdge.ratio)
+                              onUpdateBlocking(setEdgeParams(blocking, selEdge.id, { ratio: r }));
+                          }}
+                          onKeyDown={(ev) => {
+                            if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
+                          }}
+                          className="px-1.5 py-0.5 border border-[#E1E4E8] rounded font-mono disabled:bg-[#F5F6F8]"
+                        />
+                      </label>
+                    </div>
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <button
+                        onClick={() => {
+                          onUpdateBlocking(
+                            setEdgeParams(blocking, selEdge.id, {
+                              law: selEdge.law,
+                              ratio: selEdge.ratio,
+                              copyParallel: true,
+                            }),
+                          );
+                          setBlockMsg({
+                            text: 'Spacing copied to every parallel edge.',
+                            error: false,
+                          });
+                        }}
+                        className="px-2 py-0.5 rounded border border-[#E1E4E8] hover:border-[#2563EB] hover:text-[#1D4ED8]"
+                      >
+                        Copy to parallel edges
+                      </button>
+                      {selEdge.curves?.length ? (
+                        <>
+                          <span className="text-[#059669]">on {curveNames(selEdge.curves)}</span>
+                          <button
+                            onClick={() =>
+                              onUpdateBlocking(disassociateEdges(blocking, [selEdge.id]))
+                            }
+                            className={btn}
+                          >
+                            Disassociate
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-[#9AA1AB]">not associated</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {(blockMsg ||
+                  badBlockIds.size > 0 ||
+                  outsideBlockIds.size > 0 ||
+                  unpatchedEdgeIds.size > 0 ||
+                  (blockCoverage !== null && blockCoverage < 0.995)) && (
+                  <div className="bg-white border border-[#E1E4E8] rounded px-2 py-1 text-[11px] leading-snug max-w-[520px]">
+                    {blockMsg && (
+                      <div className={blockMsg.error ? 'text-[#DC2626]' : 'text-[#434A54]'}>
+                        {blockMsg.text}
+                      </div>
+                    )}
+                    {outsideBlockIds.size > 0 && (
+                      <div className="text-[#DC2626]">
+                        {outsideBlockIds.size} block{outsideBlockIds.size > 1 ? 's' : ''} outside
+                        the fluid
+                      </div>
+                    )}
+                    {badBlockIds.size > 0 && (
+                      <div className="text-[#DC2626]">
+                        {badBlockIds.size} block{badBlockIds.size > 1 ? 's' : ''} over a body
+                      </div>
+                    )}
+                    {unpatchedEdgeIds.size > 0 && (
+                      <div className="text-[#DC2626]">
+                        {unpatchedEdgeIds.size} unpatched boundary edge
+                        {unpatchedEdgeIds.size > 1 ? 's' : ''}
+                      </div>
+                    )}
+                    {blockCoverage !== null && blockCoverage < 0.995 && (
+                      <div className="text-[#D97706]">
+                        {Math.round(blockCoverage * 100)}% of the fluid blocked
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         {displayOnly && meshOnly && !showField && livePreview && (
           <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-xs select-none">
             <button
@@ -5047,66 +6092,95 @@ boundary
           onAuxClick={handleAuxClick}
           onDoubleClick={handleDoubleClick}
           onWheel={handleWheel}
-          onContextMenu={e => e.preventDefault()}
+          onContextMenu={(e) => e.preventDefault()}
           tabIndex={-1}
         />
 
         {/* ─── Field colour bar (Results) ─── */}
-        {showField && Array.isArray(fieldData?.fields?.[activeField]) && (() => {
-          const r = fieldData?.ranges?.[activeField] || [0, 1];
-          const stops = Array.from({ length: 12 }, (_, i) => colormapRGB(1 - i / 11, colormap));
-          const labels: Record<string, { name: string; unit: string }> = {
-            U_mag: { name: '[U]', unit: 'm/s' },
-            p: { name: '[p]', unit: 'Pa' },
-            k: { name: '[k]', unit: 'm²/s²' },
-            omega: { name: '[ω]', unit: '1/s' },
-            vorticity: { name: '[∇×U]', unit: '1/s' },
-          };
-          const fieldLabel = labels[activeField] || { name: activeField, unit: '' };
-          return (
-            <div className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none" style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}>
-              <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
-                {fieldLabel.name} {fieldLabel.unit}
+        {showField &&
+          Array.isArray(fieldData?.fields?.[activeField]) &&
+          (() => {
+            const r = fieldData?.ranges?.[activeField] || [0, 1];
+            const stops = Array.from({ length: 12 }, (_, i) => colormapRGB(1 - i / 11, colormap));
+            const labels: Record<string, { name: string; unit: string }> = {
+              U_mag: { name: '[U]', unit: 'm/s' },
+              p: { name: '[p]', unit: 'Pa' },
+              k: { name: '[k]', unit: 'm²/s²' },
+              omega: { name: '[ω]', unit: '1/s' },
+              vorticity: { name: '[∇×U]', unit: '1/s' },
+            };
+            const fieldLabel = labels[activeField] || { name: activeField, unit: '' };
+            return (
+              <div
+                className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+                style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+              >
+                <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
+                  {fieldLabel.name} {fieldLabel.unit}
+                </div>
+                <div className="flex items-stretch justify-end h-56">
+                  <div className="flex flex-col justify-between items-end whitespace-nowrap">
+                    <span>{Number(r[1]).toPrecision(3)}</span>
+                    <span>{Number((Number(r[0]) + Number(r[1])) / 2).toPrecision(3)}</span>
+                    <span>{Number(r[0]).toPrecision(3)}</span>
+                  </div>
+                  <div
+                    className="ml-1 w-2.5 shrink-0 rounded-sm border border-[#DDE2E8]"
+                    style={{ background: `linear-gradient(to bottom, ${stops.join(',')})` }}
+                  />
+                </div>
               </div>
-              <div className="flex items-stretch justify-end h-56">
-                <div className="flex flex-col justify-between items-end whitespace-nowrap"><span>{Number(r[1]).toPrecision(3)}</span><span>{Number((Number(r[0]) + Number(r[1])) / 2).toPrecision(3)}</span><span>{Number(r[0]).toPrecision(3)}</span></div>
-                <div className="ml-1 w-2.5 shrink-0 rounded-sm border border-[#DDE2E8]" style={{ background: `linear-gradient(to bottom, ${stops.join(',')})` }} />
-              </div>
-            </div>
-          );
-        })()}
+            );
+          })()}
 
         {/* ─── Mesh-quality legend (Mesh tab only) ─── */}
-        {!showField && !meshOnly && canvasMode === 'mesh' && showMeshQuality && meshSkew && meshSkewStats && (
-          <div
-            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
-            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
-          >
-            <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">Cell skewness</div>
-            <div className="flex items-stretch justify-end h-56">
-              <div className="flex flex-col justify-between items-end whitespace-nowrap pr-1">
-                <span className="text-[#DC2626] font-semibold">1.0 · degenerate</span>
-                <span>0.80 · poor</span>
-                <span>0.50 · fair</span>
-                <span>0.25 · good</span>
-                <span className="text-[#16A34A] font-semibold">0.0 · ideal</span>
+        {!showField &&
+          !meshOnly &&
+          canvasMode === 'mesh' &&
+          showMeshQuality &&
+          meshSkew &&
+          meshSkewStats && (
+            <div
+              className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+              style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+            >
+              <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
+                Cell skewness
               </div>
-              <div
-                className="w-3 shrink-0 rounded-sm border border-[#DDE2E8]"
-                style={{
-                  background: `linear-gradient(to bottom, ${Array.from({ length: 16 }, (_, i) => colormapRGB(1 - i / 15, 'quality')).join(',')})`,
-                }}
-              />
-            </div>
-            <div className="mt-2 pt-2 border-t border-[#EDEFF3] text-right leading-relaxed">
-              <div>max <span className="text-[#171A1F] font-semibold">{meshSkewStats.max.toFixed(2)}</span></div>
-              <div>median <span className="text-[#171A1F] font-semibold">{meshSkewStats.median.toFixed(2)}</span></div>
-              <div className={meshSkewStats.poorPct > 2 ? 'text-[#DC2626] font-semibold' : ''}>
-                {meshSkewStats.poor} cells &gt; 0.8 ({meshSkewStats.poorPct.toFixed(1)}%)
+              <div className="flex items-stretch justify-end h-56">
+                <div className="flex flex-col justify-between items-end whitespace-nowrap pr-1">
+                  <span className="text-[#DC2626] font-semibold">1.0 · degenerate</span>
+                  <span>0.80 · poor</span>
+                  <span>0.50 · fair</span>
+                  <span>0.25 · good</span>
+                  <span className="text-[#16A34A] font-semibold">0.0 · ideal</span>
+                </div>
+                <div
+                  className="w-3 shrink-0 rounded-sm border border-[#DDE2E8]"
+                  style={{
+                    background: `linear-gradient(to bottom, ${Array.from({ length: 16 }, (_, i) => colormapRGB(1 - i / 15, 'quality')).join(',')})`,
+                  }}
+                />
+              </div>
+              <div className="mt-2 pt-2 border-t border-[#EDEFF3] text-right leading-relaxed">
+                <div>
+                  max{' '}
+                  <span className="text-[#171A1F] font-semibold">
+                    {meshSkewStats.max.toFixed(2)}
+                  </span>
+                </div>
+                <div>
+                  median{' '}
+                  <span className="text-[#171A1F] font-semibold">
+                    {meshSkewStats.median.toFixed(2)}
+                  </span>
+                </div>
+                <div className={meshSkewStats.poorPct > 2 ? 'text-[#DC2626] font-semibold' : ''}>
+                  {meshSkewStats.poor} cells &gt; 0.8 ({meshSkewStats.poorPct.toFixed(1)}%)
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
         {/* ─── Live solver preview legend (Solver tab) ─── */}
         {liveVals && (
@@ -5169,13 +6243,19 @@ boundary
                 title={transientPlaying ? 'Pause' : 'Play Simulation'}
                 className="p-2 rounded-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white disabled:opacity-40 disabled:pointer-events-none transition-transform active:scale-95 flex items-center justify-center mx-0.5"
               >
-                {transientPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                {transientPlaying ? (
+                  <Pause className="w-4 h-4 fill-current" />
+                ) : (
+                  <Play className="w-4 h-4 fill-current ml-0.5" />
+                )}
               </button>
 
               {/* Next Frame */}
               <button
                 onClick={() => onSelectTransientFrame?.(transientFrameIndex + 1)}
-                disabled={transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1}
+                disabled={
+                  transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1
+                }
                 title="Next Frame"
                 className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
@@ -5185,7 +6265,9 @@ boundary
               {/* Last Frame */}
               <button
                 onClick={() => onSelectTransientFrame?.(transientTimes.length - 1)}
-                disabled={transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1}
+                disabled={
+                  transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1
+                }
                 title="Last Frame"
                 className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
@@ -5197,10 +6279,19 @@ boundary
             <div className="flex-1 flex flex-col justify-center min-w-0 px-1 gap-1">
               <div className="flex items-center justify-between text-[10px] font-mono text-[#69717D]">
                 <span>
-                  Time: <strong className="text-[#171A1F]">{transientTimes[transientFrameIndex] !== undefined ? `${transientTimes[transientFrameIndex]}s` : '0.00s'}</strong>
+                  Time:{' '}
+                  <strong className="text-[#171A1F]">
+                    {transientTimes[transientFrameIndex] !== undefined
+                      ? `${transientTimes[transientFrameIndex]}s`
+                      : '0.00s'}
+                  </strong>
                 </span>
                 <span>
-                  Frame <strong className="text-[#171A1F]">{transientTimes.length > 0 ? transientFrameIndex + 1 : 0}</strong> / {transientTimes.length || 1}
+                  Frame{' '}
+                  <strong className="text-[#171A1F]">
+                    {transientTimes.length > 0 ? transientFrameIndex + 1 : 0}
+                  </strong>{' '}
+                  / {transientTimes.length || 1}
                 </span>
               </div>
               <input
@@ -5256,7 +6347,8 @@ boundary
                   No flow field stored for this run
                 </h3>
                 <p className="text-[11px] text-[#69717D] leading-relaxed">
-                  {historicalStatus.error.toLowerCase().includes('404') || historicalStatus.error.toLowerCase().includes('no stored')
+                  {historicalStatus.error.toLowerCase().includes('404') ||
+                  historicalStatus.error.toLowerCase().includes('no stored')
                     ? 'This solver run has no stored field snapshot on disk. It may have errored or stopped before fields were written.'
                     : historicalStatus.error}
                 </p>
@@ -5275,76 +6367,81 @@ boundary
         )}
 
         {/* ─── Dynamic Dimension Input Box (Onshape / Fusion 360 style) ─── */}
-        {!displayOnly && dimPrompt && (() => {
-          const screenPos = toScreen(dimPrompt.worldPos.x, dimPrompt.worldPos.y);
-          const containerW = containerRef.current?.clientWidth || 800;
-          const containerH = containerRef.current?.clientHeight || 600;
-          const posX = Math.max(12, Math.min(containerW - 270, screenPos.x - 100));
-          const posY = Math.max(12, Math.min(containerH - 60, screenPos.y - 48));
+        {!displayOnly &&
+          dimPrompt &&
+          (() => {
+            const screenPos = toScreen(dimPrompt.worldPos.x, dimPrompt.worldPos.y);
+            const containerW = containerRef.current?.clientWidth || 800;
+            const containerH = containerRef.current?.clientHeight || 600;
+            const posX = Math.max(12, Math.min(containerW - 270, screenPos.x - 100));
+            const posY = Math.max(12, Math.min(containerH - 60, screenPos.y - 48));
 
-          return (
-            <div
-              className="absolute z-30 flex items-center gap-2 bg-white text-[#171A1F] px-2.5 py-1.5 rounded-sm border border-[#E1E4E8] text-xs font-mono select-none transition-all duration-75"
-              style={{ left: `${posX}px`, top: `${posY}px` }}
-              onClick={(e) => e.stopPropagation()}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              {/* Field 1 */}
-              <div className="flex items-center gap-1">
-                <span className="text-[#2563EB] font-bold text-[11px]">{dimPrompt.label1}:</span>
-                <input
-                  ref={input1Ref}
-                  type="number"
-                  step="any"
-                  value={inputVal1}
-                  onChange={(e) => {
-                    if (dimPrompt.live) setManualDim(true);
-                    setInputVal1(e.target.value);
-                    if (dimPrompt.type === 'circle' && dimPrompt.label2 === 'Ø') {
-                      const n = parseFloat(e.target.value);
-                      if (!isNaN(n)) setInputVal2((n * 2).toFixed(4));
-                    }
-                  }}
-                  onKeyDown={handleDimKeyDown}
-                  className="w-20 px-1.5 py-0.5 bg-[#F5F6F8] hover:bg-white focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-right text-[#171A1F] font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
-                />
-              </div>
-
-              {/* Field 2 */}
-              {dimPrompt.label2 && (
+            return (
+              <div
+                className="absolute z-30 flex items-center gap-2 bg-white text-[#171A1F] px-2.5 py-1.5 rounded-sm border border-[#E1E4E8] text-xs font-mono select-none transition-all duration-75"
+                style={{ left: `${posX}px`, top: `${posY}px` }}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {/* Field 1 */}
                 <div className="flex items-center gap-1">
-                  <span className="text-[#2563EB] font-bold text-[11px]">{dimPrompt.label2}:</span>
+                  <span className="text-[#2563EB] font-bold text-[11px]">{dimPrompt.label1}:</span>
                   <input
-                    ref={input2Ref}
+                    ref={input1Ref}
                     type="number"
                     step="any"
-                    value={inputVal2}
+                    value={inputVal1}
                     onChange={(e) => {
                       if (dimPrompt.live) setManualDim(true);
-                      setInputVal2(e.target.value);
+                      setInputVal1(e.target.value);
                       if (dimPrompt.type === 'circle' && dimPrompt.label2 === 'Ø') {
                         const n = parseFloat(e.target.value);
-                        if (!isNaN(n)) setInputVal1((n / 2).toFixed(4));
+                        if (!isNaN(n)) setInputVal2((n * 2).toFixed(4));
                       }
                     }}
                     onKeyDown={handleDimKeyDown}
-                    className="w-18 px-1.5 py-0.5 bg-[#F5F6F8] hover:bg-white focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-right text-[#171A1F] font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
+                    className="w-20 px-1.5 py-0.5 bg-[#F5F6F8] hover:bg-white focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-right text-[#171A1F] font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
                   />
                 </div>
-              )}
 
-              {/* Hints */}
-              <div className="flex items-center gap-1 pl-1.5 border-l border-[#E1E4E8] text-[9px] text-[#69717D]">
-                <span className="px-1 py-0.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-[8px] font-semibold">Tab ⇥</span>
-                <span className="px-1 py-0.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-[8px] font-semibold">↵</span>
+                {/* Field 2 */}
+                {dimPrompt.label2 && (
+                  <div className="flex items-center gap-1">
+                    <span className="text-[#2563EB] font-bold text-[11px]">
+                      {dimPrompt.label2}:
+                    </span>
+                    <input
+                      ref={input2Ref}
+                      type="number"
+                      step="any"
+                      value={inputVal2}
+                      onChange={(e) => {
+                        if (dimPrompt.live) setManualDim(true);
+                        setInputVal2(e.target.value);
+                        if (dimPrompt.type === 'circle' && dimPrompt.label2 === 'Ø') {
+                          const n = parseFloat(e.target.value);
+                          if (!isNaN(n)) setInputVal1((n / 2).toFixed(4));
+                        }
+                      }}
+                      onKeyDown={handleDimKeyDown}
+                      className="w-18 px-1.5 py-0.5 bg-[#F5F6F8] hover:bg-white focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-right text-[#171A1F] font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
+                    />
+                  </div>
+                )}
+
+                {/* Hints */}
+                <div className="flex items-center gap-1 pl-1.5 border-l border-[#E1E4E8] text-[9px] text-[#69717D]">
+                  <span className="px-1 py-0.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-[8px] font-semibold">
+                    Tab ⇥
+                  </span>
+                  <span className="px-1 py-0.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-[8px] font-semibold">
+                    ↵
+                  </span>
+                </div>
               </div>
-            </div>
-          );
-        })()}
-
+            );
+          })()}
       </div>
-
-
 
       {/* ════════════════════ FLOATING STATUS READOUTS ═════════════════════════════════ */}
       {!(displayOnly && !showMesh) && (
@@ -5355,15 +6452,21 @@ boundary
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
           >
             <div className="flex items-center gap-2.5">
-              <span>X: <strong className="text-[#171A1F]">{hud.x}</strong></span>
-              <span>Y: <strong className="text-[#171A1F]">{hud.y}</strong></span>
+              <span>
+                X: <strong className="text-[#171A1F]">{hud.x}</strong>
+              </span>
+              <span>
+                Y: <strong className="text-[#171A1F]">{hud.y}</strong>
+              </span>
             </div>
 
             <div className="h-3 w-px bg-[#D0D4DC]" />
 
             {/* Google Maps Style Scale Indicator */}
             <div className="flex items-center gap-1.5" title={`Scale: ${scaleInfo.label}`}>
-              <span className="text-[10px] font-bold text-[#171A1F] leading-none">{scaleInfo.label}</span>
+              <span className="text-[10px] font-bold text-[#171A1F] leading-none">
+                {scaleInfo.label}
+              </span>
               <div className="flex items-end h-2">
                 <div
                   className="h-1.5 border-l-2 border-r-2 border-b border-[#171A1F] bg-black/5"
@@ -5375,7 +6478,9 @@ boundary
             {tool !== 'select' && snap.type !== 'grid' && (
               <>
                 <div className="h-3 w-px bg-[#D0D4DC]" />
-                <span className="text-[10px] text-[#16A34A] uppercase font-bold">[{snap.type}]</span>
+                <span className="text-[10px] text-[#16A34A] uppercase font-bold">
+                  [{snap.type}]
+                </span>
               </>
             )}
           </div>
@@ -5394,11 +6499,26 @@ boundary
                   className="absolute right-3 z-20 flex items-center gap-3 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
-                  <span><strong className="text-[#171A1F]">{meshData.num_nodes}</strong> nodes</span>
-                  <span><strong className="text-[#171A1F]">{meshData.num_elements}</strong> cells</span>
-                  <span><strong className="text-[#171A1F]">{triangles}</strong> tri · <strong className="text-[#171A1F]">{quads}</strong> quad</span>
-                  {minAngle !== undefined && <span className={minAngle < 15 ? 'text-amber-600' : 'text-[#16A34A]'}><strong>{minAngle.toFixed(0)}°</strong> min</span>}
-                  {skew !== undefined && <span>skew <strong className="text-[#171A1F]">{skew.toFixed(2)}</strong></span>}
+                  <span>
+                    <strong className="text-[#171A1F]">{meshData.num_nodes}</strong> nodes
+                  </span>
+                  <span>
+                    <strong className="text-[#171A1F]">{meshData.num_elements}</strong> cells
+                  </span>
+                  <span>
+                    <strong className="text-[#171A1F]">{triangles}</strong> tri ·{' '}
+                    <strong className="text-[#171A1F]">{quads}</strong> quad
+                  </span>
+                  {minAngle !== undefined && (
+                    <span className={minAngle < 15 ? 'text-amber-600' : 'text-[#16A34A]'}>
+                      <strong>{minAngle.toFixed(0)}°</strong> min
+                    </span>
+                  )}
+                  {skew !== undefined && (
+                    <span>
+                      skew <strong className="text-[#171A1F]">{skew.toFixed(2)}</strong>
+                    </span>
+                  )}
                 </div>
               );
             }
@@ -5411,12 +6531,22 @@ boundary
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
                   {isCircular ? (
-                    <span>⌀: <strong className="text-[#171A1F]">{(parseFloat(hud.length) * 2).toFixed(3)}</strong> m</span>
+                    <span>
+                      ⌀:{' '}
+                      <strong className="text-[#171A1F]">
+                        {(parseFloat(hud.length) * 2).toFixed(3)}
+                      </strong>{' '}
+                      m
+                    </span>
                   ) : (
                     <>
-                      <span>L: <strong className="text-[#171A1F]">{hud.length}</strong> m</span>
+                      <span>
+                        L: <strong className="text-[#171A1F]">{hud.length}</strong> m
+                      </span>
                       <div className="h-3 w-px bg-[#D0D4DC]" />
-                      <span>∠: <strong className="text-[#171A1F]">{hud.angle}</strong>°</span>
+                      <span>
+                        ∠: <strong className="text-[#171A1F]">{hud.angle}</strong>°
+                      </span>
                     </>
                   )}
                 </div>
@@ -5430,8 +6560,12 @@ boundary
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
                   <span className="text-[10px] uppercase font-bold text-[#69717D]">Vertex</span>
-                  <span>X: <strong className="text-[#171A1F]">{hoveredVertex.x.toFixed(4)}</strong></span>
-                  <span>Y: <strong className="text-[#171A1F]">{hoveredVertex.y.toFixed(4)}</strong></span>
+                  <span>
+                    X: <strong className="text-[#171A1F]">{hoveredVertex.x.toFixed(4)}</strong>
+                  </span>
+                  <span>
+                    Y: <strong className="text-[#171A1F]">{hoveredVertex.y.toFixed(4)}</strong>
+                  </span>
                 </div>
               );
             }
@@ -5444,18 +6578,23 @@ boundary
       {meshToastVisible && (
         <div className="absolute right-4 bottom-10 z-40 w-72 rounded border border-[#D9E2F2] bg-white px-3.5 py-3 pointer-events-none">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-[#171A1F]">{meshProgress >= 100 ? 'Mesh complete' : 'Generating mesh'}</span>
-            <span className="text-xs font-mono font-semibold text-[#2563EB]">{Math.round(meshProgress)}%</span>
+            <span className="text-xs font-semibold text-[#171A1F]">
+              {meshProgress >= 100 ? 'Mesh complete' : 'Generating mesh'}
+            </span>
+            <span className="text-xs font-mono font-semibold text-[#2563EB]">
+              {Math.round(meshProgress)}%
+            </span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#E8EEF8]">
-            <div className="h-full rounded-full bg-[#2563EB] transition-[width] duration-150 ease-out" style={{ width: `${meshProgress}%` }} />
+            <div
+              className="h-full rounded-full bg-[#2563EB] transition-[width] duration-150 ease-out"
+              style={{ width: `${meshProgress}%` }}
+            />
           </div>
         </div>
       )}
-
     </div>
   );
 };
 
 export const CadWorkbench2D = React.memo(CadWorkbench2DComponent);
-

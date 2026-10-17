@@ -27,7 +27,10 @@ export const AnalysisSection: React.FC<
         <Field label="Flow regime">
           <Segmented
             value={physics.regime}
-            options={[['laminar', 'Laminar'], ['turbulent', 'Turbulent']]}
+            options={[
+              ['laminar', 'Laminar'],
+              ['turbulent', 'Turbulent'],
+            ]}
             onChange={(v) => setPhysics({ regime: v })}
           />
         </Field>
@@ -50,7 +53,10 @@ export const AnalysisSection: React.FC<
             physics.inletTemperature
           } K). Tracks the inlet velocity; change it to override.`}
         >
-          <Select value={physics.speedRegime} onChange={(v) => setPhysics({ speedRegime: v as SpeedRegime })}>
+          <Select
+            value={physics.speedRegime}
+            onChange={(v) => setPhysics({ speedRegime: v as SpeedRegime })}
+          >
             <option value="incompressible">Incompressible (M &lt; 0.3)</option>
             <option value="subsonic">Subsonic (0.3 - 0.8)</option>
             <option value="transonic">Transonic (0.8 - 1.2)</option>
@@ -58,6 +64,7 @@ export const AnalysisSection: React.FC<
             <option value="hypersonic">Hypersonic (M &gt; 5)</option>
           </Select>
         </Field>
+        {/* moved out of the live UI - see caseSetup/AnalysisSection.tsx, kept for a future tutorial
         <div className="flex items-end">
           <p className="text-[10px] text-[#69717D] leading-relaxed pb-2">
             {(physics.speedRegime === 'incompressible' || !compressible) &&
@@ -70,6 +77,7 @@ export const AnalysisSection: React.FC<
               'Density-based shock capturing (foamRun -solver shockFluid): transient, Courant-limited, needs a wall-resolved mesh.'}
           </p>
         </div>
+        */}
       </div>
     </SectionCard>
   );

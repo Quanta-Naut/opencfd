@@ -12,18 +12,21 @@ import {
   Wind,
   Layers,
   Rocket,
+  Copy,
+  Search,
 } from 'lucide-react';
 import {
   listProjects,
   createProject,
   deleteProject,
+  duplicateProject,
   renameProject,
   saveProjectSession,
   ProjectMeta,
   ProjectPreview,
   PreviewShape,
 } from '../../utils/projectsApi';
-import { SESSION_STORAGE_KEY } from '../../App';
+import { SESSION_STORAGE_KEY } from '../../utils/legacySession';
 
 interface HomeScreenProps {
   onOpen: (id: string) => void;
@@ -225,10 +228,12 @@ const ProjectCardView: React.FC<{
   onOpen: () => void;
   onRename: (name: string) => void;
   onDelete: () => void;
-}> = ({ project, disabled, onOpen, onRename, onDelete }) => {
+  onDuplicate: () => void;
+}> = ({ project, disabled, onOpen, onRename, onDelete, onDuplicate }) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(project.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -313,6 +318,26 @@ const ProjectCardView: React.FC<{
             className="p-1.5 bg-white border border-[#E4E7EC] rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]"
           >
             <Pencil className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={async () => {
+              if (duplicating) return;
+              setDuplicating(true);
+              try {
+                await onDuplicate();
+              } finally {
+                setDuplicating(false);
+              }
+            }}
+            title="Duplicate"
+            disabled={duplicating}
+            className="p-1.5 bg-white border border-[#E4E7EC] rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-50"
+          >
+            {duplicating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Copy className="w-3.5 h-3.5" />
+            )}
           </button>
           <button
             onClick={() => setConfirmDelete(true)}
@@ -465,6 +490,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -518,7 +544,28 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
     }
   };
 
+  const handleDuplicate = async (id: string) => {
+    try {
+      const meta = await duplicateProject(id);
+      setProjects((prev) => {
+        const next = [meta, ...prev];
+        next.sort((a, b) => (a.modified < b.modified ? 1 : -1));
+        return next;
+      });
+    } catch (err: any) {
+      setError(err?.message || 'Duplicate failed.');
+    }
+  };
+
   const empty = !loading && projects.length === 0;
+  // Already sorted most-recent-first by the backend; filter by name, then
+  // split so the 3 most recently touched projects are easy to jump back
+  // into without scanning the whole grid.
+  const filtered = search.trim()
+    ? projects.filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase()))
+    : projects;
+  const recent = filtered.slice(0, 3);
+  const rest = filtered.slice(3);
 
   return (
     <div className="h-screen w-screen overflow-y-auto bg-[#F4F5F7] text-[#171A1F] font-sans">
@@ -553,6 +600,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
             New project
           </button>
         </div>
+
+        {!empty && (
+          <div className="mt-6 relative max-w-sm">
+            <Search className="w-3.5 h-3.5 text-[#8A929E] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search projects"
+              className="w-full pl-9 pr-3 py-2 text-xs rounded border border-[#E1E4E8] bg-white outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 transition"
+            />
+          </div>
+        )}
 
         {(error || openError) && (
           <div className="mt-6 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700">
@@ -600,39 +659,89 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
               New project
             </button>
           </div>
+        ) : filtered.length === 0 ? (
+          <div className="mt-10 text-center text-xs text-[#69717D]">
+            No projects match &ldquo;{search}&rdquo;.
+          </div>
         ) : (
           <>
-            <div className="mt-8 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8A929E]">
-                {projects.length} {projects.length === 1 ? 'project' : 'projects'}
-              </span>
-            </div>
-            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {projects.map((p) => (
-                <ProjectCardView
-                  key={p.id}
-                  project={p}
-                  disabled={opening}
-                  onOpen={() => !opening && onOpen(p.id)}
-                  onRename={async (name) => {
-                    try {
-                      await renameProject(p.id, name);
-                      setProjects((prev) => prev.map((x) => (x.id === p.id ? { ...x, name } : x)));
-                    } catch (err: any) {
-                      setError(err?.message || 'Rename failed.');
-                    }
-                  }}
-                  onDelete={async () => {
-                    try {
-                      await deleteProject(p.id);
-                      setProjects((prev) => prev.filter((x) => x.id !== p.id));
-                    } catch (err: any) {
-                      setError(err?.message || 'Delete failed.');
-                    }
-                  }}
-                />
-              ))}
-            </div>
+            {recent.length > 0 && (
+              <>
+                <div className="mt-8 flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8A929E]">
+                    Recent
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {recent.map((p) => (
+                    <ProjectCardView
+                      key={p.id}
+                      project={p}
+                      disabled={opening}
+                      onOpen={() => !opening && onOpen(p.id)}
+                      onRename={async (name) => {
+                        try {
+                          await renameProject(p.id, name);
+                          setProjects((prev) =>
+                            prev.map((x) => (x.id === p.id ? { ...x, name } : x)),
+                          );
+                        } catch (err: any) {
+                          setError(err?.message || 'Rename failed.');
+                        }
+                      }}
+                      onDelete={async () => {
+                        try {
+                          await deleteProject(p.id);
+                          setProjects((prev) => prev.filter((x) => x.id !== p.id));
+                        } catch (err: any) {
+                          setError(err?.message || 'Delete failed.');
+                        }
+                      }}
+                      onDuplicate={() => handleDuplicate(p.id)}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {rest.length > 0 && (
+              <>
+                <div className="mt-8 flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8A929E]">
+                    All projects
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {rest.map((p) => (
+                    <ProjectCardView
+                      key={p.id}
+                      project={p}
+                      disabled={opening}
+                      onOpen={() => !opening && onOpen(p.id)}
+                      onRename={async (name) => {
+                        try {
+                          await renameProject(p.id, name);
+                          setProjects((prev) =>
+                            prev.map((x) => (x.id === p.id ? { ...x, name } : x)),
+                          );
+                        } catch (err: any) {
+                          setError(err?.message || 'Rename failed.');
+                        }
+                      }}
+                      onDelete={async () => {
+                        try {
+                          await deleteProject(p.id);
+                          setProjects((prev) => prev.filter((x) => x.id !== p.id));
+                        } catch (err: any) {
+                          setError(err?.message || 'Delete failed.');
+                        }
+                      }}
+                      onDuplicate={() => handleDuplicate(p.id)}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

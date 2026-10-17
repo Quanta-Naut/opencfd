@@ -517,15 +517,30 @@ async def delete_project_endpoint(pid: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.post("/api/projects/{pid}/duplicate")
+async def duplicate_project_endpoint(pid: str):
+    try:
+        return {"success": True, "data": project_service.duplicate_project(pid)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 # -- Run persistence (~/.OpenCFD/projects/<pid>/runs/<rid>) --------------------
 @app.get("/api/solver/runs/{project_id}/{run_id}/field")
 async def get_solver_run_field_endpoint(project_id: str, run_id: str):
     data = run_service.get_run_field(project_id, run_id)
     if data is None:
+        reason = run_service.get_run_field_error(project_id, run_id)
+        detail = (
+            f"No usable result was saved for this run: {reason}"
+            if reason
+            else f"Field data not found for run '{run_id}'"
+        )
         return JSONResponse(
             status_code=404,
-            content={"success": False, "detail": f"Field data not found for run '{run_id}'"},
+            content={"success": False, "detail": detail},
         )
     return {"success": True, "data": data}
 

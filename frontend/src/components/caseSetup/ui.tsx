@@ -1,7 +1,6 @@
 import React from 'react';
 
-export const card =
-  'bg-[var(--cs-surface,#fff)] border border-[#E1E4E8] rounded p-5';
+export const card = 'bg-[var(--cs-surface,#fff)] border border-[#E1E4E8] rounded p-5';
 
 export const SectionCard: React.FC<{
   title: string;
@@ -17,7 +16,9 @@ export const SectionCard: React.FC<{
         {icon && <span className="text-[#2563EB] shrink-0">{icon}</span>}
         <div>
           <h2 className="text-[13px] font-bold text-[#171A1F]">{title}</h2>
+          {/* moved out of the live UI - see caseSetup/ui.tsx SectionCard, kept for a future tutorial
           {hint && <p className="text-[11px] text-[#69717D] mt-1 max-w-md">{hint}</p>}
+          */}
         </div>
       </div>
       {right}
@@ -26,11 +27,11 @@ export const SectionCard: React.FC<{
   </section>
 );
 
-export const Field: React.FC<{ label: React.ReactNode; hint?: string; children: React.ReactNode }> = ({
-  label,
-  hint,
-  children,
-}) => (
+export const Field: React.FC<{
+  label: React.ReactNode;
+  hint?: string;
+  children: React.ReactNode;
+}> = ({ label, hint, children }) => (
   <label className="block">
     <span className="text-[11px] font-semibold text-[#69717D] block mb-1.5">{label}</span>
     {children}
@@ -51,7 +52,9 @@ export const NumberInput: React.FC<{
   readOnly?: boolean;
 }> = ({ value, onChange, step = 1, min, unit, disabled, readOnly }) => {
   const [draft, setDraft] = React.useState(String(value));
-  React.useEffect(() => { setDraft(String(value)); }, [value]);
+  React.useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
   const commit = (s: string) => {
     setDraft(s);
     const n = parseFloat(s);
@@ -93,7 +96,12 @@ export const Select: React.FC<{
   disabled?: boolean;
   children: React.ReactNode;
 }> = ({ value, onChange, disabled, children }) => (
-  <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={inputBase}>
+  <select
+    value={value}
+    onChange={(e) => onChange(e.target.value)}
+    disabled={disabled}
+    className={inputBase}
+  >
     {children}
   </select>
 );
@@ -107,7 +115,10 @@ export const Segmented = <T extends string>({
   options: Array<[T, string]>;
   onChange: (v: T) => void;
 }) => (
-  <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+  <div
+    className="grid gap-1.5"
+    style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
+  >
     {options.map(([v, label]) => (
       <button
         key={v}
@@ -124,11 +135,11 @@ export const Segmented = <T extends string>({
   </div>
 );
 
-export const Stat: React.FC<{ label: string; value: string; tone?: 'default' | 'warn' | 'good' }> = ({
-  label,
-  value,
-  tone = 'default',
-}) => (
+export const Stat: React.FC<{
+  label: string;
+  value: string;
+  tone?: 'default' | 'warn' | 'good';
+}> = ({ label, value, tone = 'default' }) => (
   <div className="bg-[#F8FAFC] border border-[#E8EDF1] rounded px-3 py-2">
     <span className="text-[10px] uppercase tracking-wide text-[#8B95A1] block">{label}</span>
     <span
@@ -148,5 +159,8 @@ export const fmt = (n: number, sig = 3): string => {
   if (abs >= 1e5 || abs < 1e-3) return n.toExponential(sig - 1);
   // Strip trailing zeros only AFTER a decimal point - a bare "340" must not
   // become "34" (the old /\.?0+$/ ate significant integer zeros).
-  return n.toPrecision(sig).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+  return n
+    .toPrecision(sig)
+    .replace(/(\.\d*?)0+$/, '$1')
+    .replace(/\.$/, '');
 };

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { X, Crosshair, Loader2, AlertCircle, LineChart, Sliders } from 'lucide-react';
-import { PlotDefinition, FlowVariable } from '../../types/cfd';
+import React, { useState, useEffect, useMemo } from 'react';
+import { X, Crosshair, Loader2, AlertCircle, LineChart, Activity } from 'lucide-react';
+import { PlotDefinition, FlowVariable, MonitorField, ResidualDataPoint } from '../../types/cfd';
 import { sampleSolverRunLine } from '../../utils/api';
-import { FLOW_VARIABLES } from './PlotThumbnail';
+import { FLOW_VARIABLES, MONITOR_FIELDS, getMonitorLabel } from './PlotThumbnail';
 
 export interface CreatePlotModalProps {
   open: boolean;
@@ -10,6 +10,7 @@ export interface CreatePlotModalProps {
   projectId: string;
   targetRunId: string | null;
   targetRunLabel?: string;
+  targetRunResiduals?: ResidualDataPoint[];
   defaultName: string;
   pickedP1?: [number, number] | null;
   pickedP2?: [number, number] | null;
@@ -25,16 +26,37 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
   projectId,
   targetRunId,
   targetRunLabel,
+  targetRunResiduals,
   defaultName,
   pickedP1,
   pickedP2,
   onStartPickPoints,
   onCreatePlot,
 }) => {
+  const [kind, setKind] = useState<'line' | 'monitor'>('line');
   const [name, setName] = useState(defaultName);
   const [variable, setVariable] = useState<FlowVariable>('U_mag');
+  const [xAxis, setXAxis] = useState<'distance' | FlowVariable>('distance');
   const [colormap, setColormap] = useState<'viridis' | 'coolwarm' | 'turbo'>('viridis');
   const [samples, setSamples] = useState(100);
+
+  // Which monitor fields this run actually has data for (not every run has
+  // k/omega/Cd/Cl - e.g. a laminar run has no turbulence residuals).
+  const availableMonitorFields = useMemo(() => {
+    const rows = targetRunResiduals ?? [];
+    return MONITOR_FIELDS.filter((f) =>
+      rows.some((r) => typeof (r as any)[f.residualKey] === 'number'),
+    );
+  }, [targetRunResiduals]);
+  const [monitorFields, setMonitorFields] = useState<MonitorField[]>([]);
+  const [monitorX, setMonitorX] = useState<'iteration' | 'time'>('iteration');
+  const hasTime = (targetRunResiduals ?? []).some((r) => typeof r.time === 'number');
+
+  useEffect(() => {
+    if (kind === 'monitor' && monitorFields.length === 0 && availableMonitorFields.length > 0) {
+      setMonitorFields([availableMonitorFields[0].id]);
+    }
+  }, [kind, availableMonitorFields, monitorFields.length]);
 
   // Coordinates
   const [p1x, setP1x] = useState<string>('0.0');
@@ -78,6 +100,29 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
       return;
     }
 
+    if (kind === 'monitor') {
+      if (monitorFields.length === 0) {
+        setError('Pick at least one quantity to monitor.');
+        return;
+      }
+      const newPlot: PlotDefinition = {
+        id: `plot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: name.trim() || defaultName,
+        kind: 'monitor',
+        runId: targetRunId,
+        variable: 'U_mag',
+        monitorFields,
+        monitorX,
+        colormap,
+        rangeMin: null,
+        rangeMax: null,
+        data: null,
+        createdAt: Date.now(),
+      };
+      onCreatePlot(newPlot);
+      return;
+    }
+
     const x1 = parseFloat(p1x);
     const y1 = parseFloat(p1y);
     const x2 = parseFloat(p2x);
@@ -113,8 +158,10 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
       const newPlot: PlotDefinition = {
         id: `plot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         name: name.trim() || defaultName,
+        kind: 'line',
         runId: targetRunId,
         variable,
+        xAxis,
         line: {
           p1: [x1, y1],
           p2: [x2, y2],
@@ -142,7 +189,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/50 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/25 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !loading) onClose();
       }}
@@ -160,10 +207,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               <LineChart className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-[#171A1F]">New Plot Line</h2>
-              <div className="text-[11px] text-[#8A929E]">
-                ANSYS CFD-Post style line probe along geometry
-              </div>
+              <h2 className="text-sm font-bold text-[#171A1F]">New Plot</h2>
             </div>
           </div>
           <button
@@ -177,10 +221,42 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
         {/* Target Run info */}
         <div className="px-5 py-2 bg-[#F8F9FA] border-b border-[#E1E4E8] flex items-center justify-between text-xs">
-          <span className="text-[#69717D] font-medium">Sampling Target:</span>
+          <span className="text-[#69717D] font-medium">Run:</span>
           <span className="font-mono text-[#171A1F] font-semibold">
-            {targetRunLabel || targetRunId ? `${targetRunLabel || targetRunId}` : 'No active run found'}
+            {targetRunLabel || targetRunId
+              ? `${targetRunLabel || targetRunId}`
+              : 'No active run found'}
           </span>
+        </div>
+
+        {/* Plot kind */}
+        <div className="px-5 pt-4">
+          <div className="grid grid-cols-2 gap-1 p-0.5 bg-[#F5F6F8] rounded border border-[#E1E4E8]">
+            <button
+              type="button"
+              onClick={() => setKind('line')}
+              className={`flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                kind === 'line'
+                  ? 'bg-white text-[#171A1F] font-semibold border border-[#E1E4E8]'
+                  : 'text-[#69717D] hover:text-[#171A1F]'
+              }`}
+            >
+              <LineChart className="w-3.5 h-3.5" />
+              Line probe
+            </button>
+            <button
+              type="button"
+              onClick={() => setKind('monitor')}
+              className={`flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                kind === 'monitor'
+                  ? 'bg-white text-[#171A1F] font-semibold border border-[#E1E4E8]'
+                  : 'text-[#69717D] hover:text-[#171A1F]'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Convergence monitor
+            </button>
+          </div>
         </div>
 
         {/* Error notification */}
@@ -207,144 +283,229 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
             />
           </div>
 
-          {/* Variable & Colormap */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
-                Flow Variable
-              </label>
-              <select
-                value={variable}
-                onChange={(e) => setVariable(e.target.value as FlowVariable)}
-                className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
-              >
-                {FLOW_VARIABLES.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {kind === 'monitor' ? (
+            <div className="border border-[#E1E4E8] rounded p-3 bg-[#F9FAFB] space-y-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1.5">
+                  Quantities to plot
+                </label>
+                {availableMonitorFields.length === 0 ? (
+                  <p className="text-[#69717D]">
+                    This run has no residual history yet - run the solver first.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {availableMonitorFields.map((f) => {
+                      const checked = monitorFields.includes(f.id);
+                      return (
+                        <label
+                          key={f.id}
+                          className={`flex items-center gap-1.5 px-2 py-1.5 rounded border cursor-pointer transition-colors ${
+                            checked
+                              ? 'border-[#2563EB] bg-[#EFF6FF]'
+                              : 'border-[#E1E4E8] bg-white hover:bg-[#F5F6F8]'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() =>
+                              setMonitorFields((prev) =>
+                                checked ? prev.filter((x) => x !== f.id) : [...prev, f.id],
+                              )
+                            }
+                          />
+                          <span className="font-medium text-[#171A1F]">{f.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
-            <div>
-              <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
-                Colormap
-              </label>
-              <div className="grid grid-cols-3 gap-1">
-                {COLORMAPS.map((map) => (
-                  <button
-                    key={map}
-                    type="button"
-                    onClick={() => setColormap(map)}
-                    className={`py-1 rounded capitalize text-[11px] font-medium border transition-colors ${
-                      colormap === map
-                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
-                    }`}
+              <div>
+                <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                  X axis
+                </label>
+                <div className="grid grid-cols-2 gap-1">
+                  {(['iteration', 'time'] as const).map((x) => (
+                    <button
+                      key={x}
+                      type="button"
+                      disabled={x === 'time' && !hasTime}
+                      onClick={() => setMonitorX(x)}
+                      className={`py-1 rounded capitalize text-[11px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                        monitorX === x
+                          ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                          : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                      }`}
+                    >
+                      {x}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* X axis, Y variable & Colormap */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                    X axis
+                  </label>
+                  <select
+                    value={xAxis}
+                    onChange={(e) => setXAxis(e.target.value as 'distance' | FlowVariable)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
                   >
-                    {map}
+                    <option value="distance">Distance along line</option>
+                    {FLOW_VARIABLES.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                    Y axis
+                  </label>
+                  <select
+                    value={variable}
+                    onChange={(e) => setVariable(e.target.value as FlowVariable)}
+                    className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                  >
+                    {FLOW_VARIABLES.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                    Colormap
+                  </label>
+                  <div className="grid grid-cols-3 gap-1">
+                    {COLORMAPS.map((map) => (
+                      <button
+                        key={map}
+                        type="button"
+                        onClick={() => setColormap(map)}
+                        className={`py-1 rounded capitalize text-[11px] font-medium border transition-colors ${
+                          colormap === map
+                            ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                            : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        }`}
+                      >
+                        {map}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Line Definition: Points & Pick Mode */}
+              <div className="border border-[#E1E4E8] rounded p-3 bg-[#F9FAFB] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-[#171A1F] uppercase tracking-wider">
+                    Line Coordinates (meters)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onStartPickPoints}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2563EB] hover:text-[#1D4ED8] bg-white border border-[#2563EB]/40 px-2 py-1 rounded hover:bg-[#F0F5FF] transition-colors cursor-pointer"
+                  >
+                    <Crosshair className="w-3.5 h-3.5" />
+                    <span>Pick on Viewport</span>
                   </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Line Definition: Points & Pick Mode */}
-          <div className="border border-[#E1E4E8] rounded p-3 bg-[#F9FAFB] space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-bold text-[#171A1F] uppercase tracking-wider">
-                Line Coordinates (meters)
-              </span>
-              <button
-                type="button"
-                onClick={onStartPickPoints}
-                className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2563EB] hover:text-[#1D4ED8] bg-white border border-[#2563EB]/40 px-2 py-1 rounded hover:bg-[#F0F5FF] transition-colors cursor-pointer"
-              >
-                <Crosshair className="w-3.5 h-3.5" />
-                <span>Pick on Viewport</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              {/* Point 1 */}
-              <div className="bg-white p-2.5 rounded border border-[#E5E7EB]">
-                <div className="text-[11px] font-semibold text-[#2563EB] mb-1.5 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
-                  Point 1 (Start)
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-[10px] text-[#8A929E] block mb-0.5">X (m)</span>
-                    <input
-                      type="number"
-                      step="any"
-                      value={p1x}
-                      onChange={(e) => setP1x(e.target.value)}
-                      className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
-                    />
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-[#8A929E] block mb-0.5">Y (m)</span>
-                    <input
-                      type="number"
-                      step="any"
-                      value={p1y}
-                      onChange={(e) => setP1y(e.target.value)}
-                      className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
-                    />
-                  </div>
-                </div>
-              </div>
 
-              {/* Point 2 */}
-              <div className="bg-white p-2.5 rounded border border-[#E5E7EB]">
-                <div className="text-[11px] font-semibold text-[#16A34A] mb-1.5 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-[#16A34A]" />
-                  Point 2 (End)
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <span className="text-[10px] text-[#8A929E] block mb-0.5">X (m)</span>
-                    <input
-                      type="number"
-                      step="any"
-                      value={p2x}
-                      onChange={(e) => setP2x(e.target.value)}
-                      className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
-                    />
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Point 1 */}
+                  <div className="bg-white p-2.5 rounded border border-[#E5E7EB]">
+                    <div className="text-[11px] font-semibold text-[#2563EB] mb-1.5 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
+                      Point 1 (Start)
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-[10px] text-[#8A929E] block mb-0.5">X (m)</span>
+                        <input
+                          type="number"
+                          step="any"
+                          value={p1x}
+                          onChange={(e) => setP1x(e.target.value)}
+                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-[#8A929E] block mb-0.5">Y (m)</span>
+                        <input
+                          type="number"
+                          step="any"
+                          value={p1y}
+                          onChange={(e) => setP1y(e.target.value)}
+                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-[#8A929E] block mb-0.5">Y (m)</span>
-                    <input
-                      type="number"
-                      step="any"
-                      value={p2y}
-                      onChange={(e) => setP2y(e.target.value)}
-                      className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
-                    />
+
+                  {/* Point 2 */}
+                  <div className="bg-white p-2.5 rounded border border-[#E5E7EB]">
+                    <div className="text-[11px] font-semibold text-[#16A34A] mb-1.5 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-[#16A34A]" />
+                      Point 2 (End)
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-[10px] text-[#8A929E] block mb-0.5">X (m)</span>
+                        <input
+                          type="number"
+                          step="any"
+                          value={p2x}
+                          onChange={(e) => setP2x(e.target.value)}
+                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-[#8A929E] block mb-0.5">Y (m)</span>
+                        <input
+                          type="number"
+                          step="any"
+                          value={p2y}
+                          onChange={(e) => setP2y(e.target.value)}
+                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            {/* Samples */}
-            <div className="flex items-center justify-between pt-1">
-              <span className="text-[11px] font-medium text-[#69717D]">
-                Number of Samples:
-              </span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={2}
-                  max={2000}
-                  value={samples}
-                  onChange={(e) => setSamples(Math.max(2, Math.min(2000, parseInt(e.target.value) || 2)))}
-                  className="w-20 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono text-center focus:outline-none focus:border-[#2563EB]"
-                />
-                <span className="text-[10px] text-[#8A929E]">(2-2000)</span>
+                {/* Samples */}
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px] font-medium text-[#69717D]">Number of Samples:</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={2}
+                      max={2000}
+                      value={samples}
+                      onChange={(e) =>
+                        setSamples(Math.max(2, Math.min(2000, parseInt(e.target.value) || 2)))
+                      }
+                      className="w-20 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono text-center focus:outline-none focus:border-[#2563EB]"
+                    />
+                    <span className="text-[10px] text-[#8A929E]">(2-2000)</span>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            </>
+          )}
 
           {/* Buttons */}
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#EDEFF3]">

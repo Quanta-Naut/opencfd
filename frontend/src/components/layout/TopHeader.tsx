@@ -1,19 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { MoreVertical, Database, Pencil, LayoutGrid, Settings } from 'lucide-react';
+import { Pencil, LayoutGrid, Settings } from 'lucide-react';
 import { PreferencesDialog } from '../settings/PreferencesDialog';
 
 interface TopHeaderProps {
   projectName: string;
   onProjectNameChange: (name: string) => void;
   onExitHome?: () => void;
+  onOpenCaseFiles?: () => void;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
   projectName,
   onProjectNameChange,
   onExitHome,
+  onOpenCaseFiles,
 }) => {
-  const [showMenu, setShowMenu] = useState<boolean>(false);
   const [showPreferences, setShowPreferences] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(projectName);
@@ -47,7 +48,15 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           </button>
         )}
         <div className="w-7 h-7 bg-[#171A1F] rounded flex items-center justify-center text-white shrink-0">
-          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <svg
+            className="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
             <path d="M4 14c4-7 14-8 16-8-2 8-10 10-16 8z" />
             <path d="M7 14c3-3 8-4 12-5" />
           </svg>
@@ -57,9 +66,9 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           <input
             ref={inputRef}
             value={draft}
-            onChange={e => setDraft(e.target.value)}
+            onChange={(e) => setDraft(e.target.value)}
             onBlur={commitEdit}
-            onKeyDown={e => {
+            onKeyDown={(e) => {
               if (e.key === 'Enter') commitEdit();
               if (e.key === 'Escape') setEditing(false);
             }}
@@ -83,28 +92,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
       {/* Right: Project actions. Everything autosaves to the project on disk, so
           there is no manual Save; the how-to guide lives on the home screen. */}
       <div className="flex items-center gap-1">
-        <div className="relative">
-          <button
-            onClick={() => setShowMenu(!showMenu)}
-            className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded transition-colors"
-            title="Options"
-          >
-            <MoreVertical className="w-4 h-4" />
-          </button>
-
-          {showMenu && (
-            <div className="absolute right-0 mt-1 w-48 bg-white border border-[#E1E4E8] rounded py-1 z-50 text-xs text-[#171A1F]">
-              <button
-                onClick={() => setShowMenu(false)}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#F5F6F8] flex items-center gap-2"
-              >
-                <Database className="w-3.5 h-3.5 text-[#69717D]" />
-                <span>Export OpenFOAM Case</span>
-              </button>
-            </div>
-          )}
-        </div>
-
         <button
           onClick={() => setShowPreferences(true)}
           className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded transition-colors"
@@ -114,7 +101,11 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         </button>
       </div>
 
-      <PreferencesDialog open={showPreferences} onClose={() => setShowPreferences(false)} />
+      <PreferencesDialog
+        open={showPreferences}
+        onClose={() => setShowPreferences(false)}
+        onOpenCaseFiles={onOpenCaseFiles}
+      />
     </header>
   );
 };

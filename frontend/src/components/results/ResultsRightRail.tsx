@@ -98,7 +98,10 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
       if (dragWRef.current) {
         const maxW = Math.max(MIN_W, window.innerWidth - 360);
         setWidth(
-          Math.min(maxW, Math.max(MIN_W, dragWRef.current.startW + (dragWRef.current.startX - e.clientX))),
+          Math.min(
+            maxW,
+            Math.max(MIN_W, dragWRef.current.startW + (dragWRef.current.startX - e.clientX)),
+          ),
         );
       }
     };
@@ -207,7 +210,9 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
                 : 'text-[#69717D] hover:text-[#171A1F]'
             }`}
           >
-            <LineChart className={`w-3.5 h-3.5 ${activeTab === 'plots' ? 'text-[#2563EB]' : 'text-[#69717D]'}`} />
+            <LineChart
+              className={`w-3.5 h-3.5 ${activeTab === 'plots' ? 'text-[#2563EB]' : 'text-[#69717D]'}`}
+            />
             <span>Plots</span>
             {plots.length > 0 && (
               <span
@@ -232,17 +237,13 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
             }`}
           >
             <History
-              className={`w-3.5 h-3.5 ${
-                executionStatus === 'running' ? 'text-[#2563EB]' : ''
-              }`}
+              className={`w-3.5 h-3.5 ${executionStatus === 'running' ? 'text-[#2563EB]' : ''}`}
             />
             <span>Runs</span>
             {runs.length > 0 && (
               <span
                 className={`text-[10px] font-mono px-1 rounded ${
-                  activeTab === 'runs'
-                    ? 'bg-[#F0F2F5] text-[#4B5563]'
-                    : 'bg-black/5 text-[#69717D]'
+                  activeTab === 'runs' ? 'bg-[#F0F2F5] text-[#4B5563]' : 'bg-black/5 text-[#69717D]'
                 }`}
               >
                 {runs.length}
@@ -271,6 +272,7 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
             plots={plots}
             selectedPlotId={selectedPlotId}
             onSelectPlot={onSelectPlot}
+            solverRuns={runs}
           />
         ) : (
           <RunHistoryRail

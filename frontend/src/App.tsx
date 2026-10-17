@@ -17,7 +17,7 @@ import { StatusBar } from './components/layout/StatusBar';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
 import { wallResolution } from './caseSetup/flowCalc';
 import { defaultPatchBC } from './caseSetup/bcCatalog';
-import { defaultSolverConfig, directionsForAoA } from './solver/solverConfig';
+import { directionsForAoA } from './solver/solverConfig';
 import {
   CFDProjectState,
   GeometryConfig,
@@ -26,7 +26,6 @@ import {
   YPlusCalculation,
   SolverControls,
   PostProcessConfig,
-  ResidualDataPoint,
   SolverRunRecord,
   PlotDefinition,
 } from './types/cfd';
@@ -36,16 +35,16 @@ import {
   generateMesh,
   generateStructuredMesh,
   generateCaseFiles,
-  fetchSolverResults,
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
-  fetchRunField,
   fetchRunStream,
   deleteSolverRun,
-  SolverRunFieldSnapshot,
-  WS_BASE,
 } from './utils/api';
 import { saveProjectSession, renameProject } from './utils/projectsApi';
+import { buildInitialCFDState } from './hooks/appInitialState';
+import { useHistoricalRunField } from './hooks/useHistoricalRunField';
+import { useResultsPlayback } from './hooks/useResultsPlayback';
+import { useSolverRun } from './hooks/useSolverRun';
 import { toast } from './components/ui/Toast';
 import {
   CadWorkflowStep,
@@ -64,19 +63,19 @@ import {
 import {
   Blocking,
   autoBlockingFromOutline,
+  initializeBlocking,
   propagateNodeCounts,
   toStructuredRequest,
   wrapBodyOgrid,
   bodiesForOgrid,
   entityRing,
   cGridFromAirfoil,
+  wrapAirfoilOgrid,
   airfoilsForCGrid,
   outlineRing,
   applyTargetCellSize,
   autoCellSize,
 } from './types/blocking';
-
-export const SESSION_STORAGE_KEY = 'opencfd_studio_session_v1';
 
 export interface StudioSession {
   state: CFDProjectState;
@@ -170,6 +169,8 @@ export function App({
     () => savedSession?.cadEntities || [],
   );
   const [blocking, setBlocking] = useState<Blocking | null>(() => savedSession?.blocking ?? null);
+  const [directionColors, setDirectionColors] = useState<Record<string, string> | null>(null);
+  const [blockMode, setBlockMode] = useState<'auto' | 'manual'>('auto');
   const [ogridParams, setOgridParams] = useState<{
     offsetFactor: number;
     radialNodes: number;
@@ -188,7 +189,9 @@ export function App({
   const [blocksBuiltTick, setBlocksBuiltTick] = useState(0);
   // Drag-resizable left panel, shared across every stage.
   const [sidebarW, setSidebarW] = useState<number>(() => {
-    const s = Number(typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_sidebar_w'));
+    const s = Number(
+      typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_sidebar_w'),
+    );
     return s >= 220 && s <= 620 ? s : 280;
   });
 
@@ -344,163 +347,9 @@ export function App({
   const meshCoreSigRef = useRef<string | null>(null);
 
   // Master CFD Project State
-
-  const [state, setState] = useState<CFDProjectState>(() => ({
-    geometry: {
-      type: 'custom',
-      name: '',
-      chord: 1.0,
-      angleOfAttackDeg: 5.0,
-      cylinderDiameter: 1.0,
-      domainLength: 10.0,
-      domainHeight: 5.0,
-      stepHeight: 0.5,
-      meshResolution: 'medium',
-      usePrismLayers: true,
-      firstLayerHeightMm: 0.05,
-      numPrismLayers: 12,
-      prismExpansionRatio: 1.2,
-      meshAlgorithm: 'frontal_delaunay',
-      elementType: 'hybrid',
-      growthRate: 1.2,
-      elementsPerCurve: 12,
-      useProximityRefinement: true,
-      minElementSize: 0,
-      maxElementSize: 0,
-      localRefinementSize: 0,
-      optimizeMesh: true,
-      ...(savedSession?.state?.geometry || {}),
-    },
-    physics: {
-      compressibility: 'incompressible',
-      regime: 'turbulent',
-      timeFormulation: 'steady',
-      solver: 'simpleFoam',
-      inletVelocity: 35.0,
-      inletPressure: 101325,
-      inletTemperature: 288.15,
-      density: 1.225,
-      kinematicViscosity: 1.5e-5,
-      equationOfState: 'constantDensity',
-      specificHeatRatio: 1.4,
-      gasConstant: 287.05,
-      specificHeat: 1005,
-      thermalConductivity: 0.0262,
-      prandtlNumber: 0.71,
-      energyModel: 'disabled',
-      transportModel: 'constant',
-      turbulenceModel: 'kOmegaSST',
-      kOmegaConstants: {
-        alpha1: 0.55,
-        beta1: 0.075,
-        betaStar: 0.09,
-        sigmaK1: 0.85,
-        sigmaOmega1: 0.5,
-      },
-      kEpsilonConstants: {
-        cMu: 0.09,
-        c1Eps: 1.44,
-        c2Eps: 1.92,
-        sigmaK: 1.0,
-        sigmaEps: 1.3,
-      },
-      saConstants: {
-        cb1: 0.1355,
-        cb2: 0.622,
-        sigma: 0.6667,
-        kappa: 0.41,
-      },
-      wallTreatment: 'low_re_resolved',
-      turbulenceModelId: 'kOmegaSST',
-      wallModel: 'auto',
-      speedRegime: 'incompressible',
-      axisymmetric: false,
-      ...(savedSession?.state?.physics || {}),
-    },
-    caseSetup: {
-      targetYPlus: 1.0,
-      growthRate: 1.2,
-      refLengthOverride: null,
-      linkFirstCellToMesh: true,
-      patches: {},
-      ...(savedSession?.state?.caseSetup || {}),
-    },
-    boundaries: {
-      inletVelocity: 35.0,
-      inletAngleDeg: 0.0,
-      turbulenceIntensityPercent: 5.0,
-      turbulentLengthScaleM: 0.01,
-      inletK: 2.34,
-      inletOmega: 60.5,
-      inletEpsilon: 18.2,
-      inletNut: 0.038,
-      outletPressure: 0.0,
-      wallType: 'noSlip',
-      ...(savedSession?.state?.boundaries || {}),
-    },
-    yplus: {
-      velocity: 35.0,
-      length: 1.0,
-      density: 1.225,
-      viscosity: 1.789e-5,
-      target_yplus: 30.0,
-      expansion_ratio: 1.2,
-      reynolds_number: 2398634.0,
-      skin_friction_coefficient: 0.0031,
-      wall_shear_stress: 2.31,
-      friction_velocity: 1.37,
-      first_layer_height_m: 0.00032,
-      first_layer_height_mm: 0.32,
-      boundary_layer_thickness_mm: 8.42,
-      recommended_layers: 12,
-      total_layer_thickness_mm: 8.42,
-      ...(savedSession?.state?.yplus || {}),
-    },
-    solver: {
-      iterations: 200,
-      writeInterval: 25,
-      timeStep: 1.0,
-      relaxationFactors: {
-        p: 0.3,
-        U: 0.7,
-        k: 0.7,
-        omega: 0.7,
-      },
-      convergenceTolerances: {
-        p: 1e-5,
-        U: 1e-5,
-        k: 1e-5,
-        omega: 1e-5,
-      },
-      ...(savedSession?.state?.solver || {}),
-    },
-    solution: {
-      ...defaultSolverConfig(),
-      ...(savedSession?.state?.solution || {}),
-    },
-    postprocess: {
-      activeField: 'U_mag',
-      colormap: 'viridis',
-      showMeshWireframe: false,
-      showStreamlines: true,
-      showSlicePlane: false,
-      sliceAxis: 'z',
-      slicePosition: 0.0,
-      numStreamlines: 10,
-      glyphScale: 1.0,
-      showVectors: false,
-      ...(savedSession?.state?.postprocess || {}),
-    },
-    executionStatus: savedSession?.state?.executionStatus === 'completed' ? 'completed' : 'idle',
-    residuals: savedSession?.state?.residuals ?? [],
-    solverRuns: (savedSession?.state?.solverRuns ?? []).map((r: SolverRunRecord) =>
-      r.status === 'running'
-        ? { ...r, status: 'stopped' as const, finishedAt: r.startedAt }
-        : r,
-    ),
-    plots: savedSession?.state?.plots ?? [],
-    terminalLogs: savedSession?.state?.terminalLogs ?? ['OpenCFD ready.'],
-  }));
+  const [state, setState] = useState<CFDProjectState>(() =>
+    buildInitialCFDState(savedSession?.state),
+  );
 
   const [meshData, setMeshData] = useState<any>(() => savedSession?.meshData ?? null);
   const [meshError, setMeshError] = useState<string | null>(null);
@@ -509,24 +358,18 @@ export function App({
     () => savedSession?.caseFiles ?? {},
   );
   const [isMeshing, setIsMeshing] = useState<boolean>(false);
-  const wsRef = useRef<WebSocket | null>(null);
-  const activeRunIdRef = useRef<string | null>(null);
-  const runLogStartRef = useRef(0);
 
   // Historical solver run visualization state and cache
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [historicalFieldData, setHistoricalFieldData] = useState<SolverRunFieldSnapshot | null>(null);
-  const [historicalFieldStatus, setHistoricalFieldStatus] = useState<{
-    loading: boolean;
-    error: string | null;
-    runId: string | null;
-  }>({ loading: false, error: null, runId: null });
-  const historicalCacheRef = useRef<Map<string, SolverRunFieldSnapshot>>(new Map());
-  const historicalAbortRef = useRef<AbortController | null>(null);
-
-  // High-frequency residual batching (flushed on interval to cut re-render churn)
-  const pendingResidualsRef = useRef<ResidualDataPoint[]>([]);
-  const residualBatchTimerRef = useRef<number | null>(null);
+  const {
+    selectedRunId,
+    setSelectedRunId,
+    historicalFieldData,
+    setHistoricalFieldData,
+    historicalFieldStatus,
+    setHistoricalFieldStatus,
+    historicalCacheRef,
+    handleSelectRun,
+  } = useHistoricalRunField(projectId);
 
   // Derive axisymmetric directly from the boundary patches: when any edge is tagged
   // 'axis', the case is assumed axisymmetric.
@@ -547,7 +390,15 @@ export function App({
   // can appear here with no explicit tag - infer its role from the name so it
   // still gets a real BC and the solver never hits a missing-patchField error.
   const patchRoles = useMemo(() => {
-    const order: BoundaryTag[] = ['inlet', 'outlet', 'wall', 'farfield', 'symmetry', 'periodic', 'axis'];
+    const order: BoundaryTag[] = [
+      'inlet',
+      'outlet',
+      'wall',
+      'farfield',
+      'symmetry',
+      'periodic',
+      'axis',
+    ];
     const roleFromName = (n: string): BoundaryTag => {
       const k = n.toLowerCase();
       return (order.find((t) => k === t || k.startsWith(t)) as BoundaryTag) || 'wall';
@@ -580,7 +431,13 @@ export function App({
     return [...seen.keys()]
       .sort((a, b) => order.indexOf(a) - order.indexOf(b))
       .map((t) => ({ name: t, role: fix(t) as any }));
-  }, [boundaryEdges, meshData?.boundaries, state.physics.compressibility, state.physics.speedRegime, flowType]);
+  }, [
+    boundaryEdges,
+    meshData?.boundaries,
+    state.physics.compressibility,
+    state.physics.speedRegime,
+    flowType,
+  ]);
 
   // Full patch BC spec (roles + per-patch overrides) sent to the case generator.
   const patchSpec = useMemo(
@@ -834,7 +691,7 @@ export function App({
     },
     solver: { locked: !meshReady, reason: 'Generate a mesh first' },
     results: {
-      locked: !meshReady && !(state.solverRuns?.length),
+      locked: !meshReady && !state.solverRuns?.length,
       reason: 'Generate a mesh or select a previous run first',
     },
   };
@@ -953,9 +810,9 @@ export function App({
     return (keys.map((k) => edgeTagMap[k]).find(Boolean) as any) || 'wall';
   };
 
-  const structuredHint = useMemo<'hgrid' | 'ogrid' | 'cgrid'>(() => {
+  const structuredHint = useMemo<'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed'>(() => {
     const af = airfoilsForCGrid(cadEntities);
-    if (af.some((a) => a.aspect >= 2.2)) return 'cgrid';
+    if (af.some((a) => a.aspect >= 2.2)) return 'cgrid_closed';
     const body = cadEntities.some(
       (e) =>
         e.layer !== 'construction' &&
@@ -965,7 +822,7 @@ export function App({
     return body ? 'ogrid' : 'hgrid';
   }, [cadEntities]);
 
-  const handleBuildBlocks = (kind: 'hgrid' | 'ogrid' | 'cgrid') => {
+  const handleBuildBlocks = (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') => {
     setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
     if (kind === 'cgrid') {
       const af = airfoilsForCGrid(cadEntities)[0];
@@ -976,8 +833,20 @@ export function App({
         return;
       }
       const ent = cadEntities[af.index];
-      const domEnt = domEnts.length === 1 ? domEnts[0] : domEnts.find((e) => (e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse'));
-      const raw = cGridFromAirfoil(entityRing(ent), domain, bodyPatchFor(ent.id), ent.id, domEnt?.id);
+      const domEnt =
+        domEnts.length === 1
+          ? domEnts[0]
+          : domEnts.find(
+              (e) =>
+                e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse',
+            );
+      const raw = cGridFromAirfoil(
+        entityRing(ent),
+        domain,
+        bodyPatchFor(ent.id),
+        ent.id,
+        domEnt?.id,
+      );
       if (!raw) {
         toast(
           'Could not build a C-grid. Give the airfoil more room downstream of the trailing edge.',
@@ -989,6 +858,34 @@ export function App({
       const bk = applyTargetCellSize(raw, autoCellSize(raw));
       setBlocking(bk);
       toast(`Built a ${bk.blocks.length}-block C-grid around the airfoil.`, 'success');
+      return;
+    }
+    if (kind === 'cgrid_closed') {
+      const af = airfoilsForCGrid(cadEntities)[0];
+      if (!af) {
+        toast('Closed O-grid needs an elongated body (airfoil) in the domain.', 'error', 7000);
+        return;
+      }
+      const ent = cadEntities[af.index];
+      const base = autoBlockingFromOutline(cadEntities, edgeTagMap);
+      if (!base) {
+        toast('Could not auto-block this outline. Define a closed domain first.', 'error', 7000);
+        return;
+      }
+      const raw = wrapAirfoilOgrid(base, entityRing(ent), bodyPatchFor(ent.id), {
+        airfoilEntityId: ent.id,
+      });
+      if (!raw) {
+        toast(
+          'Could not wrap a closed O-grid around this airfoil - it may need more clearance from the domain edges.',
+          'error',
+          7000,
+        );
+        return;
+      }
+      const bk = applyTargetCellSize(propagateNodeCounts(raw), autoCellSize(raw));
+      setBlocking(bk);
+      toast(`Built a ${bk.blocks.length}-block closed O-grid around the airfoil.`, 'success');
       return;
     }
 
@@ -1027,6 +924,19 @@ export function App({
     } else {
       toast(`Built ${bk.blocks.length} block${bk.blocks.length > 1 ? 's' : ''}.`, 'success');
     }
+  };
+
+  // Manual (ICEM-style) blocking: one block around all the geometry, which the
+  // user then splits, deletes, associates and O-grids on the canvas.
+  const handleInitializeBlocking = () => {
+    const bk = initializeBlocking(cadEntities);
+    if (!bk) {
+      toast('No geometry to block.', 'error');
+      return;
+    }
+    setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
+    setBlocking(bk);
+    toast('Initialized 1 block.', 'success');
   };
 
   const ogridBodies = useMemo(
@@ -1246,13 +1156,15 @@ export function App({
     return { iteration: r.iteration, maxResidual, cd: (r as any).cd, cl: (r as any).cl };
   }, [state.residuals]);
 
-  const [resultsLoading, setResultsLoading] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false); // right-hand residuals/forces rail
   const [runsRailOpen, setRunsRailOpen] = useState(true); // right-hand plots & runs rail on Results tab
   const [selectedPlotId, setSelectedPlotId] = useState<string | null>(null);
   const [activeDialogPlot, setActiveDialogPlot] = useState<PlotDefinition | null>(null);
   const [createPlotModalOpen, setCreatePlotModalOpen] = useState(false);
-  const [pickingPointsState, setPickingPointsState] = useState<{ step: 1 | 2; p1?: [number, number] } | null>(null);
+  const [pickingPointsState, setPickingPointsState] = useState<{
+    step: 1 | 2;
+    p1?: [number, number];
+  } | null>(null);
   const [pickedP1, setPickedP1] = useState<[number, number] | null>(null);
   const [pickedP2, setPickedP2] = useState<[number, number] | null>(null);
   const [caseFilesOpen, setCaseFilesOpen] = useState(false); // OpenFOAM dicts modal
@@ -1265,471 +1177,20 @@ export function App({
       }
     }
   }, [state.plots, activeDialogPlot]);
-  // Live cell-based field streamed from the solver while it runs (Solver stage).
-  const [livePreview, setLivePreview] = useState<
-    { time: string; fields: Record<string, number[]>; ranges: Record<string, [number, number]> } | null
-  >(null);
-  const [transientFrameIndex, setTransientFrameIndex] = useState(0);
-  const [transientPlaying, setTransientPlaying] = useState(false);
-  const [transientSpeed, setTransientSpeed] = useState<number>(1.0);
-
-  // Keep stable refs so interval callbacks never go stale
-  const transientTimesRef = useRef<number[]>([]);
-  const transientFrameIndexRef = useRef(0);
-  const transientPlayingRef = useRef(false);
-  const transientSpeedRef = useRef(1.0);
-  const meshDataRef = useRef<any>(null);
-  const projectIdRef = useRef<string | undefined>(undefined);
-
-  // Frame cache: key = frame index, value = fieldData object. LRU-limited to 50 frames.
-  const frameCacheRef = useRef<Map<number, any>>(new Map());
-  const CACHE_MAX = 50;
-
-  // Wipe every cached results frame + transient bookkeeping. Must run whenever the
-  // mesh changes or a new solve starts, or the Results tab / player will keep
-  // serving the previous run's (or previous mesh's) solution.
-  const clearResultsCache = () => {
-    frameCacheRef.current.clear();
-    transientTimesRef.current = [];
-    transientFrameIndexRef.current = 0;
-    setTransientFrameIndex(0);
-    setFieldData(null);
-  };
-
-  // In-flight AbortController for the current fetch (cancelled when a newer request starts)
-  const fetchAbortRef = useRef<AbortController | null>(null);
-
-  // Scrub debounce timer - delays actual fetch by 80ms so rapid slider movement
-  // doesn't fire multiple overlapping requests
-  const scrubDebounceRef = useRef<number | null>(null);
-
-  const transientTimes = useMemo(
-    () =>
-      Array.isArray(fieldData?.availableTimes)
-        ? fieldData.availableTimes
-            .map(Number)
-            .filter(Number.isFinite)
-            .sort((a: number, b: number) => a - b)
-        : [],
-    [fieldData?.availableTimes],
-  );
-
-  // Sync refs whenever state changes
-  useEffect(() => {
-    transientTimesRef.current = transientTimes;
-  }, [transientTimes]);
-  useEffect(() => {
-    transientFrameIndexRef.current = transientFrameIndex;
-  }, [transientFrameIndex]);
-  useEffect(() => {
-    transientPlayingRef.current = transientPlaying;
-  }, [transientPlaying]);
-  useEffect(() => {
-    transientSpeedRef.current = transientSpeed;
-  }, [transientSpeed]);
-  useEffect(() => {
-    meshDataRef.current = meshData;
-  }, [meshData]);
-  useEffect(() => {
-    projectIdRef.current = projectId;
-  }, [projectId]);
-
-  // Core fetch - always cancels any previous in-flight request first.
-  // Returns true if data was loaded (not aborted/errored).
-  const fetchFrame = async (
-    time: number,
-    frameIdx: number,
-    signal: AbortSignal,
-  ): Promise<boolean> => {
-    const mesh = meshDataRef.current;
-    if (!mesh?.nodes?.length) return false;
-
-    // Cache hit - apply immediately, no network call
-    if (frameCacheRef.current.has(frameIdx)) {
-      const cached = frameCacheRef.current.get(frameIdx)!;
-      setFieldData(cached);
-      setTransientFrameIndex(frameIdx);
-      transientFrameIndexRef.current = frameIdx;
-      return true;
-    }
-
-    const { data, detail } = await fetchSolverResults(
-      { nodes: mesh.nodes, elements: mesh.elements },
-      projectIdRef.current,
-      time,
-      signal,
-    );
-
-    if (signal.aborted || detail === '__aborted__') return false;
-    if (!data) return false;
-
-    // Store in cache; evict oldest if over limit
-    frameCacheRef.current.set(frameIdx, data);
-    if (frameCacheRef.current.size > CACHE_MAX) {
-      const oldestKey = frameCacheRef.current.keys().next().value;
-      if (oldestKey !== undefined) frameCacheRef.current.delete(oldestKey);
-    }
-
-    // Update available times in ref from this response
-    const times = Array.isArray(data.availableTimes)
-      ? data.availableTimes
-          .map(Number)
-          .filter(Number.isFinite)
-          .sort((a: number, b: number) => a - b)
-      : [];
-    if (times.length) transientTimesRef.current = times;
-
-    setFieldData(data);
-    setTransientFrameIndex(frameIdx);
-    transientFrameIndexRef.current = frameIdx;
-    return true;
-  };
-
-  const loadResults = async (fromRun = false, time?: number, silent = false, frameIdx?: number) => {
-    const mesh = meshDataRef.current;
-    if (!mesh?.nodes?.length) {
-      if (!silent) toast('Generate a mesh first.', 'error');
-      return;
-    }
-
-    // Cancel any in-flight request
-    if (fetchAbortRef.current) fetchAbortRef.current.abort();
-    const aborter = new AbortController();
-    fetchAbortRef.current = aborter;
-
-    setResultsLoading(true);
-    const { data, detail } = await fetchSolverResults(
-      { nodes: mesh.nodes, elements: mesh.elements },
-      projectIdRef.current,
-      time,
-      aborter.signal,
-    );
-    setResultsLoading(false);
-
-    if (aborter.signal.aborted || detail === '__aborted__') return;
-
-    if (data) {
-      const times = Array.isArray(data.availableTimes)
-        ? data.availableTimes
-            .map(Number)
-            .filter(Number.isFinite)
-            .sort((a: number, b: number) => a - b)
-        : [];
-      transientTimesRef.current = times;
-
-      // When invoked right after a run (no explicit time/frame), point the player
-      // at the LAST written frame - that is what `data` holds, and it is the
-      // result the user just computed.
-      const frame =
-        frameIdx !== undefined
-          ? frameIdx
-          : time !== undefined
-            ? times.indexOf(Number(data.time))
-            : fromRun && times.length
-              ? Math.max(0, times.indexOf(Number(data.time)))
-              : -1;
-      if (frame >= 0) {
-        frameCacheRef.current.set(frame, data);
-        setTransientFrameIndex(frame);
-        transientFrameIndexRef.current = frame;
-      }
-
-      setFieldData(data);
-      setState((prev) => ({
-        ...prev,
-        terminalLogs: [...prev.terminalLogs, `[Results] Loaded fields from time ${data.time}.`],
-      }));
-      if (!silent) toast('Results loaded - open the Results tab.', 'success');
-    } else {
-      const msg = detail || 'no solver output found';
-      setState((prev) => ({ ...prev, terminalLogs: [...prev.terminalLogs, `[Results] ${msg}`] }));
-      if (!fromRun && !silent) toast(`Could not load results: ${msg}`, 'error', 6000);
-    }
-  };
-
-  // Prefetch adjacent frames in the background (non-blocking, won't abort active fetch)
-  const prefetchAdjacent = useCallback((frameIdx: number) => {
-    const times = transientTimesRef.current;
-    const mesh = meshDataRef.current;
-    if (!mesh?.nodes?.length || times.length < 2) return;
-    [-1, 1, -2, 2].forEach((delta) => {
-      const idx = frameIdx + delta;
-      if (idx < 0 || idx >= times.length) return;
-      if (frameCacheRef.current.has(idx)) return;
-      // Fire-and-forget background prefetch with its own abort controller
-      const pAborter = new AbortController();
-      void fetchSolverResults(
-        { nodes: mesh.nodes, elements: mesh.elements },
-        projectIdRef.current,
-        times[idx],
-        pAborter.signal,
-      ).then(({ data }) => {
-        if (!data || pAborter.signal.aborted) return;
-        frameCacheRef.current.set(idx, data);
-        if (frameCacheRef.current.size > CACHE_MAX) {
-          const oldest = frameCacheRef.current.keys().next().value;
-          if (oldest !== undefined) frameCacheRef.current.delete(oldest);
-        }
-      });
-    });
-  }, []);
-
-  const selectTransientFrame = useCallback(
-    (index: number) => {
-      const times = transientTimesRef.current;
-      const clamped = Math.max(0, Math.min(times.length - 1, index));
-      if (times[clamped] === undefined) return;
-
-      // 1. Instant optimistic UI update for 60fps realtime scrubbing
-      setTransientFrameIndex(clamped);
-      transientFrameIndexRef.current = clamped;
-
-      // 2. Cache hit → instant GPU field update
-      if (frameCacheRef.current.has(clamped)) {
-        const cached = frameCacheRef.current.get(clamped)!;
-        setFieldData(cached);
-        prefetchAdjacent(clamped);
-        return;
-      }
-
-      // 3. Realtime network fetch with immediate in-flight abort
-      if (fetchAbortRef.current) fetchAbortRef.current.abort();
-      const aborter = new AbortController();
-      fetchAbortRef.current = aborter;
-
-      void fetchFrame(times[clamped], clamped, aborter.signal).then((ok) => {
-        if (ok) prefetchAdjacent(clamped);
-      });
-    },
-    [prefetchAdjacent],
-  );
-
-  // Single stable interval/timeout loop - calibrated to actual physical simulation time
-  const playTimeoutRef = useRef<number | null>(null);
-  const stopPlayback = useCallback(() => {
-    if (playTimeoutRef.current !== null) {
-      window.clearTimeout(playTimeoutRef.current);
-      playTimeoutRef.current = null;
-    }
-    setTransientPlaying(false);
-    transientPlayingRef.current = false;
-  }, []);
-
-  const scheduleNextFrame = useCallback(() => {
-    if (!transientPlayingRef.current) return;
-    const times = transientTimesRef.current;
-    const current = transientFrameIndexRef.current;
-
-    if (times.length < 2 || current >= times.length - 1) {
-      stopPlayback();
-      return;
-    }
-
-    const next = current + 1;
-    // Physical time delta between current and next frame in seconds
-    const dtReal = Math.max(0.001, (times[next] ?? 0) - (times[current] ?? 0));
-    // Delay in milliseconds scaled by chosen playback speed (e.g. 1x = 1:1 real simulation time)
-    const speed = transientSpeedRef.current || 1.0;
-    const delayMs = Math.max(16, Math.round((dtReal * 1000) / speed));
-
-    playTimeoutRef.current = window.setTimeout(() => {
-      if (!transientPlayingRef.current) return;
-      transientFrameIndexRef.current = next;
-      setTransientFrameIndex(next);
-
-      if (frameCacheRef.current.has(next)) {
-        setFieldData(frameCacheRef.current.get(next)!);
-        prefetchAdjacent(next);
-        scheduleNextFrame();
-      } else {
-        if (fetchAbortRef.current) fetchAbortRef.current.abort();
-        const aborter = new AbortController();
-        fetchAbortRef.current = aborter;
-        void fetchFrame(times[next], next, aborter.signal).then(() => {
-          scheduleNextFrame();
-        });
-      }
-    }, delayMs);
-  }, [stopPlayback, prefetchAdjacent]);
-
-  const startPlayback = useCallback(() => {
-    if (playTimeoutRef.current !== null) window.clearTimeout(playTimeoutRef.current);
-    setTransientPlaying(true);
-    transientPlayingRef.current = true;
-    scheduleNextFrame();
-  }, [scheduleNextFrame]);
-
-  // When speed changes mid-playback, restart to apply new timing
-  useEffect(() => {
-    transientSpeedRef.current = transientSpeed;
-    if (transientPlayingRef.current) {
-      if (playTimeoutRef.current !== null) window.clearTimeout(playTimeoutRef.current);
-      scheduleNextFrame();
-    }
-  }, [transientSpeed, scheduleNextFrame]);
-
-  // Cleanup on unmount
-  useEffect(
-    () => () => {
-      if (playTimeoutRef.current) window.clearTimeout(playTimeoutRef.current);
-      if (fetchAbortRef.current) fetchAbortRef.current.abort();
-      if (scrubDebounceRef.current !== null) window.clearTimeout(scrubDebounceRef.current);
-      if (residualBatchTimerRef.current !== null) window.clearInterval(residualBatchTimerRef.current);
-      if (historicalAbortRef.current) historicalAbortRef.current.abort();
-    },
-    [],
-  );
-
-  // High-frequency residual batching helpers
-  const flushResiduals = useCallback(() => {
-    if (pendingResidualsRef.current.length === 0) return;
-    const batch = pendingResidualsRef.current;
-    pendingResidualsRef.current = [];
-    setState((prev) => ({
-      ...prev,
-      residuals: [...prev.residuals, ...batch],
-    }));
-  }, []);
-
-  const stopResidualBatching = useCallback(() => {
-    if (residualBatchTimerRef.current !== null) {
-      window.clearInterval(residualBatchTimerRef.current);
-      residualBatchTimerRef.current = null;
-    }
-  }, []);
-
-  const finalizeRun = (
-    status: 'completed' | 'error' | 'stopped',
-    extra?: { iterations?: number },
-  ) => {
-    const targetId = activeRunIdRef.current;
-    if (!targetId) return;
-    activeRunIdRef.current = null;
-
-    stopResidualBatching();
-    const finalPending = pendingResidualsRef.current;
-    pendingResidualsRef.current = [];
-
-    setState((prev) => {
-      const allResiduals = finalPending.length > 0 ? [...prev.residuals, ...finalPending] : prev.residuals;
-      const last = allResiduals.length > 0 ? allResiduals[allResiduals.length - 1] : undefined;
-      const finalCd = typeof last?.cd === 'number' ? last.cd : undefined;
-      const finalCl = typeof last?.cl === 'number' ? last.cl : undefined;
-      const iterationsRun = extra?.iterations ?? last?.iteration;
-      const logs = prev.terminalLogs.slice(runLogStartRef.current);
-      const residuals = [...allResiduals];
-      const finishedAt = Date.now();
-
-      return {
-        ...prev,
-        residuals: allResiduals,
-        solverRuns: (prev.solverRuns ?? []).map((r) => {
-          if (r.id !== targetId) return r;
-          return {
-            ...r,
-            status,
-            finishedAt,
-            residuals,
-            logs,
-            ...(finalCd !== undefined ? { finalCd } : {}),
-            ...(finalCl !== undefined ? { finalCl } : {}),
-            ...(iterationsRun !== undefined ? { iterationsRun } : {}),
-          };
-        }),
-      };
-    });
-  };
-
-  // Historical run selection and field snapshot loading
-  const handleSelectRun = useCallback(
-    async (runId: string | null) => {
-      if (historicalAbortRef.current) {
-        historicalAbortRef.current.abort();
-        historicalAbortRef.current = null;
-      }
-
-      if (!runId) {
-        setSelectedRunId(null);
-        setHistoricalFieldData(null);
-        setHistoricalFieldStatus({ loading: false, error: null, runId: null });
-        return;
-      }
-
-      setSelectedRunId(runId);
-
-      // In-memory cache hit
-      if (historicalCacheRef.current.has(runId)) {
-        const cached = historicalCacheRef.current.get(runId)!;
-        setHistoricalFieldData(cached);
-        setHistoricalFieldStatus({ loading: false, error: null, runId });
-        return;
-      }
-
-      const aborter = new AbortController();
-      historicalAbortRef.current = aborter;
-      setHistoricalFieldStatus({ loading: true, error: null, runId });
-
-      let res = await fetchRunField(projectId, runId, aborter.signal);
-      for (let attempt = 0; !res.data && attempt < 3 && !aborter.signal.aborted; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
-        if (aborter.signal.aborted) break;
-        res = await fetchRunField(projectId, runId, aborter.signal);
-      }
-      if (aborter.signal.aborted || res.detail === '__aborted__') return;
-
-      if (!res.data) {
-        setHistoricalFieldData(null);
-        setHistoricalFieldStatus({
-          loading: false,
-          error: res.detail || 'No stored field snapshot found for this run.',
-          runId,
-        });
-        return;
-      }
-
-      const snap = res.data;
-      if (
-        !snap.mesh ||
-        !Array.isArray(snap.mesh.nodes) ||
-        !Array.isArray(snap.mesh.elements) ||
-        snap.mesh.nodes.length === 0
-      ) {
-        setHistoricalFieldData(null);
-        setHistoricalFieldStatus({
-          loading: false,
-          error: 'Historical mesh geometry missing or invalid in snapshot.',
-          runId,
-        });
-        return;
-      }
-
-      // Guard explicitly against field-to-mesh node mismatch
-      const nodeCount = snap.mesh.nodes.length;
-      let mismatch = false;
-      if (snap.fields && typeof snap.fields === 'object') {
-        for (const arr of Object.values(snap.fields)) {
-          if (Array.isArray(arr) && arr.length > 0 && arr.length !== nodeCount) {
-            mismatch = true;
-            break;
-          }
-        }
-      }
-      if (mismatch) {
-        setHistoricalFieldData(null);
-        setHistoricalFieldStatus({
-          loading: false,
-          error: 'Field data length does not match historical mesh node count.',
-          runId,
-        });
-        return;
-      }
-
-      historicalCacheRef.current.set(runId, snap);
-      setHistoricalFieldData(snap);
-      setHistoricalFieldStatus({ loading: false, error: null, runId });
-    },
-    [projectId],
-  );
+  const {
+    resultsLoading,
+    livePreview,
+    setLivePreview,
+    transientFrameIndex,
+    transientPlaying,
+    transientSpeed,
+    setTransientSpeed,
+    transientTimes,
+    clearResultsCache,
+    loadResults,
+    selectTransientFrame,
+    handleToggleTransientPlay,
+  } = useResultsPlayback({ fieldData, setFieldData, meshData, projectId, setState });
 
   const handleDeleteRun = useCallback(
     async (id: string) => {
@@ -1788,36 +1249,31 @@ export function App({
     (name: string) => setState((prev) => ({ ...prev, geometry: { ...prev.geometry, name } })),
     [],
   );
-  const handleToggleTransientPlay = useCallback(() => {
-    if (transientPlayingRef.current) stopPlayback();
-    else startPlayback();
-  }, [stopPlayback, startPlayback]);
-
   const isViewingHistorical = activeStage === 'results' && selectedRunId !== null;
   const selectedRunRecord = isViewingHistorical
     ? (state.solverRuns ?? []).find((r) => r.id === selectedRunId)
     : null;
 
   const effectiveMesh = isViewingHistorical
-    ? (historicalFieldData?.mesh
-        ? {
-            nodes: historicalFieldData.mesh.nodes,
-            elements: historicalFieldData.mesh.elements,
-            num_nodes: historicalFieldData.mesh.nodes.length,
-            num_elements: historicalFieldData.mesh.elements.length,
-            boundaries: historicalFieldData.mesh.boundaries || {},
-          }
-        : null)
+    ? historicalFieldData?.mesh
+      ? {
+          nodes: historicalFieldData.mesh.nodes,
+          elements: historicalFieldData.mesh.elements,
+          num_nodes: historicalFieldData.mesh.nodes.length,
+          num_elements: historicalFieldData.mesh.elements.length,
+          boundaries: historicalFieldData.mesh.boundaries || {},
+        }
+      : null
     : meshData;
 
   const effectiveFieldData = isViewingHistorical
-    ? (historicalFieldData
-        ? {
-            ...historicalFieldData,
-            source: 'openfoam',
-            streamlines: historicalFieldData.streamlines || [],
-          }
-        : null)
+    ? historicalFieldData
+      ? {
+          ...historicalFieldData,
+          source: 'openfoam',
+          streamlines: historicalFieldData.streamlines || [],
+        }
+      : null
     : fieldData;
 
   const targetRunForPlot = useMemo(() => {
@@ -1888,191 +1344,38 @@ export function App({
 
   const activePlotLineForCanvas = useMemo(() => {
     if (activeStage !== 'results') return null;
-    if (activeDialogPlot) {
-      return { p1: activeDialogPlot.line.p1, p2: activeDialogPlot.line.p2, label: activeDialogPlot.name };
+    if (activeDialogPlot?.line) {
+      return {
+        p1: activeDialogPlot.line.p1,
+        p2: activeDialogPlot.line.p2,
+        label: activeDialogPlot.name,
+      };
     }
     if (selectedPlotId) {
       const sp = (state.plots ?? []).find((p) => p.id === selectedPlotId);
-      if (sp) return { p1: sp.line.p1, p2: sp.line.p2, label: sp.name };
+      if (sp?.line) return { p1: sp.line.p1, p2: sp.line.p2, label: sp.name };
     }
     return null;
   }, [activeStage, activeDialogPlot, selectedPlotId, state.plots]);
 
-  const handleRunSolver = async () => {
-    if (activeRunIdRef.current) {
-      finalizeRun('stopped');
-    }
-    if (wsRef.current) wsRef.current.close();
-    setMonitorOpen(true); // reveal the residuals / forces rail for the run
-    setLivePreview(null); // start the live field preview fresh
-    clearResultsCache(); // the previous run's frames must not survive a new solve
-    setSelectedRunId(null);
-    setHistoricalFieldData(null);
-    setHistoricalFieldStatus({ loading: false, error: null, runId: null });
-    stopResidualBatching();
-    pendingResidualsRef.current = [];
-
-    const n = (state.solverRuns?.length ?? 0) + 1;
-    const runId =
-      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `run-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const record: SolverRunRecord = {
-      id: runId,
-      startedAt: Date.now(),
-      finishedAt: null,
-      status: 'running',
-      label: `Run ${n}`,
-      config: {
-        timeFormulation: state.physics.timeFormulation === 'transient' ? 'transient' : 'steady',
-        turbulenceModel: state.physics.turbulenceModelId,
-        iterations: state.solution.run.iterations,
-        velocity: state.physics.inletVelocity,
-        reynolds:
-          (state.physics.inletVelocity * caseRefLength) /
-          Math.max(state.physics.kinematicViscosity, 1e-12),
-        regime: state.physics.regime,
-        cells: meshData?.num_elements ?? 0,
-        momentumOrder: state.solution.methods.momentum,
-        relax: state.solution.controls.relax,
-        axisymmetric: state.physics.axisymmetric,
-      },
-      residuals: [],
-      logs: [],
-    };
-    activeRunIdRef.current = record.id;
-    runLogStartRef.current = state.terminalLogs.length;
-
-    setState((prev) => ({
-      ...prev,
-      executionStatus: 'running',
-      residuals: [],
-      terminalLogs: [
-        ...prev.terminalLogs,
-        `[OpenFOAM] Writing case (${patchSpec.length} patches), ${state.physics.timeFormulation === 'transient' ? 'transient' : 'steady-state'}...`,
-      ],
-      solverRuns: [...(prev.solverRuns ?? []), record],
-    }));
-
-    // regenerate the case dictionaries with the current solution config
-    try {
-      const dicts = await makeCaseFiles();
-      if (dicts && Object.keys(dicts).length > 0) {
-        setCaseFiles(dicts);
-      }
-    } catch (e: any) {
-      toast(`Could not write the case files: ${e?.message ?? e}`, 'error');
-    }
-
-    const ws = new WebSocket(`${WS_BASE}/ws/solver`);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      ws.send(
-        JSON.stringify({
-          mode: 'auto',
-          project_id: projectId,
-          run_id: record.id,
-          physics: state.physics,
-          mesh: meshData
-            ? {
-                nodes: meshData.nodes,
-                elements: meshData.elements,
-                boundaries: meshData.boundaries,
-              }
-            : null,
-          wallPatches: patchRoles.filter((p) => p.role === 'wall').map((p) => p.name),
-          patchTypes: Object.fromEntries(
-            patchRoles.map((p) => [
-              p.name,
-              p.role === 'wall' ? 'wall' : p.role === 'symmetry' ? 'symmetry' : p.role === 'axis' ? 'empty' : 'patch',
-            ]),
-          ),
-          axisymmetric: state.physics.axisymmetric,
-          iterations: state.solution.run.iterations,
-          regime: state.physics.regime,
-          velocity: state.physics.inletVelocity,
-          reynolds:
-            (state.physics.inletVelocity * caseRefLength) /
-            Math.max(state.physics.kinematicViscosity, 1e-12),
-          cells: meshData?.num_elements ?? 20000,
-          relax: state.solution.controls.relax,
-          momentumOrder: state.solution.methods.momentum,
-          turbulenceModel: state.physics.turbulenceModelId,
-          forces: state.solution.monitors.forces.enabled,
-          init: state.solution.run.init,
-        }),
-      );
-    };
-
-    ws.onmessage = (evt) => {
-      const msg = JSON.parse(evt.data);
-      if (msg.type === 'log') {
-        setState((prev) => ({
-          ...prev,
-          terminalLogs: [...prev.terminalLogs, msg.line],
-        }));
-      } else if (msg.type === 'residual') {
-        pendingResidualsRef.current.push(msg.data);
-        if (residualBatchTimerRef.current === null) {
-          residualBatchTimerRef.current = window.setInterval(flushResiduals, 200);
-        }
-      } else if (msg.type === 'field') {
-        setLivePreview(msg.data);
-      } else if (msg.type === 'status' && msg.status === 'completed') {
-        finalizeRun('completed', { iterations: msg.iterations });
-        setState((prev) => ({
-          ...prev,
-          executionStatus: 'completed',
-          terminalLogs: [
-            ...prev.terminalLogs,
-            `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`,
-          ],
-        }));
-        toast('Solver run finished.', 'success');
-        void loadResults(true);
-      } else if (msg.type === 'error') {
-        finalizeRun('error');
-        setState((prev) => ({
-          ...prev,
-          executionStatus: 'error',
-          terminalLogs: [...prev.terminalLogs, `[Error] ${msg.message}`],
-        }));
-        toast(msg.message, 'error');
-        // A diverged / stopped run still wrote partial fields - refresh the
-        // Results tab from them instead of leaving the previous run's data.
-        if (msg.results_available) {
-          void loadResults(true);
-          toast('Loaded the partial fields from the last written step.', 'info', 6000);
-        }
-      }
-    };
-
-    ws.onerror = () => {
-      finalizeRun('error');
-      setState((prev) => ({
-        ...prev,
-        executionStatus: 'error',
-        terminalLogs: [
-          ...prev.terminalLogs,
-          '[Error] Could not reach the solver stream (backend down?).',
-        ],
-      }));
-      toast('Could not reach the solver stream.', 'error');
-    };
-  };
-
-  const handleStopSolver = () => {
-    finalizeRun('stopped');
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-    setState((prev) => ({
-      ...prev,
-      executionStatus: 'idle',
-      terminalLogs: [...prev.terminalLogs, '[Solver] Execution aborted.'],
-    }));
-  };
+  const { handleRunSolver, handleStopSolver } = useSolverRun({
+    state,
+    setState,
+    meshData,
+    projectId,
+    caseRefLength,
+    patchSpec,
+    patchRoles,
+    makeCaseFiles,
+    setCaseFiles,
+    setMonitorOpen,
+    setLivePreview,
+    clearResultsCache,
+    setSelectedRunId,
+    setHistoricalFieldData,
+    setHistoricalFieldStatus,
+    loadResults,
+  });
 
   return (
     <div className="flex flex-col h-screen w-screen bg-[#F5F6F8] overflow-hidden font-sans text-[#171A1F]">
@@ -2081,6 +1384,7 @@ export function App({
         projectName={projectName}
         onProjectNameChange={handleRenameProject}
         onExitHome={handleExitHome}
+        onOpenCaseFiles={() => setCaseFilesOpen(true)}
       />
 
       {/* 2. WORKFLOW NAVIGATION STRIP (36px) */}
@@ -2137,6 +1441,7 @@ export function App({
           onGenerateMesh={handleGenerateMesh}
           blocking={blocking}
           onBuildBlocks={handleBuildBlocks}
+          onInitializeBlocking={handleInitializeBlocking}
           onUpdateBlocking={handleUpdateBlocking}
           onGenerateStructuredMesh={handleGenerateStructuredMesh}
           ogridBodies={ogridBodies}
@@ -2151,9 +1456,15 @@ export function App({
           width={sidebarW}
           onWidthChange={(w) => {
             setSidebarW(w);
-            try { localStorage.setItem('opencfd_sidebar_w', String(Math.round(w))); } catch { /* ignore */ }
+            try {
+              localStorage.setItem('opencfd_sidebar_w', String(Math.round(w)));
+            } catch {
+              /* ignore */
+            }
           }}
           onApplyYPlusToMesh={handleApplyYPlusToMesh}
+          onDirectionColors={setDirectionColors}
+          onBlockModeChange={setBlockMode}
           meshData={meshData}
           meshError={meshError}
           meshStale={meshStale}
@@ -2258,6 +1569,8 @@ export function App({
                 blocksBuiltTick={blocksBuiltTick}
                 onUpdateBlocking={handleUpdateBlocking}
                 showBlocking={activeStage === 'mesh' && meshTopology === 'structured'}
+                directionColors={directionColors}
+                blockMode={blockMode}
                 domainBroken={domainState === 'broken'}
                 isMeshing={isMeshing}
                 showMesh={
@@ -2390,9 +1703,7 @@ export function App({
             onRelabelRun={(id, label) =>
               setState((prev) => ({
                 ...prev,
-                solverRuns: (prev.solverRuns ?? []).map((r) =>
-                  r.id === id ? { ...r, label } : r,
-                ),
+                solverRuns: (prev.solverRuns ?? []).map((r) => (r.id === id ? { ...r, label } : r)),
               }))
             }
             onDeleteRun={handleDeleteRun}
@@ -2401,7 +1712,7 @@ export function App({
       </div>
 
       {/* 5. BOTTOM STATUS BAR (24px) */}
-      <StatusBar state={state} meshData={meshData} />
+      <StatusBar />
 
       <CaseFilesModal
         open={caseFilesOpen}
@@ -2417,6 +1728,9 @@ export function App({
         projectId={projectId}
         targetRunId={targetRunForPlot.id}
         targetRunLabel={targetRunForPlot.label}
+        targetRunResiduals={
+          (state.solverRuns ?? []).find((r) => r.id === targetRunForPlot.id)?.residuals ?? []
+        }
         defaultName={`Plot ${(state.plots?.length ?? 0) + 1}`}
         pickedP1={pickedP1}
         pickedP2={pickedP2}
@@ -2431,6 +1745,7 @@ export function App({
         onUpdatePlot={handleUpdatePlot}
         onDeletePlot={handleDeletePlot}
         projectId={projectId}
+        solverRuns={state.solverRuns ?? []}
       />
     </div>
   );

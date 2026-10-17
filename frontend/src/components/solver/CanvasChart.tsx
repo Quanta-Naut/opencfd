@@ -65,7 +65,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
   xKey,
   series,
   yScale = 'linear',
-  yFormat = (n) => (Math.abs(n) >= 1000 || (n !== 0 && Math.abs(n) < 0.01) ? n.toExponential(1) : n.toFixed(2)),
+  yFormat = (n) =>
+    Math.abs(n) >= 1000 || (n !== 0 && Math.abs(n) < 0.01) ? n.toExponential(1) : n.toFixed(2),
   xFormat,
   maxDrawPoints = 800,
 }) => {
@@ -99,8 +100,15 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       if (!dirtyRef.current) return;
       dirtyRef.current = false;
 
-      const { data: rows, xKey: xk, series: ser, yScale: ys, yFormat: yf, xFormat: xf, maxDrawPoints: cap } =
-        stateRef.current;
+      const {
+        data: rows,
+        xKey: xk,
+        series: ser,
+        yScale: ys,
+        yFormat: yf,
+        xFormat: xf,
+        maxDrawPoints: cap,
+      } = stateRef.current;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const cssW = wrap.clientWidth;
       const cssH = wrap.clientHeight;
@@ -132,7 +140,16 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           if (typeof y === 'number') pts.push([r[xk], isFinite(y) ? y : NaN]);
         }
         const hasGaps = pts.some(([_, y]) => !isFinite(y));
-        return { s, pts: hasGaps && pts.length <= cap ? pts : lttb(pts.filter(([_, y]) => isFinite(y)), cap) };
+        return {
+          s,
+          pts:
+            hasGaps && pts.length <= cap
+              ? pts
+              : lttb(
+                  pts.filter(([_, y]) => isFinite(y)),
+                  cap,
+                ),
+        };
       });
 
       let xMin = Infinity;
@@ -145,7 +162,14 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           if (ys === 'log' ? y > 0 : isFinite(y)) allY.push(y);
         }
       }
-      if (!isFinite(xMin) || allY.length === 0 || xMax === xMin) return;
+      if (!isFinite(xMin) || allY.length === 0) return;
+      // A genuinely constant X (e.g. a field-vs-field plot sampled where the
+      // X field happens to be uniform along the whole probe line) must not
+      // blank the chart - draw it as a single vertical slice instead.
+      if (xMax === xMin) {
+        xMin -= 0.5;
+        xMax += 0.5;
+      }
       allY.sort((a, b) => a - b);
       let yMin: number;
       let yMax: number;
@@ -154,7 +178,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         yMax = Math.max(allY[allY.length - 1], yMin * 10);
       } else {
         // clip the tails so one startup transient spike doesn't flatten the rest
-        const q = (p: number) => allY[Math.min(allY.length - 1, Math.max(0, Math.round(p * (allY.length - 1))))];
+        const q = (p: number) =>
+          allY[Math.min(allY.length - 1, Math.max(0, Math.round(p * (allY.length - 1))))];
         yMin = q(0.02);
         yMax = q(0.98);
         if (yMax - yMin < 1e-9) {
@@ -169,7 +194,9 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       const sx = (x: number) => PAD.l + ((x - xMin) / (xMax - xMin)) * plotW;
       const sy = (y: number) => {
         if (ys === 'log') {
-          const t = (Math.log10(Math.max(y, 1e-12)) - Math.log10(yMin)) / (Math.log10(yMax) - Math.log10(yMin));
+          const t =
+            (Math.log10(Math.max(y, 1e-12)) - Math.log10(yMin)) /
+            (Math.log10(yMax) - Math.log10(yMin));
           return PAD.t + (1 - t) * plotH;
         }
         return PAD.t + (1 - (y - yMin) / (yMax - yMin)) * plotH;
@@ -186,7 +213,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         ys === 'log'
           ? (() => {
               const t: number[] = [];
-              for (let e = Math.ceil(Math.log10(yMin)); e <= Math.floor(Math.log10(yMax)); e += 1) t.push(10 ** e);
+              for (let e = Math.ceil(Math.log10(yMin)); e <= Math.floor(Math.log10(yMax)); e += 1)
+                t.push(10 ** e);
               return t.length ? t : [yMin, yMax];
             })()
           : Array.from({ length: 5 }, (_, i) => yMin + (i / 4) * (yMax - yMin));

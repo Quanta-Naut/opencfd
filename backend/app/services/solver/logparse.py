@@ -14,6 +14,16 @@ _SOLVING = re.compile(
 _EXEC = re.compile(r"^ExecutionTime = ")
 _CONVERGED = re.compile(r"solution converged|reached convergence criteria")
 
+# OpenFOAM prints its own errors as a "--> FOAM FATAL ERROR:" banner followed
+# by a free-text message, then a blank line and (usually) "From function ...".
+# A hard crash instead (SIGFPE from an unbounded field, SIGSEGV) never prints
+# that banner - only the OS/shell's own one-line signal message survives.
+_FATAL_HEADER = re.compile(r"-->\s*FOAM FATAL(?: IO)? ERROR", re.IGNORECASE)
+_FATAL_END = re.compile(r"^\s*From\s+function|^\s*$")
+_CRASH_SIGNAL = re.compile(
+    r"floating point exception|segmentation fault|bus error", re.IGNORECASE
+)
+
 # OpenFOAM field name -> UI residual key
 _FIELD_KEY = {
     "Ux": "Ux", "Uy": "Uy", "Uz": "Uz",
@@ -31,8 +41,36 @@ class ResidualStream:
         self._pending: Dict[str, float] = {}
         self._time: Optional[str] = None
         self.converged = False
+        self.fatal_error: Optional[str] = None
+        self._capturing_fatal = False
+        self._fatal_lines: List[str] = []
 
     def feed(self, line: str) -> Optional[Dict[str, float]]:
+        if self.fatal_error is None:
+            if self._capturing_fatal:
+                if _FATAL_END.match(line):
+                    self.fatal_error = " ".join(self._fatal_lines) or "FOAM FATAL ERROR"
+                    self._capturing_fatal = False
+                    return None
+                # Under `mpirun -np N`, another rank's own output can interleave
+                # mid-capture (no terminator ever arrives from THIS rank's own
+                # banner before a "Time = ..." / residual line from a different
+                # rank shows up on the same stdout pipe). Treat either as the
+                # end of the fatal block instead of swallowing it into the
+                # message, and let it fall through to the normal parsing below.
+                if _TIME.match(line) or _SOLVING.search(line):
+                    self.fatal_error = " ".join(self._fatal_lines) or "FOAM FATAL ERROR"
+                    self._capturing_fatal = False
+                else:
+                    self._fatal_lines.append(line.strip())
+                    return None
+            if _FATAL_HEADER.search(line):
+                self._capturing_fatal = True
+                self._fatal_lines = []
+                return None
+            if _CRASH_SIGNAL.search(line):
+                self.fatal_error = line.strip()
+
         m = _TIME.match(line)
         if m:
             self._time = m.group(1)

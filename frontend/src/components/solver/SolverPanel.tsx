@@ -2,7 +2,11 @@ import React from 'react';
 import { Play, Square } from 'lucide-react';
 import { CFDProjectState } from '../../types/cfd';
 import {
-  SolverConfig, StabilityPreset, PRESET_RELAX, PRESET_METHODS, SpatialOrder,
+  SolverConfig,
+  StabilityPreset,
+  PRESET_RELAX,
+  PRESET_METHODS,
+  SpatialOrder,
 } from '../../solver/solverConfig';
 
 const ORDER_OPTS: Array<[SpatialOrder, string]> = [
@@ -34,26 +38,28 @@ const NumericInput: React.FC<{
   React.useEffect(() => {
     if (!focused) setDraft(String(value));
   }, [value, focused]);
-  return <input
-    type="text"
-    inputMode="decimal"
-    {...props}
-    className={className}
-    value={draft}
-    onFocus={() => setFocused(true)}
-    onChange={(e) => {
-      const next = e.target.value;
-      setDraft(next);
-      const parsed = Number(next);
-      if (next.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed);
-    }}
-    onBlur={() => {
-      setFocused(false);
-      const parsed = Number(draft);
-      if (draft.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed);
-      else setDraft(String(value));
-    }}
-  />;
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      {...props}
+      className={className}
+      value={draft}
+      onFocus={() => setFocused(true)}
+      onChange={(e) => {
+        const next = e.target.value;
+        setDraft(next);
+        const parsed = Number(next);
+        if (next.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed);
+      }}
+      onBlur={() => {
+        setFocused(false);
+        const parsed = Number(draft);
+        if (draft.trim() !== '' && Number.isFinite(parsed)) onCommit(parsed);
+        else setDraft(String(value));
+      }}
+    />
+  );
 };
 
 const Head: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -82,7 +88,14 @@ export interface SolverPanelProps {
 }
 
 export const SolverPanel: React.FC<SolverPanelProps> = ({
-  state, setSolution, setTimeFormulation, wallPatches, running, onRun, onStop, convergence,
+  state,
+  setSolution,
+  setTimeFormulation,
+  wallPatches,
+  running,
+  onRun,
+  onStop,
+  convergence,
 }) => {
   const c = state.solution;
   const transient = state.physics.timeFormulation === 'transient';
@@ -91,7 +104,11 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
   const applyPreset = (p: StabilityPreset) =>
     setSolution((cfg) => ({
       ...cfg,
-      controls: { ...cfg.controls, preset: p, relax: p === 'custom' ? cfg.controls.relax : { ...PRESET_RELAX[p] } },
+      controls: {
+        ...cfg.controls,
+        preset: p,
+        relax: p === 'custom' ? cfg.controls.relax : { ...PRESET_RELAX[p] },
+      },
       methods: p === 'custom' ? cfg.methods : { ...cfg.methods, ...PRESET_METHODS[p] },
     }));
   const setMethods = (m: Partial<SolverConfig['methods']>) =>
@@ -99,13 +116,23 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
   const setControls = (m: Partial<SolverConfig['controls']>) =>
     setSolution((cfg) => ({ ...cfg, controls: { ...cfg.controls, preset: 'custom', ...m } }));
   const setForces = (m: Partial<SolverConfig['monitors']['forces']>) =>
-    setSolution((cfg) => ({ ...cfg, monitors: { ...cfg.monitors, forces: { ...cfg.monitors.forces, ...m } } }));
+    setSolution((cfg) => ({
+      ...cfg,
+      monitors: { ...cfg.monitors, forces: { ...cfg.monitors.forces, ...m } },
+    }));
   const setRun = (m: Partial<SolverConfig['run']>) =>
     setSolution((cfg) => ({ ...cfg, run: { ...cfg.run, ...m } }));
 
   const chooseRegime = (t: 'steady' | 'transient') => {
     setTimeFormulation(t);
-    setMethods({ time: t === 'steady' ? 'steadyState' : c.methods.time === 'steadyState' ? 'Euler' : c.methods.time });
+    setMethods({
+      time:
+        t === 'steady'
+          ? 'steadyState'
+          : c.methods.time === 'steadyState'
+            ? 'Euler'
+            : c.methods.time,
+    });
   };
 
   return (
@@ -127,37 +154,63 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
             </button>
           ))}
         </div>
+        {/* moved out of the live UI - see solver/SolverPanel.tsx, kept for a future tutorial
         <p className="text-[10px] text-[#69717D] leading-relaxed">
           {transient
             ? 'Marches in time. Set how long to run and the time step.'
             : 'Iterates to a converged solution - no time axis.'}
         </p>
+        */}
         {transient && (
           <>
             <Row label="End time (s)">
-              <NumericInput step={0.5} min={0} value={c.run.endTime} onCommit={(v) => setRun({ endTime: v })} />
+              <NumericInput
+                step={0.5}
+                min={0}
+                value={c.run.endTime}
+                onCommit={(v) => setRun({ endTime: v })}
+              />
             </Row>
             <Row label="Time step Δt (s)">
               <NumericInput value={c.run.deltaT} onCommit={(v) => setRun({ deltaT: v })} />
             </Row>
             <Row label="Time scheme">
-              <select className={sel} value={c.methods.time} onChange={(e) => setMethods({ time: e.target.value as any })}>
+              <select
+                className={sel}
+                value={c.methods.time}
+                onChange={(e) => setMethods({ time: e.target.value as any })}
+              >
                 <option value="Euler">Euler (1st)</option>
                 <option value="backward">Backward (2nd)</option>
                 <option value="CrankNicolson">Crank-Nicolson</option>
               </select>
             </Row>
             <Row label="Max Courant">
-              <NumericInput step={1} min={0.1} value={c.controls.maxCo} onCommit={(v) => setControls({ maxCo: v })} />
+              <NumericInput
+                step={1}
+                min={0.1}
+                value={c.controls.maxCo}
+                onCommit={(v) => setControls({ maxCo: v })}
+              />
             </Row>
             <Row label="Outer correctors">
-              <NumericInput min={1} max={20} value={c.methods.nOuterCorrectors} onCommit={(v) => setMethods({ nOuterCorrectors: Math.max(1, Math.round(v)) })} />
+              <NumericInput
+                min={1}
+                max={20}
+                value={c.methods.nOuterCorrectors}
+                onCommit={(v) => setMethods({ nOuterCorrectors: Math.max(1, Math.round(v)) })}
+              />
             </Row>
           </>
         )}
         {!transient && (
           <Row label="Iterations">
-            <NumericInput step={100} min={1} value={c.run.iterations} onCommit={(v) => setRun({ iterations: Math.max(1, Math.round(v)) })} />
+            <NumericInput
+              step={100}
+              min={1}
+              value={c.run.iterations}
+              onCommit={(v) => setRun({ iterations: Math.max(1, Math.round(v)) })}
+            />
           </Row>
         )}
 
@@ -175,73 +228,144 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
           </span>
         </Row>
         <Row label="Momentum">
-          <select className={sel} value={c.methods.momentum} onChange={(e) => setMethods({ momentum: e.target.value as any })}>
-            {ORDER_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          <select
+            className={sel}
+            value={c.methods.momentum}
+            onChange={(e) => setMethods({ momentum: e.target.value as any })}
+          >
+            {ORDER_OPTS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
           </select>
         </Row>
         <Row label="Turbulence">
-          <select className={sel} value={c.methods.turbulence} onChange={(e) => setMethods({ turbulence: e.target.value as any })}>
-            {ORDER_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          <select
+            className={sel}
+            value={c.methods.turbulence}
+            onChange={(e) => setMethods({ turbulence: e.target.value as any })}
+          >
+            {ORDER_OPTS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
           </select>
         </Row>
         {compressible && (
           <Row label="Energy">
-            <select className={sel} value={c.methods.energy} onChange={(e) => setMethods({ energy: e.target.value as any })}>
-              {ORDER_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            <select
+              className={sel}
+              value={c.methods.energy}
+              onChange={(e) => setMethods({ energy: e.target.value as any })}
+            >
+              {ORDER_OPTS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
             </select>
           </Row>
         )}
         <Row label="Gradient">
-          <select className={sel} value={c.methods.gradient} onChange={(e) => setMethods({ gradient: e.target.value as any })}>
+          <select
+            className={sel}
+            value={c.methods.gradient}
+            onChange={(e) => setMethods({ gradient: e.target.value as any })}
+          >
             <option value="gauss">Gauss linear</option>
             <option value="leastSquares">Least squares</option>
             <option value="cellLimited">Cell-limited</option>
           </select>
         </Row>
         <Row label="Non-ortho correctors">
-          <NumericInput min={0} max={5} value={c.methods.nNonOrthogonalCorrectors} onCommit={(v) => setMethods({ nNonOrthogonalCorrectors: Math.max(0, Math.round(v)) })} />
+          <NumericInput
+            min={0}
+            max={5}
+            value={c.methods.nNonOrthogonalCorrectors}
+            onCommit={(v) => setMethods({ nNonOrthogonalCorrectors: Math.max(0, Math.round(v)) })}
+          />
         </Row>
 
         <Head>Solution controls</Head>
         <div className="grid grid-cols-3 gap-1">
           {(['conservative', 'balanced', 'aggressive'] as const).map((p) => (
-            <button key={p} onClick={() => applyPreset(p)}
+            <button
+              key={p}
+              onClick={() => applyPreset(p)}
               className={`py-1.5 rounded border text-[10px] font-medium capitalize transition-colors ${
-                c.controls.preset === p ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'border-[#E1E4E8] text-[#69717D] bg-white'
-              }`}>{p}</button>
+                c.controls.preset === p
+                  ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]'
+                  : 'border-[#E1E4E8] text-[#69717D] bg-white'
+              }`}
+            >
+              {p}
+            </button>
           ))}
         </div>
-        <p className="text-[9px] text-[#8B95A1]">Under-relaxation {c.controls.preset === 'custom' ? '(custom)' : ''}</p>
+        <p className="text-[9px] text-[#8B95A1]">
+          Under-relaxation {c.controls.preset === 'custom' ? '(custom)' : ''}
+        </p>
         {(['p', 'U', 'k', 'omega'] as const).map((f) => (
           <Row key={f} label={`relax ${f}`}>
-            <NumericInput step={0.05} min={0.05} max={1} value={c.controls.relax[f]}
-              onCommit={(v) => setControls({ relax: { ...c.controls.relax, [f]: v } })} />
+            <NumericInput
+              step={0.05}
+              min={0.05}
+              max={1}
+              value={c.controls.relax[f]}
+              onCommit={(v) => setControls({ relax: { ...c.controls.relax, [f]: v } })}
+            />
           </Row>
         ))}
         <Row label="Residual target">
-          <NumericInput value={c.controls.residualTargets.U}
-            onCommit={(v) => setControls({ residualTargets: { p: v, U: v, turbulence: v } })} />
+          <NumericInput
+            value={c.controls.residualTargets.U}
+            onCommit={(v) => setControls({ residualTargets: { p: v, U: v, turbulence: v } })}
+          />
         </Row>
 
         <Head>Report definitions</Head>
         <label className="flex items-center justify-between text-[11px] text-[#69717D]">
           <span>Force coefficients (Cd, Cl, Cm)</span>
-          <input type="checkbox" className="accent-[#2563EB]" checked={c.monitors.forces.enabled}
-            onChange={(e) => setForces({ enabled: e.target.checked })} />
+          <input
+            type="checkbox"
+            className="accent-[#2563EB]"
+            checked={c.monitors.forces.enabled}
+            onChange={(e) => setForces({ enabled: e.target.checked })}
+          />
         </label>
         {c.monitors.forces.enabled && (
           <>
             <Row label="Body patch">
-              <select className={sel} value={c.monitors.forces.bodyPatch} onChange={(e) => setForces({ bodyPatch: e.target.value })}>
+              <select
+                className={sel}
+                value={c.monitors.forces.bodyPatch}
+                onChange={(e) => setForces({ bodyPatch: e.target.value })}
+              >
                 <option value="">auto (wall)</option>
-                {wallPatches.map((w) => <option key={w} value={w}>{w}</option>)}
+                {wallPatches.map((w) => (
+                  <option key={w} value={w}>
+                    {w}
+                  </option>
+                ))}
               </select>
             </Row>
             <Row label="Ref. area (m²)">
-              <NumericInput step={0.01} value={c.monitors.forces.refArea} onCommit={(v) => setForces({ refArea: v })} placeholder="auto" />
+              <NumericInput
+                step={0.01}
+                value={c.monitors.forces.refArea}
+                onCommit={(v) => setForces({ refArea: v })}
+                placeholder="auto"
+              />
             </Row>
             <Row label="Ref. length (m)">
-              <NumericInput step={0.01} value={c.monitors.forces.refLength} onCommit={(v) => setForces({ refLength: v })} placeholder="auto" />
+              <NumericInput
+                step={0.01}
+                value={c.monitors.forces.refLength}
+                onCommit={(v) => setForces({ refLength: v })}
+                placeholder="auto"
+              />
             </Row>
             <p className="text-[9px] text-[#8B95A1]">
               Lift / drag directions follow the {state.geometry.angleOfAttackDeg}° angle of attack.
@@ -251,7 +375,11 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
 
         <Head>Initialization</Head>
         <Row label="Method">
-          <select className={sel} value={c.run.init} onChange={(e) => setRun({ init: e.target.value as any })}>
+          <select
+            className={sel}
+            value={c.run.init}
+            onChange={(e) => setRun({ init: e.target.value as any })}
+          >
             <option value="uniform">Uniform (reference)</option>
             <option value="potentialFlow">Potential flow</option>
             <option value="continue">Continue previous</option>
@@ -260,10 +388,22 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
 
         <Head>Output</Head>
         <Row label="Write every">
-          <NumericInput step={50} min={0} value={c.run.writeInterval} onCommit={(v) => setRun({ writeInterval: Math.max(0, Math.round(v)) })} placeholder="0 = auto" />
+          <NumericInput
+            step={50}
+            min={0}
+            value={c.run.writeInterval}
+            onCommit={(v) => setRun({ writeInterval: Math.max(0, Math.round(v)) })}
+            placeholder="0 = auto"
+          />
         </Row>
         <Row label="Parallel (procs)">
-          <NumericInput step={1} min={1} max={64} value={c.run.parallelProcs} onCommit={(v) => setRun({ parallelProcs: Math.max(1, Math.round(v)) })} />
+          <NumericInput
+            step={1}
+            min={1}
+            max={64}
+            value={c.run.parallelProcs}
+            onCommit={(v) => setRun({ parallelProcs: Math.max(1, Math.round(v)) })}
+          />
         </Row>
       </div>
 
@@ -271,10 +411,16 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
         <button
           onClick={running ? onStop : onRun}
           className={`w-full py-2 font-medium rounded-sm flex items-center justify-center gap-1.5 transition-colors ${
-            running ? 'bg-[#DC2626] hover:bg-[#B91C1C] text-white' : 'bg-[#2563EB] hover:bg-[#1D4ED8] text-white'
+            running
+              ? 'bg-[#DC2626] hover:bg-[#B91C1C] text-white'
+              : 'bg-[#2563EB] hover:bg-[#1D4ED8] text-white'
           }`}
         >
-          {running ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+          {running ? (
+            <Square className="w-3.5 h-3.5 fill-current" />
+          ) : (
+            <Play className="w-3.5 h-3.5 fill-current" />
+          )}
           <span>{running ? 'Stop solver' : 'Run solver'}</span>
         </button>
       </div>

@@ -418,9 +418,14 @@ class OpenFoamAdapter(SolverAdapter):
             yield {"type": "status", "status": "completed", "iterations": residuals.iteration}
         else:
             yield {"type": "log", "line": "\n".join(tail[-20:])}
+            # A bare exit code tells the user nothing about *why* the solve
+            # died - surface OpenFOAM's own diagnostic (e.g. "Zero or
+            # negative cell volume detected...") when the log carried one.
+            detail = residuals.fatal_error
+            message = f"{solver_bin} failed: {detail}" if detail else f"{solver_bin} exited with code {rc}"
             # `results_available` tells the frontend to still refresh the Results
             # tab from whatever partial time dirs were written before the crash.
-            yield {"type": "error", "message": f"{solver_bin} exited with code {rc}",
+            yield {"type": "error", "message": message,
                    "results_available": True, "iterations": residuals.iteration}
 
 

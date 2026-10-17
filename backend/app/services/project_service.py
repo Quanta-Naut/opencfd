@@ -256,3 +256,21 @@ def delete_project(pid: str) -> None:
     if not pdir.is_dir():
         raise FileNotFoundError(f"Project '{pid}' not found")
     shutil.rmtree(pdir)
+
+
+def duplicate_project(pid: str) -> Dict[str, Any]:
+    """Copy a project's setup (geometry/mesh/case) into a new project.
+
+    Deliberately does not copy `runs/` - a duplicate is for trying a variant
+    of the setup, not for cloning old solver run history onto a project that
+    never actually produced it.
+    """
+    pdir = _project_dir(pid)
+    if not pdir.is_dir():
+        raise FileNotFoundError(f"Project '{pid}' not found")
+    meta = _read_json(_meta_path(pdir), None)
+    if not meta:
+        raise FileNotFoundError(f"Project '{pid}' is missing metadata")
+    session = _read_json(_session_path(pdir), {})
+    new_meta = create_project(f"{meta.get('name', pid)} copy")
+    return save_session(new_meta["id"], session)

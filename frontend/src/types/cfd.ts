@@ -11,23 +11,17 @@ export type TurbulenceModel =
   | 'RNGkEpsilon'
   | 'SpalartAllmaras';
 
-export type SpeedRegime =
-  | 'incompressible'
-  | 'subsonic'
-  | 'transonic'
-  | 'supersonic'
-  | 'hypersonic';
+export type SpeedRegime = 'incompressible' | 'subsonic' | 'transonic' | 'supersonic' | 'hypersonic';
 
 export type SolverType = 'simpleFoam' | 'icoFoam' | 'pisoFoam' | 'pimpleFoam';
 
-export type GeometryType = 
+export type GeometryType =
   | 'naca0012'
   | 'cylinder'
   | 'backward_step'
   | 'lid_cavity'
   | 'channel'
   | 'custom';
-
 
 export interface YPlusCalculation {
   velocity: number;
@@ -91,7 +85,7 @@ export interface PhysicsConfig {
   energyModel: 'disabled' | 'enabled';
   transportModel: 'constant' | 'sutherland';
   turbulenceModel: TurbulenceModel;
-  
+
   // k-omega SST constants
   kOmegaConstants: {
     alpha1: number;
@@ -209,10 +203,10 @@ export interface PostProcessConfig {
 
 export interface SolverRunRecord {
   id: string;
-  startedAt: number;                 // Date.now()
+  startedAt: number; // Date.now()
   finishedAt: number | null;
   status: 'running' | 'completed' | 'error' | 'stopped';
-  label: string;                     // user-editable; default `Run ${n}`
+  label: string; // user-editable; default `Run ${n}`
   config: {
     timeFormulation: 'steady' | 'transient';
     turbulenceModel: string;
@@ -225,14 +219,26 @@ export interface SolverRunRecord {
     relax: { p: number; U: number; k: number; omega: number; e: number };
     axisymmetric: boolean;
   };
-  residuals: ResidualDataPoint[];    // this run's full residual stream
-  logs: string[];                    // this run's console lines only
+  residuals: ResidualDataPoint[]; // this run's full residual stream
+  logs: string[]; // this run's console lines only
   finalCd?: number;
   finalCl?: number;
   iterationsRun?: number;
 }
 
 export type FlowVariable = 'U_mag' | 'p' | 'k' | 'omega' | 'vorticity';
+
+/** A convergence-monitor quantity, read live from a run's `residuals` stream -
+ * the same source the Solver tab's own residuals chart already uses. */
+export type MonitorField =
+  | 'residual_p'
+  | 'residual_Ux'
+  | 'residual_Uy'
+  | 'residual_k'
+  | 'residual_omega'
+  | 'residual_epsilon'
+  | 'cd'
+  | 'cl';
 
 export interface PlotLine {
   p1: [number, number];
@@ -248,14 +254,22 @@ export interface PlotSampleData {
 
 export interface PlotDefinition {
   id: string;
-  name: string;              // user-editable label, default like "Plot 1", "Plot 2"
-  runId: string | null;      // which solver run this was sampled from
-  variable: FlowVariable;
-  line: PlotLine;
+  name: string; // user-editable label, default like "Plot 1", "Plot 2"
+  /** 'line' (default, back-compat): a spatial probe sampled along a line, field
+   * vs distance or field vs field. 'monitor': one or more solver-run quantities
+   * (residuals, Cd, Cl) vs iteration/time - no sampling, reads the run's own
+   * already-captured residuals stream live. */
+  kind?: 'line' | 'monitor';
+  runId: string | null; // which solver run this was sampled from
+  variable: FlowVariable; // 'line' plots: the Y axis
+  xAxis?: 'distance' | FlowVariable; // 'line' plots: the X axis; default 'distance'
+  monitorFields?: MonitorField[]; // 'monitor' plots: one or more Y series
+  monitorX?: 'iteration' | 'time'; // 'monitor' plots: the X axis; default 'iteration'
+  line?: PlotLine; // 'line' plots only
   colormap: 'coolwarm' | 'viridis' | 'turbo' | 'jet' | 'rainbow' | string;
-  rangeMin: number | null;   // null = auto/full range
+  rangeMin: number | null; // null = auto/full range
   rangeMax: number | null;
-  data: PlotSampleData | null;  // cached sampled result
+  data: PlotSampleData | null; // cached sampled result ('line' plots only)
   createdAt: number;
 }
 
@@ -275,4 +289,3 @@ export interface CFDProjectState {
   plots: PlotDefinition[];
   terminalLogs: string[];
 }
-

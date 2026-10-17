@@ -1,13 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { X, AlertTriangle, Loader2 } from 'lucide-react';
+import { X, AlertTriangle, Loader2, Database } from 'lucide-react';
 import { setupStatus, fetchSettings, updateSettings, AppSettings } from '../../utils/api';
 
 export interface PreferencesDialogProps {
   open: boolean;
   onClose: () => void;
+  onOpenCaseFiles?: () => void;
 }
 
-export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onClose }) => {
+export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({
+  open,
+  onClose,
+  onOpenCaseFiles,
+}) => {
   const [isWindows, setIsWindows] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -46,7 +51,7 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0B0D10]/50 p-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0B0D10]/25 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -69,25 +74,46 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
         </div>
 
         <div className="p-4 space-y-4 text-xs text-[#171A1F]">
+          {onOpenCaseFiles && (
+            <div className="space-y-2 pb-4 border-b border-[#EDEFF3]">
+              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+                Case files
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenCaseFiles();
+                }}
+                className="w-full flex items-center gap-2 p-2.5 rounded border border-[#E1E4E8] hover:border-[#2563EB] hover:bg-[#F8FAFC] transition-colors text-left"
+              >
+                <Database className="w-3.5 h-3.5 text-[#69717D] shrink-0" />
+                <span className="font-semibold text-[#171A1F]">View and export OpenFOAM case</span>
+              </button>
+            </div>
+          )}
           {loading ? (
             <div className="flex items-center gap-2 text-[#69717D] py-4 justify-center">
               <Loader2 className="w-4 h-4 animate-spin" />
               <span>Loading preferences...</span>
             </div>
-          ) : !isWindows ? (
+          ) : !isWindows ? /* moved out of the live UI - see settings/PreferencesDialog.tsx, kept for a future tutorial
             <p className="text-[#69717D] leading-relaxed">
-              There are no OS-specific preferences on this platform yet. The
-              solver runs natively here, so there is nothing to configure.
+              There are no OS-specific preferences on this platform yet. The solver runs natively
+              here, so there is nothing to configure.
             </p>
-          ) : (
+            */
+          null : (
             <div className="space-y-2">
               <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
                 Case file storage
               </span>
+              {/* moved out of the live UI - see settings/PreferencesDialog.tsx, kept for a future tutorial
               <p className="text-[#69717D] leading-relaxed">
-                OpenCFD runs the solver inside a managed WSL2 environment on
-                Windows. Choose where a project's solver case files live.
+                OpenCFD runs the solver inside a managed WSL2 environment on Windows. Choose where a
+                project's solver case files live.
               </p>
+              */}
 
               <label
                 className={`flex items-start gap-2.5 p-2.5 rounded border cursor-pointer transition-colors ${
@@ -109,10 +135,9 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                     WSL filesystem (recommended, default)
                   </div>
                   <div className="text-[#69717D] mt-0.5">
-                    Case files live inside the managed WSL environment. Fast -
-                    the solver reads and writes its own native filesystem
-                    directly - but not directly browsable from Windows
-                    Explorer.
+                    Case files live inside the managed WSL environment. Fast - the solver reads and
+                    writes its own native filesystem directly - but not directly browsable from
+                    Windows Explorer.
                   </div>
                 </div>
               </label>
@@ -135,15 +160,14 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                 <div>
                   <div className="font-semibold text-[#171A1F]">Windows filesystem</div>
                   <div className="text-[#69717D] mt-0.5">
-                    Case files live under your Windows user profile, visible
-                    and editable directly from Windows tools.
+                    Case files live under your Windows user profile, visible and editable directly
+                    from Windows tools.
                   </div>
                   <div className="flex items-start gap-1.5 mt-1.5 text-amber-700">
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <span>
-                      Saving on Windows may cause performance issues - every
-                      solver read and write crosses the WSL/Windows
-                      filesystem bridge, which is noticeably slower for
+                      Saving on Windows may cause performance issues - every solver read and write
+                      crosses the WSL/Windows filesystem bridge, which is noticeably slower for
                       meshing and solving.
                     </span>
                   </div>

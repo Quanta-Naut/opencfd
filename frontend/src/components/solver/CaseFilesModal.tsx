@@ -152,7 +152,7 @@ export const CaseFilesModal: React.FC<CaseFilesModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/50 p-6"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/25 p-6"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}

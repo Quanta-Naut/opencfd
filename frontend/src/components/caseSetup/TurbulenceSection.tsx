@@ -13,7 +13,12 @@ const GROUP_LABEL: Record<string, string> = {
   'high-speed': 'High-speed / compressible',
 };
 
-export const TurbulenceSection: React.FC<SectionProps> = ({ state, setPhysics, setBoundaries, refLength }) => {
+export const TurbulenceSection: React.FC<SectionProps> = ({
+  state,
+  setPhysics,
+  setBoundaries,
+  refLength,
+}) => {
   const { physics, boundaries } = state;
   const compressible = physics.compressibility === 'compressible';
   const models = availableTurbulenceModels({ regime: 'turbulent', compressible });
@@ -21,7 +26,11 @@ export const TurbulenceSection: React.FC<SectionProps> = ({ state, setPhysics, s
 
   const groups = Array.from(new Set(models.map((m) => m.group)));
   const lengthScale = boundaries.turbulentLengthScaleM || 0.07 * refLength;
-  const it = inletTurbulence(physics.inletVelocity, boundaries.turbulenceIntensityPercent, lengthScale);
+  const it = inletTurbulence(
+    physics.inletVelocity,
+    boundaries.turbulenceIntensityPercent,
+    lengthScale,
+  );
 
   const applyModel = (id: string) => {
     const m = turbulenceModel(id as any);
@@ -29,10 +38,17 @@ export const TurbulenceSection: React.FC<SectionProps> = ({ state, setPhysics, s
       turbulenceModelId: id,
       wallModel: m.wallTreatments[0],
       // keep the legacy fields roughly aligned for older code paths
-      turbulenceModel: (['kOmegaSST', 'kEpsilon', 'realizableKE', 'RNGkEpsilon', 'SpalartAllmaras'].includes(id)
+      turbulenceModel: ([
+        'kOmegaSST',
+        'kEpsilon',
+        'realizableKE',
+        'RNGkEpsilon',
+        'SpalartAllmaras',
+      ].includes(id)
         ? id
         : 'kOmegaSST') as any,
-      wallTreatment: m.wallTreatments[0] === 'wall_functions' ? 'wall_functions' : 'low_re_resolved',
+      wallTreatment:
+        m.wallTreatments[0] === 'wall_functions' ? 'wall_functions' : 'low_re_resolved',
     });
   };
 
@@ -48,9 +64,13 @@ export const TurbulenceSection: React.FC<SectionProps> = ({ state, setPhysics, s
           <Select value={physics.turbulenceModelId} onChange={applyModel}>
             {groups.map((g) => (
               <optgroup key={g} label={GROUP_LABEL[g] ?? g}>
-                {models.filter((m) => m.group === g).map((m) => (
-                  <option key={m.id} value={m.id}>{m.label}</option>
-                ))}
+                {models
+                  .filter((m) => m.group === g)
+                  .map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
               </optgroup>
             ))}
           </Select>
@@ -67,17 +87,23 @@ export const TurbulenceSection: React.FC<SectionProps> = ({ state, setPhysics, s
           >
             {model.wallTreatments.map((w) => (
               <option key={w} value={w}>
-                {w === 'wall_functions' ? 'Wall functions (high y+)' : w === 'resolved' ? 'Wall-resolved (low y+)' : 'Auto (SST blended)'}
+                {w === 'wall_functions'
+                  ? 'Wall functions (high y+)'
+                  : w === 'resolved'
+                    ? 'Wall-resolved (low y+)'
+                    : 'Auto (SST blended)'}
               </option>
             ))}
           </Select>
         </Field>
       </div>
 
+      {/* moved out of the live UI - see caseSetup/TurbulenceSection.tsx, kept for a future tutorial
       <p className="text-[10px] text-[#69717D] leading-relaxed bg-[#F8FAFC] border border-[#E8EDF1] rounded-sm px-3 py-2">
         {model.blurb} Solves: <span className="font-mono">{['U', 'p', ...model.fields].join(', ')}</span>
         {compressible && ', T'}.
       </p>
+      */}
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Field label="Turbulence intensity">
