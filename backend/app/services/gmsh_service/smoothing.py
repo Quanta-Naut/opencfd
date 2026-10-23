@@ -3,6 +3,9 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from . import native
+from .quality import nodes_xy
+
 def _one_ring8(node: int, quad_ids: List[int], quads: List[List[int]]):
     """Order the 8 nodes around an interior quad-mesh node as
     (n, s, e, w, ne, nw, sw, se). Returns None if the node is not cleanly
@@ -40,6 +43,59 @@ def _one_ring8(node: int, quad_ids: List[int], quads: List[List[int]]):
     d = [o[2] for o in ordered]   # diagonal of quad k sits between r[k] and r[k-1]
     # r0=e, r1=n, r2=w, r3=s ; d1=ne, d2=nw, d3=sw, d0=se
     return (r[1], r[3], r[0], r[2], d[1], d[2], d[3], d[0])
+
+
+def _winslow_sweeps_numpy(P: np.ndarray, fi: np.ndarray, st: np.ndarray, iterations: int,
+                          omega: float, tol: float) -> Tuple[int, bool]:
+    """NumPy fallback for `native.winslow_jacobi`: the same damped-Jacobi
+    sweeps, updating `P` (n, 2) in place. Returns (sweeps, converged)."""
+    N, S, E, W, NE, NW, SW, SE = (st[:, k] for k in range(8))
+    # Positions are packed as complex numbers z = x + iy, so each stencil
+    # neighbour is one gather (into a reused buffer) instead of a row gather
+    # of the (n, 2) array. The gathers dominate a sweep, and a sweep runs up
+    # to thousands of times. The arithmetic is the same as the 2-D form:
+    # |z|^2 = x^2 + y^2 and Re(a * conj(b)) = ax*bx + ay*by.
+    z = P[:, 0] + 1j * P[:, 1]
+    m = len(fi)
+    zn, zs, ze, zw, d = (np.empty(m, dtype=complex) for _ in range(5))
+
+    sweeps = 0
+    converged = False
+    for it in range(iterations):
+        np.take(z, N, out=zn)
+        np.take(z, S, out=zs)
+        np.take(z, E, out=ze)
+        np.take(z, W, out=zw)
+        z_xi = 0.5 * (ze - zw)
+        z_et = 0.5 * (zn - zs)
+        alpha = z_et.real * z_et.real + z_et.imag * z_et.imag
+        beta = z_xi.real * z_et.real + z_xi.imag * z_et.imag
+        gamma = z_xi.real * z_xi.real + z_xi.imag * z_xi.imag
+        denom = 2.0 * (alpha + gamma)
+        good = denom > 1e-18
+        all_good = bool(good.all())
+        safe = denom if all_good else np.where(good, denom, 1.0)
+        np.take(z, NE, out=d)
+        d -= z[NW]
+        d -= z[SE]
+        d += z[SW]
+        new_z = (alpha * (ze + zw) + gamma * (zn + zs) - (0.5 * beta) * d) / safe
+        if all_good:
+            delta = omega * (new_z - z[fi])
+            z[fi] += delta
+        else:
+            upd = fi[good]
+            delta = omega * (new_z[good] - z[upd])
+            z[upd] += delta
+        sweeps = it + 1
+        if it % 25 == 24:
+            if delta.size and max(float(np.abs(delta.real).max()), float(np.abs(delta.imag).max())) < tol:
+                converged = True
+                break
+    P[:, 0] = z.real
+    P[:, 1] = z.imag
+    return sweeps, converged
+
 
 
 def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
@@ -102,11 +158,11 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
                 layer[v] = layer[u] + 1
                 dq.append(v)
 
-    P = np.array([[nd[0], nd[1]] for nd in nodes], dtype=float)
+    P = nodes_xy(nodes)
     P0 = P.copy()
     fi = np.array(free, dtype=np.int64)
     st = np.array(sten, dtype=np.int64)  # columns: n s e w ne nw sw se
-    N, S, E, W, NE, NW, SW, SE = (st[:, k] for k in range(8))
+    E = st[:, 2]
 
     # characteristic cell length, for the early-stop tolerance
     seg = np.linalg.norm(P[E] - P0[fi], axis=1)
@@ -117,61 +173,24 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
         # Jacobi carries info ~one cell per sweep; a block ~sqrt(free) cells wide
         iterations = int(min(4000, max(250, 3.0 * math.sqrt(len(free)))))
 
-    # Positions are packed as complex numbers z = x + iy, so each stencil
-    # neighbour is one gather (into a reused buffer) instead of a row gather
-    # of the (n, 2) array. The gathers dominate a sweep, and a sweep runs up
-    # to thousands of times. The arithmetic is the same as the 2-D form:
-    # |z|^2 = x^2 + y^2 and Re(a * conj(b)) = ax*bx + ay*by.
-    z = P[:, 0] + 1j * P[:, 1]
-    m = len(free)
-    zn, zs, ze, zw, d = (np.empty(m, dtype=complex) for _ in range(5))
-
-    sweeps = 0
-    converged = False
-    for it in range(iterations):
-        np.take(z, N, out=zn)
-        np.take(z, S, out=zs)
-        np.take(z, E, out=ze)
-        np.take(z, W, out=zw)
-        z_xi = 0.5 * (ze - zw)
-        z_et = 0.5 * (zn - zs)
-        alpha = z_et.real * z_et.real + z_et.imag * z_et.imag
-        beta = z_xi.real * z_et.real + z_xi.imag * z_et.imag
-        gamma = z_xi.real * z_xi.real + z_xi.imag * z_xi.imag
-        denom = 2.0 * (alpha + gamma)
-        good = denom > 1e-18
-        all_good = bool(good.all())
-        safe = denom if all_good else np.where(good, denom, 1.0)
-        np.take(z, NE, out=d)
-        d -= z[NW]
-        d -= z[SE]
-        d += z[SW]
-        new_z = (alpha * (ze + zw) + gamma * (zn + zs) - (0.5 * beta) * d) / safe
-        if all_good:
-            delta = omega * (new_z - z[fi])
-            z[fi] += delta
-        else:
-            upd = fi[good]
-            delta = omega * (new_z[good] - z[upd])
-            z[upd] += delta
-        sweeps = it + 1
-        if it % 25 == 24:
-            if delta.size and max(float(np.abs(delta.real).max()), float(np.abs(delta.imag).max())) < tol:
-                converged = True
-                break
-    P[:, 0] = z.real
-    P[:, 1] = z.imag
+    if native.AVAILABLE:
+        x = np.ascontiguousarray(P[:, 0])
+        y = np.ascontiguousarray(P[:, 1])
+        sweeps, converged = native.winslow_jacobi(x, y, fi, st, iterations, omega, tol)
+        P[:, 0] = x
+        P[:, 1] = y
+    else:
+        sweeps, converged = _winslow_sweeps_numpy(P, fi, st, iterations, omega, tol)
 
     # taper the correction back toward transfinite near fixed nodes
     w = np.array([min(w_max, max(0.0, (layer[i] - 1) / float(taper))) for i in free])
     P[fi] = P0[fi] + w[:, None] * (P[fi] - P0[fi])
 
-    moved = 0
-    for i in free:
-        if abs(P[i][0] - nodes[i][0]) > 1e-7 or abs(P[i][1] - nodes[i][1]) > 1e-7:
-            moved += 1
-        nodes[i][0] = float(P[i][0])
-        nodes[i][1] = float(P[i][1])
+    shift = np.abs(P[fi] - nodes_xy(nodes)[fi])
+    moved = int(np.count_nonzero((shift > 1e-7).any(axis=1)))
+    for i, (x, y) in zip(free, P[fi].tolist()):
+        nodes[i][0] = x
+        nodes[i][1] = y
     return {"moved": moved, "sweeps": sweeps, "converged": converged, "free": len(free)}
 
 

@@ -26,6 +26,23 @@ PYTHON_EXE = next(
     sys.executable,
 )
 
+def build_native_kernels(env):
+    """Build the Rust smoothing kernels (backend/native) once, if cargo is
+    available. Optional: without them the mesher uses its NumPy fallback."""
+    native_dir = os.path.join(BACKEND_DIR, "native")
+    lib = {"win32": "opencfd_kernels.dll", "darwin": "libopencfd_kernels.dylib"}.get(
+        sys.platform, "libopencfd_kernels.so")
+    built = os.path.join(native_dir, "target", "release", lib)
+    src = os.path.join(native_dir, "src", "lib.rs")
+    if os.path.exists(built) and os.path.getmtime(built) >= os.path.getmtime(src):
+        return
+    print("[0/2] Building native mesh kernels (cargo build --release)...")
+    try:
+        subprocess.run(["cargo", "build", "--release"], cwd=native_dir, env=env, check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"      skipped ({exc}); meshing uses the NumPy fallback.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Launch OpenCFD Studio")
     parser.add_argument("--desktop", action="store_true", help="Launch native Tauri desktop window")
@@ -40,6 +57,8 @@ def main():
     cargo_bin = os.path.expanduser("~/.cargo/bin")
     if os.path.exists(cargo_bin) and cargo_bin not in env.get("PATH", ""):
         env["PATH"] = f"{cargo_bin}:{env.get('PATH', '')}"
+
+    build_native_kernels(env)
 
     # 1. Start Python Scientific Backend (FastAPI on port 8000)
     print("[1/2] Starting Python Scientific Backend (Port 8000)...")

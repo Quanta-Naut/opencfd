@@ -22,6 +22,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from . import native
+
 
 def reconstruct_block_grid(
     bottom_row: List[int], elements: List[List[int]], nj: int
@@ -165,6 +167,13 @@ def thomas_middlecoff_smooth(
     # the last finite iterate - always safe, and the caller's own quality
     # gate would have discarded a diverged result anyway, this just avoids
     # computing (and warning about) garbage in the meantime.
+    if native.AVAILABLE:
+        X, Y = native.tm_sor(X, Y, P, Q, iterations, omega)
+        out = grid.copy()
+        out[:, :, 0] = X
+        out[:, :, 1] = Y
+        return out
+
     lastX, lastY = X.copy(), Y.copy()
     with np.errstate(over="ignore", invalid="ignore"):
         for _ in range(iterations):

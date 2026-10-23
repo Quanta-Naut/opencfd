@@ -18,6 +18,14 @@ _pack = os.path.join("app", "services", "setup", "pack.json")
 if os.path.exists(_pack):
     datas.append((_pack, os.path.join("app", "services", "setup")))
 
+# Compiled smoothing kernels (backend/native, `cargo build --release`). Placed
+# at the bundle root, where app/services/gmsh_service/native.py looks for it;
+# without it the backend falls back to the slower NumPy kernels.
+for _lib in ("libopencfd_kernels.so", "libopencfd_kernels.dylib", "opencfd_kernels.dll"):
+    _path = os.path.join("native", "target", "release", _lib)
+    if os.path.exists(_path):
+        binaries.append((_path, "."))
+
 for pkg in ("gmsh", "shapely", "ezdxf"):
     d, b, h = collect_all(pkg)
     datas += d

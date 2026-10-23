@@ -1,4 +1,3 @@
-import copy
 import math
 from typing import Any, Dict, List, Tuple
 
@@ -353,7 +352,7 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
             # Only ever reassigns trial[idx] wholesale below (never mutates an
             # existing node's [x, y, z] list in place), so a shallow copy of the
             # outer list is enough - unlike the Winslow trial further down,
-            # which relaxes node coordinates in place and needs a real deep copy.
+            # which relaxes node coordinates in place and needs its own node lists.
             trial = list(nodes)
             for j in range(1, nj - 1):
                 for i in range(1, ni - 1):
@@ -406,7 +405,7 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
                             fixed_idx.add(j)
                 except Exception:
                     pass
-            trial = copy.deepcopy(nodes)
+            trial = [list(nd) for nd in nodes]  # nodes are flat [x, y, z] lists
             info = _winslow_smooth(trial, elements, fixed_idx, iterations=smooth_iters)
             if info["free"] == 0:
                 smoothing_note = "skipped: every interior node borders a block junction"
