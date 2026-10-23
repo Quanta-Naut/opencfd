@@ -1,3 +1,4 @@
+import { arrayRange } from './numeric';
 import { YPlusCalculation, GeometryConfig, PhysicsConfig, BoundaryConditions, SolverControls } from '../types/cfd';
 import { API_BASE, WS_BASE } from './backend';
 
@@ -226,10 +227,6 @@ export function generateFallbackFields(meshData: any, velocity: number = 25.0) {
     streamlines.push(pts);
   }
 
-  const minU = Math.min(...uMag);
-  const maxU = Math.max(...uMag);
-  const minP = Math.min(...p);
-  const maxP = Math.max(...p);
 
   return {
     fields: {
@@ -240,10 +237,10 @@ export function generateFallbackFields(meshData: any, velocity: number = 25.0) {
       vorticity: uMag.map((v) => Number((v * 0.1).toFixed(3))),
     },
     ranges: {
-      U_mag: [minU, maxU],
-      p: [minP, maxP],
-      k: [Math.min(...kField), Math.max(...kField)],
-      omega: [Math.min(...omegaField), Math.max(...omegaField)],
+      U_mag: arrayRange(uMag),
+      p: arrayRange(p),
+      k: arrayRange(kField),
+      omega: arrayRange(omegaField),
     },
     streamlines,
   };

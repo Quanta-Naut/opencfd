@@ -69,6 +69,25 @@ export async function saveProjectSession(id: string, session: any): Promise<Proj
   return json<ProjectMeta>(res, 'Save project');
 }
 
+/** Session keys stored server-side in their own file (see project_service). */
+export type ProjectBlobKey = 'meshData' | 'fieldData';
+
+/** Write one heavy session value. Sent as a raw JSON body, stored verbatim. */
+export async function saveProjectBlob(id: string, key: ProjectBlobKey, value: unknown): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/api/projects/${encodeURIComponent(id)}/blobs/${key}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value ?? null),
+    },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail || `Save ${key} failed (${res.status})`);
+  }
+}
+
 export async function renameProject(id: string, name: string): Promise<ProjectMeta> {
   const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(id)}`, {
     method: 'PATCH',

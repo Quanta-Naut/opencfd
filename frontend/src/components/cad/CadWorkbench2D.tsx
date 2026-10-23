@@ -115,7 +115,8 @@ import {
   ogridBlock,
   setEdgeParams,
 } from '../../types/blocking';
-import { useWebGLField } from './useWebGLField';
+import { useMeshGL, type MeshGLScene } from './useMeshGL';
+import { arrayRange } from '../../utils/numeric';
 
 import type {
   CadTool,
@@ -135,7 +136,8 @@ import {
   saveSnapSettings,
   computeSnapPoint,
   cadReducer,
-  cellSkewness,
+  meshEdgeSets,
+  meshSkewness,
   colormapRGB,
   uid,
   moveEntityVertex,
@@ -152,6 +154,8 @@ import type { SnapSettings } from './workbenchCore';
 // Fill colors cycled by block index for the Mesh-view direction-coloring
 // overlay (one color per block, so the block layout reads at a glance on the
 // real generated mesh, not just the block diagram).
+const EMPTY_EDGES = new Uint32Array(0);
+
 const BLOCK_FILL_CYCLE = [
   '#2563EB',
   '#DC2626',
@@ -162,6 +166,20 @@ const BLOCK_FILL_CYCLE = [
   '#0891B2',
   '#65A30D',
 ];
+
+function nodesBBox(nodes: number[][]) {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    if (n[0] < minX) minX = n[0];
+    if (n[0] > maxX) maxX = n[0];
+    if (n[1] < minY) minY = n[1];
+    if (n[1] > maxY) maxY = n[1];
+  }
+  return { minX, maxX, minY, maxY };
+}
 
 /** Boolean snap modes - everything in SnapSettings except the polar step. */
 type SnapBoolKey = Exclude<keyof SnapSettings, 'polarStepDeg'>;
@@ -238,15 +256,15 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // ── WebGL field rendering ─────────────────────────────────────────────────
-  // A second canvas, overlaid on the main canvas, used exclusively for GPU-
-  // accelerated field visualization. Main Canvas 2D skips its field render loop
-  // when WebGL is active and haveField is true.
+  // ── GPU mesh rendering ────────────────────────────────────────────────────
+  // A second canvas under the main one draws every mesh view (plain, block
+  // colours, quality, live preview, Results field) on the GPU. The Canvas 2D
+  // per-cell loop only runs as a fallback when WebGL2 is unavailable.
   const {
     canvasRef: glCanvasRef,
     updateGeometry: glUpdateGeometry,
     render: glRender,
-  } = useWebGLField();
+  } = useMeshGL();
 
   // ── Domain Handle Dragging State ──
   const [hoveredDomainHandle, setHoveredDomainHandle] = useState<
@@ -387,16 +405,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const panOrigin = useRef<Point2D>({ x: 0, y: 0 });
   const lastMiddleClickRef = useRef(0);
 
-  // ── WebGL geometry upload: fires once per mesh change ────────────────────────
-  const [glReady, setGlReady] = useState(false);
-  useEffect(() => {
-    if (!meshData?.nodes?.length || !meshData?.elements?.length || !glCanvasRef.current) {
-      setGlReady(false);
-      return;
-    }
-    const ok = glUpdateGeometry(meshData.nodes as [number, number][], meshData.elements);
-    setGlReady(ok);
-  }, [meshData?.nodes, meshData?.elements, glCanvasRef.current, glUpdateGeometry]);
 
   // ── Camera Framing Helper ───────────────────────────────────────────────────
   const fitBoundingBox = useCallback(
@@ -709,61 +717,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   const [showMeshWireframe, setShowMeshWireframe] = useState(false); // toggle mesh overlay in Results
 
-  // ── WebGL render: fires on any visual change (pan/zoom/field/colormap) ───────
-  useEffect(() => {
-    if (!glReady || !glCanvasRef.current) return;
-    const canvas = glCanvasRef.current;
-    const vals: number[] | undefined =
-      showField && fieldData?.fields?.[activeField] ? fieldData.fields[activeField] : undefined;
-    const haveField =
-      Array.isArray(vals) &&
-      vals.length > 0 &&
-      (!meshData?.nodes?.length || vals.length === meshData.nodes.length);
-    const r = fieldData?.ranges?.[activeField];
-    let lo = 0,
-      hi = 1;
-    if (haveField && Array.isArray(r) && r.length === 2 && r[0] !== r[1]) {
-      [lo, hi] = r;
-    } else if (haveField) {
-      lo = Math.min(...(vals as number[]));
-      hi = Math.max(...(vals as number[]));
-    }
-    glRender({
-      vals: haveField ? (vals as number[]) : [],
-      lo,
-      hi,
-      colormap,
-      pan,
-      zoom,
-      canvasWidth: canvas.clientWidth || (containerRef.current?.clientWidth ?? 800),
-      canvasHeight: canvas.clientHeight || (containerRef.current?.clientHeight ?? 600),
-      visible: !!(displayOnly && showMesh && canvasMode === 'mesh' && haveField),
-      showMeshWireframe: !!(
-        displayOnly &&
-        showMesh &&
-        canvasMode === 'mesh' &&
-        haveField &&
-        showMeshWireframe
-      ),
-    });
-  }, [
-    glReady,
-    pan,
-    zoom,
-    showField,
-    fieldData,
-    activeField,
-    colormap,
-    displayOnly,
-    showMesh,
-    canvasMode,
-    glRender,
-    glCanvasRef,
-    viewport.w,
-    viewport.h,
-    meshData?.nodes?.length,
-    showMeshWireframe,
-  ]);
+  // The GL scene is described here and rendered by the effect below, which
+  // sits after the mesh-derived memos it reads (skewness, block colours).
 
   const handleAuxClick = useCallback(
     (e: React.MouseEvent) => {
@@ -776,17 +731,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       if (!isDoubleMiddleClick) return;
 
       if (showMesh && canvasMode === 'mesh' && meshData?.nodes?.length) {
-        const xs = meshData.nodes.map((node: number[]) => node[0]);
-        const ys = meshData.nodes.map((node: number[]) => node[1]);
-        fitBoundingBox(
-          {
-            minX: Math.min(...xs),
-            maxX: Math.max(...xs),
-            minY: Math.min(...ys),
-            maxY: Math.max(...ys),
-          },
-          0.72,
-        );
+        fitBoundingBox(nodesBBox(meshData.nodes), 0.72);
         return;
       }
 
@@ -826,17 +771,17 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // wireframe and the field colouring are switched off.
   const liveHasContent = !liveContext || liveMeshOn || liveField !== null;
 
-  // Per-cell skewness, computed once per mesh (parallel to meshData.elements).
-  const meshSkew = useMemo<number[] | null>(() => {
+  // Per-cell skewness (parallel to meshData.elements). Only computed while
+  // the Mesh-stage Quality view needs it, then cached for that mesh.
+  const qualityWanted = showMeshQuality && !meshOnly;
+  const meshSkew = useMemo<Float32Array | null>(() => {
     const nodes: number[][] | undefined = meshData?.nodes;
     const els: number[][] | undefined = meshData?.elements;
-    if (!Array.isArray(nodes) || !Array.isArray(els) || els.length === 0) return null;
-    return els.map((el) =>
-      el.length >= 3 && el.every((i) => nodes[i])
-        ? cellSkewness(el.map((i) => [nodes[i][0], nodes[i][1]] as [number, number]))
-        : 0,
-    );
-  }, [meshData?.nodes, meshData?.elements]);
+    if (!qualityWanted || !Array.isArray(nodes) || !Array.isArray(els) || els.length === 0) {
+      return null;
+    }
+    return meshSkewness(nodes, els);
+  }, [meshData?.nodes, meshData?.elements, qualityWanted]);
 
   // Per-element block-fill color for the direction-coloring overlay: which
   // block's color each generated cell should fill with, found from the
@@ -848,59 +793,197 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // a wall kink too shallow for the mesh's own corner-preservation to snap
   // onto exactly, leaving a sliver of the overlay sitting outside the real
   // mesh (looked like a stray "bevel" at the kink).
+  // Only built while direction colouring is on.
   const elementBlockColor = useMemo<(string | null)[] | null>(() => {
     const nodes: number[][] | undefined = meshData?.nodes;
     const elements: number[][] | undefined = meshData?.elements;
+    if (!directionColors) return null;
     if (!Array.isArray(nodes) || !Array.isArray(elements) || elements.length === 0) return null;
     if (!blocking || blocking.blocks.length === 0) return null;
     const polys = blocking.blocks
-      .map((blk, i) => ({
-        poly: blockPolygon(blocking, blk),
-        color: BLOCK_FILL_CYCLE[i % BLOCK_FILL_CYCLE.length],
-      }))
+      .map((blk, i) => {
+        const poly = blockPolygon(blocking, blk);
+        let x0 = Infinity;
+        let x1 = -Infinity;
+        let y0 = Infinity;
+        let y1 = -Infinity;
+        for (const q of poly) {
+          if (q.x < x0) x0 = q.x;
+          if (q.x > x1) x1 = q.x;
+          if (q.y < y0) y0 = q.y;
+          if (q.y > y1) y1 = q.y;
+        }
+        return { poly, x0, x1, y0, y1, color: BLOCK_FILL_CYCLE[i % BLOCK_FILL_CYCLE.length] };
+      })
       .filter((p) => p.poly.length >= 3);
     if (!polys.length) return null;
-    return elements.map((el) => {
-      if (!el.every((i) => nodes[i])) return null;
-      const cx = el.reduce((s, i) => s + nodes[i][0], 0) / el.length;
-      const cy = el.reduce((s, i) => s + nodes[i][1], 0) / el.length;
-      const hit = polys.find((p) => pointInPolygon({ x: cx, y: cy }, p.poly));
-      return hit ? hit.color : null;
-    });
-  }, [meshData?.nodes, meshData?.elements, blocking]);
-
-  // Precompute exterior boundary edges once per mesh change.
-  // Exterior edges (count === 1) represent domain and obstacle boundaries.
-  const meshBoundaryEdges = useMemo<[number, number][]>(() => {
-    const nodes: number[][] | undefined = meshData?.nodes;
-    const elements: number[][] | undefined = meshData?.elements;
-    if (!Array.isArray(nodes) || !Array.isArray(elements) || elements.length === 0) return [];
-    const nNodes = nodes.length;
-    const map = new Map<bigint, { a: number; b: number; n: number }>();
+    const out: (string | null)[] = new Array(elements.length).fill(null);
+    const c = { x: 0, y: 0 };
     for (let e = 0; e < elements.length; e++) {
       const el = elements[e];
-      const len = el.length;
-      for (let i = 0; i < len; i++) {
-        const a = el[i];
-        const b = el[(i + 1) % len];
-        if (a >= nNodes || b >= nNodes) continue;
-        const k = a < b ? (BigInt(a) << 32n) | BigInt(b) : (BigInt(b) << 32n) | BigInt(a);
-        const entry = map.get(k);
-        if (entry) entry.n++;
-        else map.set(k, { a, b, n: 1 });
+      let sx = 0;
+      let sy = 0;
+      let ok = true;
+      for (let i = 0; i < el.length; i++) {
+        const nd = nodes[el[i]];
+        if (!nd) {
+          ok = false;
+          break;
+        }
+        sx += nd[0];
+        sy += nd[1];
+      }
+      if (!ok) continue;
+      c.x = sx / el.length;
+      c.y = sy / el.length;
+      for (const p of polys) {
+        if (c.x < p.x0 || c.x > p.x1 || c.y < p.y0 || c.y > p.y1) continue;
+        if (pointInPolygon(c, p.poly)) {
+          out[e] = p.color;
+          break;
+        }
       }
     }
-    const boundary: [number, number][] = [];
-    for (const { a, b, n } of map.values()) {
-      if (n === 1) boundary.push([a, b]);
-    }
-    return boundary;
+    return out;
+  }, [meshData?.nodes, meshData?.elements, blocking, directionColors]);
+
+  // Unique + exterior edges, once per mesh. The GPU wireframe draws `all`;
+  // the 2D overlay strokes `boundary` (domain outline and holes).
+  const meshEdges = useMemo(() => {
+    const nodes: number[][] | undefined = meshData?.nodes;
+    const elements: number[][] | undefined = meshData?.elements;
+    if (!Array.isArray(nodes) || !Array.isArray(elements) || elements.length === 0) return null;
+    return meshEdgeSets(elements, nodes.length);
   }, [meshData?.nodes, meshData?.elements]);
+  const meshBoundaryEdges = meshEdges?.boundary ?? EMPTY_EDGES;
+
+  // ── WebGL geometry upload: fires once per mesh change ────────────────────────
+  const [glReady, setGlReady] = useState(false);
+  useEffect(() => {
+    if (!meshData?.nodes?.length || !meshData?.elements?.length || !glCanvasRef.current) {
+      setGlReady(false);
+      return;
+    }
+    const ok = glUpdateGeometry(meshData.nodes, meshData.elements, meshEdges?.all);
+    setGlReady(ok);
+  }, [meshData?.nodes, meshData?.elements, meshEdges, glCanvasRef.current, glUpdateGeometry]);
+
+  // What the GPU should draw for the current mesh view. Mirrors the Canvas 2D
+  // fallback branches below (live preview, quality, Results field, plain /
+  // block-coloured mesh) so both paths look the same.
+  const glScene = useMemo<MeshGLScene>(() => {
+    const nodes: number[][] | undefined = meshData?.nodes;
+    const elements: number[][] | undefined = meshData?.elements;
+    const hidden: MeshGLScene = { visible: false, fill: { kind: 'solid', color: [1, 1, 1, 1] }, wire: null };
+    if (
+      !displayOnly ||
+      !showMesh ||
+      !liveHasContent ||
+      canvasMode !== 'mesh' ||
+      !nodes?.length ||
+      !elements?.length
+    ) {
+      return hidden;
+    }
+    const vals: number[] | undefined = showField ? fieldData?.fields?.[activeField] : undefined;
+    const haveField = Array.isArray(vals) && vals.length === nodes.length;
+    const qualityMode = !showField && !meshOnly && showMeshQuality && !!meshSkew;
+    const liveMode = !!liveVals && liveVals.length === elements.length && !qualityMode;
+
+    if (liveMode) {
+      const lo = Number(liveRange[0]);
+      return {
+        visible: true,
+        fill: { kind: 'cell', vals: liveVals!, lo, hi: Number(liveRange[1]), colormap },
+        wire: liveMeshOn ? [1, 1, 1, 0.28] : null,
+      };
+    }
+    if (qualityMode) {
+      return {
+        visible: true,
+        fill: { kind: 'cell', vals: meshSkew!, lo: 0, hi: 1, colormap: 'quality' },
+        wire: [1, 1, 1, 0.35],
+      };
+    }
+    if (haveField) {
+      let lo = 0;
+      let hi = 1;
+      const r = fieldData?.ranges?.[activeField];
+      if (Array.isArray(r) && r.length === 2 && r[0] !== r[1]) {
+        [lo, hi] = r;
+      } else {
+        [lo, hi] = arrayRange(vals!);
+      }
+      return {
+        visible: true,
+        fill: { kind: 'node', vals: vals!, lo, hi, colormap },
+        wire: showMeshWireframe ? [1, 1, 1, 0.3] : null,
+      };
+    }
+    // #CBD5E1 lines over white (or block-tinted) cells. Slightly translucent:
+    // GL lines are a full pixel wide where the 2D path drew 0.65px.
+    const wire: [number, number, number, number] = [203 / 255, 213 / 255, 225 / 255, 0.8];
+    if (directionColors && elementBlockColor) {
+      return {
+        visible: true,
+        fill: { kind: 'cellRGBA', colors: elementBlockColor, alpha: 0x26 / 255, base: [1, 1, 1, 1] },
+        wire,
+      };
+    }
+    return { visible: true, fill: { kind: 'solid', color: [1, 1, 1, 1] }, wire };
+  }, [
+    meshData?.nodes,
+    meshData?.elements,
+    displayOnly,
+    showMesh,
+    liveHasContent,
+    canvasMode,
+    showField,
+    fieldData,
+    activeField,
+    meshOnly,
+    showMeshQuality,
+    meshSkew,
+    liveVals,
+    liveRange,
+    liveMeshOn,
+    colormap,
+    showMeshWireframe,
+    directionColors,
+    elementBlockColor,
+  ]);
+  const glMeshActive = glReady && glScene.visible;
+
+  useEffect(() => {
+    if (!glReady) return;
+    const canvas = glCanvasRef.current;
+    if (!canvas) return;
+    glRender(glScene, {
+      pan,
+      zoom,
+      width: canvas.clientWidth || (containerRef.current?.clientWidth ?? 800),
+      height: canvas.clientHeight || (containerRef.current?.clientHeight ?? 600),
+    });
+  }, [glReady, glScene, pan, zoom, viewport.w, viewport.h, glRender, glCanvasRef]);
+
+  // Triangle / quad counts for the mesh stats badge. Memoised: counting on
+  // every render walked the whole element list on each pan and hover.
+  const meshCellCounts = useMemo(() => {
+    const elements: number[][] = Array.isArray(meshData?.elements) ? meshData.elements : [];
+    let triangles = 0;
+    let quads = 0;
+    for (const el of elements) {
+      if (el.length === 3) triangles++;
+      else if (el.length === 4) quads++;
+    }
+    return { triangles, quads };
+  }, [meshData?.elements]);
 
   const meshSkewStats = useMemo(() => {
     if (!meshSkew || meshSkew.length === 0) return null;
-    const sorted = [...meshSkew].sort((a, b) => a - b);
-    const poor = meshSkew.filter((s) => s > 0.8).length;
+    const sorted = meshSkew.slice().sort();
+    let poor = 0;
+    for (let i = 0; i < meshSkew.length; i++) if (meshSkew[i] > 0.8) poor++;
     return {
       max: sorted[sorted.length - 1],
       median: sorted[Math.floor(sorted.length * 0.5)],
@@ -1594,22 +1677,20 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     const dpr = window.devicePixelRatio || 1;
     const cw = canvas.clientWidth;
     const ch = canvas.clientHeight;
-    canvas.width = cw * dpr;
-    canvas.height = ch * dpr;
-    ctx.scale(dpr, dpr);
+    // Reassigning width/height reallocates the backing store, so only do it
+    // on an actual size change; otherwise just reset the transform.
+    if (canvas.width !== Math.round(cw * dpr) || canvas.height !== Math.round(ch * dpr)) {
+      canvas.width = Math.round(cw * dpr);
+      canvas.height = Math.round(ch * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     const o = { x: cw / 2 + pan.x, y: ch / 2 + pan.y };
     const ws = (wx: number, wy: number) => ({ x: o.x + wx * zoom, y: o.y - wy * zoom });
     const SCALE = zoom;
 
-    const glHaveField =
-      glReady &&
-      showField &&
-      Array.isArray(fieldData?.fields?.[activeField]) &&
-      (!meshData?.nodes?.length || fieldData.fields[activeField].length === meshData.nodes.length);
-
-    // Background
-    if (glHaveField) {
+    // Background (the GPU canvas underneath paints the mesh when active)
+    if (glMeshActive) {
       ctx.clearRect(0, 0, cw, ch);
     } else {
       ctx.fillStyle = '#FAFAFA';
@@ -1700,8 +1781,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         if (Array.isArray(r) && r.length === 2 && r[0] !== r[1]) {
           [lo, hi] = r;
         } else {
-          lo = Math.min(...(vals as number[]));
-          hi = Math.max(...(vals as number[]));
+          [lo, hi] = arrayRange(vals as number[]);
         }
       }
 
@@ -1716,9 +1796,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.18)' : '#CBD5E1';
       ctx.lineWidth = haveField ? 0.45 : 0.65;
 
-      // In Results mode with active WebGL field, colour fill and wireframe are
-      // rendered directly by the GPU. Skip the per-element JS loop entirely.
-      if (!glHaveField) {
+      // When the GPU canvas is drawing the mesh, skip the per-element loop.
+      if (!glMeshActive) {
         elements.forEach((element: number[], elIdx: number) => {
           if (element.length < 3) return;
           if (element.some((ni: number) => !nodes[ni])) return; // guard: out-of-range node refs
@@ -1792,8 +1871,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.strokeStyle = '#111827';
       ctx.lineWidth = 1.7;
       ctx.beginPath();
-      for (let i = 0; i < meshBoundaryEdges.length; i++) {
-        const [a, b] = meshBoundaryEdges[i];
+      for (let i = 0; i < meshBoundaryEdges.length; i += 2) {
+        const a = meshBoundaryEdges[i];
+        const b = meshBoundaryEdges[i + 1];
         if (!nodes[a] || !nodes[b]) continue; // guard: out-of-range node refs
         const p0 = ws(nodes[a][0], nodes[a][1]);
         const p1 = ws(nodes[b][0], nodes[b][1]);
@@ -2900,6 +2980,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     liveMeshOn,
     activePlotLine,
     plotPickPreviewP1,
+    glMeshActive,
   ]);
 
   // ── Mouse handlers ────────────────────────────────────────────────────────
@@ -5360,15 +5441,8 @@ boundary
             title="Fit to Screen"
             onClick={() => {
               if (showMesh && meshData?.nodes?.length) {
-                const xs = meshData.nodes.map((node: number[]) => node[0]);
-                const ys = meshData.nodes.map((node: number[]) => node[1]);
                 fitBoundingBox(
-                  {
-                    minX: Math.min(...xs),
-                    maxX: Math.max(...xs),
-                    minY: Math.min(...ys),
-                    maxY: Math.max(...ys),
-                  },
+                  nodesBBox(meshData.nodes),
                   0.72,
                 );
                 return;
@@ -6049,7 +6123,7 @@ boundary
 
         <canvas
           ref={glCanvasRef}
-          className="absolute inset-0 w-full h-full block pointer-events-none"
+          className="absolute inset-0 w-full h-full block pointer-events-none bg-[#FAFAFA]"
         />
 
         <canvas
@@ -6459,9 +6533,7 @@ boundary
               diameter of the shape being drawn, or the position of a hovered vertex. */}
           {(() => {
             if (showMesh && meshData?.num_elements) {
-              const elements = Array.isArray(meshData.elements) ? meshData.elements : [];
-              const triangles = elements.filter((element: number[]) => element.length === 3).length;
-              const quads = elements.filter((element: number[]) => element.length === 4).length;
+              const { triangles, quads } = meshCellCounts;
               const minAngle = meshData.quality?.min_angle_degrees;
               const skew = meshData.quality?.max_skewness;
               return (

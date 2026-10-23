@@ -7,7 +7,7 @@ import platform
 import zipfile
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, UploadFile, File, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
@@ -131,18 +131,38 @@ async def inflow_turbulence_endpoint(req: InflowTurbulenceRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+def _json_default(o: Any) -> Any:
+    # NumPy scalars / arrays that slip into a mesh payload.
+    if hasattr(o, "tolist"):
+        return o.tolist()
+    raise TypeError(f"{type(o).__name__} is not JSON serialisable")
+
+
+def _mesh_response(mesh: Any) -> Response:
+    """Serialise a mesh payload directly with json.dumps. FastAPI's default
+    path walks every node and element through jsonable_encoder first, which
+    takes seconds on a few-hundred-thousand-cell mesh."""
+    body = json.dumps({"success": True, "data": mesh}, separators=(",", ":"), default=_json_default)
+    return Response(content=body, media_type="application/json")
+
+
+async def _run_mesher(fn, *args, **kwargs) -> Response:
+    # Off the event loop, so autosave, progress and the solver socket keep
+    # working while Gmsh runs (it used to freeze the whole backend).
+    return await asyncio.to_thread(lambda: _mesh_response(fn(*args, **kwargs)))
+
+
 @app.post("/api/geometry/mesh")
 async def mesh_endpoint(req: MeshRequest):
     try:
-        mesh = generate_mesh_data(req.geometry_type, req.params)
-        return {"success": True, "data": mesh}
+        return await _run_mesher(generate_mesh_data, req.geometry_type, req.params)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/geometry/mesh-structured")
 async def structured_mesh_endpoint(req: MeshRequest):
     try:
-        return {"success": True, "data": generate_structured_mesh(req.params)}
+        return await _run_mesher(generate_structured_mesh, req.params)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -219,14 +239,14 @@ async def fillet_endpoint(req: FilletRequest):
 async def mesh_from_sketch_endpoint(req: MeshFromSketchRequest):
     try:
         pts = [(p[0], p[1]) for p in req.sketch_points]
-        mesh = generate_mesh_from_cad_loop(
+        return await _run_mesher(
+            generate_mesh_from_cad_loop,
             cad_loop=pts,
             domain_length=req.domain_length,
             domain_height=req.domain_height,
             resolution=req.resolution,
-            first_layer_mm=req.first_layer_mm
+            first_layer_mm=req.first_layer_mm,
         )
-        return {"success": True, "data": mesh}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -485,6 +505,19 @@ async def create_project_endpoint(req: ProjectCreate):
 async def get_project_endpoint(pid: str):
     try:
         return {"success": True, "data": project_service.get_project(pid)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.put("/api/projects/{pid}/blobs/{key}")
+async def save_project_blob_endpoint(pid: str, key: str, request: Request):
+    # Raw body, not a pydantic model: the mesh can be tens of MB and is stored
+    # verbatim, so parsing it would only cost time.
+    raw = await request.body()
+    try:
+        await asyncio.to_thread(project_service.save_blob, pid, key, raw)
+        return {"success": True}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

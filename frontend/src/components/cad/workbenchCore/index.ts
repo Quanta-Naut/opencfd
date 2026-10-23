@@ -19,6 +19,8 @@ export {
 export { cadReducer } from './reducer';
 
 export { cellSkewness, colormapRGB } from './colormap';
+export type { MeshEdgeSets } from './meshTopology';
+export { meshEdgeSets, meshSkewness } from './meshTopology';
 
 export {
   uid, moveEntityVertex, translateEntity, dist, midpt, pointInPolygon, distToSegment,

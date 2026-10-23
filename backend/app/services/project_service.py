@@ -3,11 +3,20 @@ On-disk project store for OpenCFD Studio.
 
 Every project is a folder under ~/.OpenCFD/projects/<slug>/ containing:
   project.json   metadata + a small summary used by the home screen
-  session.json   the full StudioSession blob sent by the frontend
+  session.json   the StudioSession sent by the frontend, minus the heavy blobs
+  mesh.json      the generated mesh (session key `meshData`)
+  field.json     the loaded result field (session key `fieldData`)
   (mesh/ and case/ subdirs are reserved for future Gmsh / OpenFOAM output)
 
 The folder name is the project id and never changes; renaming only edits the
 display name inside project.json.
+
+The mesh and field are kept out of session.json because they can be tens of
+megabytes: the session is autosaved after nearly every edit, and re-sending
+and re-writing the mesh each time froze the UI. The frontend writes them
+through `save_blob` only when they change, and `get_project` merges them back
+so the client still receives one session object. Projects saved before the
+split carry them inline and are migrated on first open.
 """
 
 import json
@@ -64,6 +73,35 @@ def _read_json(path: Path, default: Any) -> Any:
 
 def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2))
+
+
+# Session keys stored in their own file, written only when they change.
+BLOB_FILES = {"meshData": "mesh.json", "fieldData": "field.json"}
+
+
+def _write_blob_bytes(pdir: Path, key: str, raw: bytes) -> None:
+    """Write a blob atomically (temp file + rename) so a crash mid-write never
+    leaves a truncated mesh behind. `null` removes it."""
+    path = pdir / BLOB_FILES[key]
+    if raw.strip() in (b"", b"null"):
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(raw)
+    tmp.replace(path)
+
+
+def _split_blobs(pdir: Path, session: Dict[str, Any]) -> bool:
+    """Move any inline blobs out of `session` into their files. True if any
+    were present (an older client, a duplicate, or a pre-split project)."""
+    found = False
+    for key in BLOB_FILES:
+        if key in session:
+            found = True
+            value = session.pop(key)
+            raw = b"null" if value is None else json.dumps(value, separators=(",", ":")).encode()
+            _write_blob_bytes(pdir, key, raw)
+    return found
 
 
 def _entity_points(entity: Dict[str, Any]) -> List[List[float]]:
@@ -211,6 +249,12 @@ def get_project(pid: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Project '{pid}' is missing metadata")
     meta["id"] = pid
     session = _read_json(_session_path(pdir), {})
+    if _split_blobs(pdir, session):
+        _write_json(_session_path(pdir), session)  # one-time migration
+    for key, fname in BLOB_FILES.items():
+        blob = _read_json(pdir / fname, None)
+        if blob is not None:
+            session[key] = blob
     return {"meta": meta, "session": session}
 
 
@@ -218,7 +262,8 @@ def save_session(pid: str, session: Dict[str, Any]) -> Dict[str, Any]:
     pdir = _project_dir(pid)
     if not pdir.is_dir():
         raise FileNotFoundError(f"Project '{pid}' not found")
-    session = session or {}
+    session = dict(session or {})
+    _split_blobs(pdir, session)
     _write_json(_session_path(pdir), session)
 
     meta = _read_json(_meta_path(pdir), None) or {
@@ -232,6 +277,20 @@ def save_session(pid: str, session: Dict[str, Any]) -> Dict[str, Any]:
     meta["summary"] = _build_summary(session)
     _write_json(_meta_path(pdir), meta)
     return meta
+
+
+def save_blob(pid: str, key: str, raw: bytes) -> None:
+    """Store one heavy session value (see BLOB_FILES) from its raw JSON body.
+    The bytes are written as-is, not parsed and re-serialised."""
+    if key not in BLOB_FILES:
+        raise ValueError(f"Unknown blob '{key}'")
+    pdir = _project_dir(pid)
+    if not pdir.is_dir():
+        raise FileNotFoundError(f"Project '{pid}' not found")
+    head = raw.lstrip()[:1]
+    if head not in (b"{", b"[", b"n", b""):
+        raise ValueError("Blob body must be a JSON object, array or null")
+    _write_blob_bytes(pdir, key, raw)
 
 
 def rename_project(pid: str, name: str) -> Dict[str, Any]:
@@ -271,6 +330,6 @@ def duplicate_project(pid: str) -> Dict[str, Any]:
     meta = _read_json(_meta_path(pdir), None)
     if not meta:
         raise FileNotFoundError(f"Project '{pid}' is missing metadata")
-    session = _read_json(_session_path(pdir), {})
+    session = get_project(pid)["session"]  # includes the mesh / field blobs
     new_meta = create_project(f"{meta.get('name', pid)} copy")
     return save_session(new_meta["id"], session)

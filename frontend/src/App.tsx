@@ -57,7 +57,7 @@ import {
   fetchRunStream,
   deleteSolverRun,
 } from './utils/api';
-import { saveProjectSession, renameProject } from './utils/projectsApi';
+import { saveProjectSession, saveProjectBlob, renameProject } from './utils/projectsApi';
 import { buildInitialCFDState } from './hooks/appInitialState';
 import { useHistoricalRunField } from './hooks/useHistoricalRunField';
 import { useResultsPlayback } from './hooks/useResultsPlayback';
@@ -533,10 +533,9 @@ export function App({
     blocking,
     ogridParams,
     meshTopology,
-    meshData,
+    // meshData / fieldData are saved separately by the blob effect below.
     meshSig: meshSigRef.current,
     hasMesh: !!meshData?.num_elements,
-    fieldData,
     caseFiles,
   });
   const sessionRef = useRef<StudioSession>(buildSession());
@@ -579,12 +578,42 @@ export function App({
     blocking,
     meshTopology,
     meshData,
-    fieldData,
     caseFiles,
   ]);
 
+  // The mesh and result field can be tens of MB, so they are not part of the
+  // session autosave above (serialising them on every edit froze the UI).
+  // Each is written to its own file only when its identity changes. The refs
+  // start at the loaded values, so opening a project writes nothing.
+  const savedBlobsRef = useRef<{ meshData: unknown; fieldData: unknown }>({ meshData, fieldData });
+  const flushBlobs = useCallback(async () => {
+    const pending = (['meshData', 'fieldData'] as const).filter(
+      (k) => savedBlobsRef.current[k] !== (k === 'meshData' ? meshData : fieldData),
+    );
+    for (const key of pending) {
+      const value = key === 'meshData' ? meshData : fieldData;
+      await saveProjectBlob(projectId, key, value);
+      savedBlobsRef.current[key] = value;
+    }
+  }, [projectId, meshData, fieldData]);
+  useEffect(() => {
+    // Transient playback swaps fieldData every frame; the debounce means it
+    // is written once playback pauses.
+    const timer = setTimeout(() => {
+      flushBlobs().catch((err) => {
+        console.warn('Project autosave note:', err);
+        if (!saveWarned.current) {
+          saveWarned.current = true;
+          toast('Could not autosave - check the backend connection.', 'error', 6000);
+        }
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [flushBlobs]);
+
   const handleExitHome = async () => {
     try {
+      await flushBlobs();
       await saveProjectSession(projectId, sessionRef.current);
     } catch (err) {
       console.warn('Project save-on-exit note:', err);

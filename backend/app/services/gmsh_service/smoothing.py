@@ -117,30 +117,50 @@ def _winslow_smooth(nodes: List[List[float]], elements: List[List[int]],
         # Jacobi carries info ~one cell per sweep; a block ~sqrt(free) cells wide
         iterations = int(min(4000, max(250, 3.0 * math.sqrt(len(free)))))
 
+    # Positions are packed as complex numbers z = x + iy, so each stencil
+    # neighbour is one gather (into a reused buffer) instead of a row gather
+    # of the (n, 2) array. The gathers dominate a sweep, and a sweep runs up
+    # to thousands of times. The arithmetic is the same as the 2-D form:
+    # |z|^2 = x^2 + y^2 and Re(a * conj(b)) = ax*bx + ay*by.
+    z = P[:, 0] + 1j * P[:, 1]
+    m = len(free)
+    zn, zs, ze, zw, d = (np.empty(m, dtype=complex) for _ in range(5))
+
     sweeps = 0
     converged = False
     for it in range(iterations):
-        xN, xS, xE, xW = P[N], P[S], P[E], P[W]
-        x_xi = 0.5 * (xE - xW)
-        x_et = 0.5 * (xN - xS)
-        alpha = np.einsum("ij,ij->i", x_et, x_et)
-        beta = np.einsum("ij,ij->i", x_xi, x_et)
-        gamma = np.einsum("ij,ij->i", x_xi, x_xi)
+        np.take(z, N, out=zn)
+        np.take(z, S, out=zs)
+        np.take(z, E, out=ze)
+        np.take(z, W, out=zw)
+        z_xi = 0.5 * (ze - zw)
+        z_et = 0.5 * (zn - zs)
+        alpha = z_et.real * z_et.real + z_et.imag * z_et.imag
+        beta = z_xi.real * z_et.real + z_xi.imag * z_et.imag
+        gamma = z_xi.real * z_xi.real + z_xi.imag * z_xi.imag
         denom = 2.0 * (alpha + gamma)
         good = denom > 1e-18
-        safe = np.where(good, denom, 1.0)
-        rhs = (alpha[:, None] * (xE + xW)
-               + gamma[:, None] * (xN + xS)
-               - 0.5 * beta[:, None] * (P[NE] - P[NW] - P[SE] + P[SW]))
-        newpos = rhs / safe[:, None]
-        upd = fi[good]
-        delta = omega * (newpos[good] - P[upd])
-        P[upd] += delta
+        all_good = bool(good.all())
+        safe = denom if all_good else np.where(good, denom, 1.0)
+        np.take(z, NE, out=d)
+        d -= z[NW]
+        d -= z[SE]
+        d += z[SW]
+        new_z = (alpha * (ze + zw) + gamma * (zn + zs) - (0.5 * beta) * d) / safe
+        if all_good:
+            delta = omega * (new_z - z[fi])
+            z[fi] += delta
+        else:
+            upd = fi[good]
+            delta = omega * (new_z[good] - z[upd])
+            z[upd] += delta
         sweeps = it + 1
         if it % 25 == 24:
-            if float(np.abs(delta).max() if delta.size else 0.0) < tol:
+            if delta.size and max(float(np.abs(delta.real).max()), float(np.abs(delta.imag).max())) < tol:
                 converged = True
                 break
+    P[:, 0] = z.real
+    P[:, 1] = z.imag
 
     # taper the correction back toward transfinite near fixed nodes
     w = np.array([min(w_max, max(0.0, (layer[i] - 1) / float(taper))) for i in free])
