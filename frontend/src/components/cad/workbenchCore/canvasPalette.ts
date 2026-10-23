@@ -1,5 +1,6 @@
-// Neutral colours for the 2D workbench canvas and the GPU mesh layer, per
-// theme. Semantic colours (selection blue, domain orange, boundary-tag
+// Neutral and accent colours for the 2D workbench canvas and the GPU mesh
+// layer, per theme. The accent matches the UI accent token (blue in light,
+// violet in dark). Other semantic colours (domain orange, boundary-tag
 // colours, colormaps) read well on both backgrounds and stay where they are.
 import type { ResolvedTheme } from '../../../utils/theme';
 
@@ -34,6 +35,12 @@ export interface CanvasPalette {
   halo: string;
   handleFill: string;
   ink: string;
+  /** UI accent on the canvas: selection box, domain outline, active handles. */
+  accent: string;
+  /** A darker accent for a pressed / dragged handle. */
+  accentStrong: string;
+  /** The accent at a given opacity, for translucent fills. */
+  accentA: (alpha: number) => string;
 }
 
 const LIGHT: CanvasPalette = {
@@ -62,6 +69,9 @@ const LIGHT: CanvasPalette = {
   halo: '#FFFFFF',
   handleFill: '#FFFFFF',
   ink: '#1E293B',
+  accent: '#2563EB',
+  accentStrong: '#1D4ED8',
+  accentA: (a) => `rgba(37, 99, 235, ${a})`,
 };
 
 const DARK: CanvasPalette = {
@@ -90,6 +100,9 @@ const DARK: CanvasPalette = {
   halo: '#0E0F11',
   handleFill: '#1A1B1E',
   ink: '#E6E8EB',
+  accent: '#8B7CF6',
+  accentStrong: '#7461E8',
+  accentA: (a) => `rgba(139, 124, 246, ${a})`,
 };
 
 export function canvasPalette(theme: ResolvedTheme): CanvasPalette {

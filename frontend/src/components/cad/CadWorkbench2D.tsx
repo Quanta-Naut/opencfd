@@ -1999,10 +1999,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       const isDomain = e.role === 'domain_boundary' && currentStep >= 2;
 
       if (isDomain) {
-        ctx.strokeStyle = domainBroken ? '#DC2626' : isSel ? '#E05A00' : '#2563EB';
+        ctx.strokeStyle = domainBroken ? '#DC2626' : isSel ? '#E05A00' : C.accent;
         ctx.lineWidth = isSel ? 2.5 : 1.8;
         ctx.setLineDash([8, 4]);
-        ctx.fillStyle = domainBroken ? 'rgba(220, 38, 38, 0.04)' : 'rgba(37, 99, 235, 0.03)';
+        ctx.fillStyle = domainBroken ? 'rgba(220, 38, 38, 0.04)' : C.accentA(0.03);
       } else {
         ctx.strokeStyle = isConst ? '#4A90D9' : isSel ? '#E05A00' : C.entity;
         ctx.lineWidth = isSel ? 2.5 : isConst ? 1.2 : 1.8;
@@ -2012,7 +2012,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         if (!isConst && isSel) {
           ctx.fillStyle = 'rgba(224, 90, 0, 0.07)';
         } else if (!isConst) {
-          ctx.fillStyle = 'rgba(37, 99, 235, 0.04)';
+          ctx.fillStyle = C.accentA(0.04);
         } else {
           ctx.fillStyle = 'transparent';
         }
@@ -2136,7 +2136,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     if (hoveredVertex) {
       const p = ws(hoveredVertex.x, hoveredVertex.y);
       ctx.save();
-      ctx.strokeStyle = '#2563EB';
+      ctx.strokeStyle = C.accent;
       ctx.lineWidth = 1.25;
       ctx.setLineDash([]);
       ctx.strokeRect(p.x - 4.5, p.y - 4.5, 9, 9);
@@ -2145,7 +2145,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
     // ─── Temp geometry (in-progress entity) ──────────────────────────────────
     if (isDrawing && tempPts.length > 0) {
-      ctx.strokeStyle = '#2563EB';
+      ctx.strokeStyle = C.accent;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([3, 3]);
 
@@ -2434,12 +2434,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
     // ─── Marquee selection box ────────────────────────────────────────────────
     if (marquee) {
-      ctx.strokeStyle = '#2563EB';
+      ctx.strokeStyle = C.accent;
       ctx.lineWidth = 1.2;
       ctx.setLineDash([4, 3]);
       // left-to-right drag: solid blue fill; right-to-left: crossing selection (lighter)
       const crossingSelect = marquee.w < 0;
-      ctx.fillStyle = crossingSelect ? 'rgba(37,99,235,0.05)' : 'rgba(37,99,235,0.08)';
+      ctx.fillStyle = crossingSelect ? C.accentA(0.05) : C.accentA(0.08);
       const rx = marquee.w >= 0 ? marquee.x : marquee.x + marquee.w;
       const ry = marquee.h >= 0 ? marquee.y : marquee.y + marquee.h;
       const rw = Math.abs(marquee.w);
@@ -2477,13 +2477,13 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
           ctx.save();
           if (isHov || isDrag) {
-            ctx.fillStyle = 'rgba(37, 99, 235, 0.22)';
+            ctx.fillStyle = C.accentA(0.22);
             ctx.beginPath();
             ctx.arc(s.x, s.y, 11, 0, Math.PI * 2);
             ctx.fill();
           }
 
-          ctx.fillStyle = isDrag ? '#1D4ED8' : '#2563EB';
+          ctx.fillStyle = isDrag ? C.accentStrong : C.accent;
           ctx.strokeStyle = C.halo;
           ctx.lineWidth = 2;
           ctx.beginPath();
@@ -2541,7 +2541,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       // user can see what to click. Nothing implies any edge is a wall.
       if (activeTagTool) {
         ctx.save();
-        ctx.strokeStyle = 'rgba(37,99,235,0.28)';
+        ctx.strokeStyle = C.accentA(0.28);
         ctx.setLineDash([5, 4]);
         ctx.lineWidth = 1.4;
         for (const edge of boundaryEdges) {
@@ -2904,7 +2904,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       if (p2) {
         const s2 = ws(p2[0], p2[1]);
         // Draw probe line
-        ctx.strokeStyle = '#2563EB';
+        ctx.strokeStyle = C.accent;
         ctx.lineWidth = 2.5;
         ctx.setLineDash([6, 4]);
         ctx.beginPath();
@@ -2928,7 +2928,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       }
 
       // Point 1 marker
-      ctx.fillStyle = '#2563EB';
+      ctx.fillStyle = C.accent;
       ctx.beginPath();
       ctx.arc(s1.x, s1.y, 5, 0, Math.PI * 2);
       ctx.fill();
@@ -2937,7 +2937,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.stroke();
 
       ctx.font = 'bold 11px Inter, sans-serif';
-      ctx.fillStyle = '#2563EB';
+      ctx.fillStyle = C.accent;
       ctx.fillText('P1', s1.x + 8, s1.y - 4);
 
       if (activePlotLine?.label) {

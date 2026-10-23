@@ -9,7 +9,8 @@
  * - Surfaces step from the outer chrome (app) to panels (surface) to rows,
  *   inputs and hover (surface-2/3). The viewport has its own role so the
  *   canvas can sit a step darker than the panels around it.
- * - One accent, reserved for the primary action and the true selection.
+ * - One accent, reserved for the primary action and the true selection:
+ *   blue in light, violet in dark.
  * - Depth comes from lines and surface contrast, never shadows.
  */
 
@@ -75,11 +76,13 @@
   --fg-4: #62676f;
   --fg-5: #464a51;
 
-  --accent: #3b82f6;
-  --accent-hover: #5b97f8;
-  --accent-soft: rgba(59, 130, 246, 0.16);
-  --accent-fg: #8ab4ff;
-  --accent-line: rgba(59, 130, 246, 0.5);
+  /* Violet rather than the light theme's blue: saturated blue reads harsh on
+     near-black, and this keeps white button text at AA contrast (4.5:1). */
+  --accent: #7461e8;
+  --accent-hover: #8273f0;
+  --accent-soft: rgba(116, 97, 232, 0.18);
+  --accent-fg: #b4abff;
+  --accent-line: rgba(139, 124, 246, 0.55);
 
   --danger: #f26b6b;
   --danger-soft: rgba(242, 107, 107, 0.12);

@@ -407,7 +407,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
         </Row>
       </div>
 
-      <div className="shrink-0 px-4 pt-3 pb-3 border-t border-line bg-surface space-y-2">
+      <div className="shrink-0 px-4 py-4 border-t border-line bg-surface space-y-2">
         <button
           onClick={running ? onStop : onRun}
           className={`w-full py-2 font-medium rounded-sm flex items-center justify-center gap-1.5 transition-colors ${

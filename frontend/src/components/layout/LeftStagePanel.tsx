@@ -883,7 +883,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     onCta={onSelectStage ? () => onSelectStage('geometry') : undefined}
                   />
                 </div>
-                <div className="shrink-0 px-4 pt-3 mt-3 border-t border-line bg-surface">
+                <div className="shrink-0 px-4 py-4 mt-3 border-t border-line bg-surface">
                   <button
                     disabled
                     className="w-full py-2 bg-accent text-white font-medium rounded-sm opacity-40"
@@ -1228,7 +1228,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 )}
               </div>
 
-              <div className="shrink-0 px-4 pt-3 mt-3 border-t border-line bg-surface space-y-2">
+              <div className="shrink-0 px-4 py-4 mt-3 border-t border-line bg-surface space-y-2">
                 {meshTopology === 'structured' ? (
                   <button
                     onClick={onGenerateStructuredMesh}
@@ -1617,7 +1617,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           </div>
 
           {/* Pinned ParaView Footer */}
-          <div className="p-3 border-t border-line bg-surface-2 shrink-0">
+          <div className="px-4 py-4 border-t border-line bg-surface shrink-0">
             <button
               type="button"
               onClick={async () => {

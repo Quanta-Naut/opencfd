@@ -15,8 +15,10 @@ Four rules carry most of the weight:
 
 1. **The viewport is the product.** Chrome is thin and quiet; tools float over
    the canvas instead of eating rows above it.
-2. **One accent, used as signal.** Blue marks the single primary action on a
-   screen. Everything else is neutral.
+2. **One accent, used as signal.** The accent (blue in light, violet in dark)
+   marks the single primary action on a screen. Everything else is neutral.
+   Canvas code reads it from `canvasPalette` (`C.accent`, `C.accentA`), never
+   a hardcoded hex.
 3. **Depth from lines and surface steps, never shadows.** No `shadow-*`, no
    `backdrop-blur-*`, anywhere.
 4. **Everything is reachable from the keyboard.** Every command lives in the
