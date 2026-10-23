@@ -7,6 +7,7 @@ The two only differ in how a command is launched and how a path is spelled, so
 from __future__ import annotations
 
 import asyncio
+import glob
 import os
 import re
 import shlex
@@ -71,6 +72,23 @@ def _conda_env_with_foam() -> Optional[Path]:
     return None
 
 
+def auto_detected_bashrc() -> Optional[str]:
+    """The environment script auto-detection would pick, ignoring any explicit
+    `foam_bashrc`/OPENCFD_FOAM_BASHRC override. None when OpenFOAM is already on
+    PATH or nothing standard is found. Shown read-only in the Settings dialog."""
+    if shutil.which("simpleFoam"):
+        return None
+    for pat in ("/opt/openfoam*/etc/bashrc", "/usr/lib/openfoam/openfoam*/etc/bashrc",
+                str(Path.home() / "OpenFOAM/*/etc/bashrc")):
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[-1]
+    env = _conda_env_with_foam()
+    if env:
+        return f"{env}/etc/conda/activate.d (conda env)"
+    return None
+
+
 def discover_foam_env_command() -> str:
     """Shell snippet that puts OpenFOAM on PATH, for `bash -lc`.
 
@@ -84,7 +102,6 @@ def discover_foam_env_command() -> str:
     if shutil.which("simpleFoam"):
         return ":"  # inherited PATH already has it
     # a system install (/opt/openfoam*, the WSL pack) wins over a stray conda env
-    import glob  # noqa: PLC0415
     for pat in ("/opt/openfoam*/etc/bashrc", "/usr/lib/openfoam/openfoam*/etc/bashrc",
                 str(Path.home() / "OpenFOAM/*/etc/bashrc")):
         hits = sorted(glob.glob(pat))

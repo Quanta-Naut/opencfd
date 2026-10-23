@@ -668,6 +668,8 @@ export async function sampleSolverRunLine(
 
 export interface AppSettings {
   case_storage: 'wsl' | 'windows';
+  /** Explicit OpenFOAM env script (etc/bashrc) to source; '' = auto-detect. */
+  foam_bashrc: string;
 }
 
 export async function fetchSettings(): Promise<{ data: AppSettings | null; detail?: string }> {

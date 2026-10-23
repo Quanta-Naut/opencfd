@@ -333,6 +333,7 @@ async def paraview_launch_endpoint(req: ParaviewLaunchRequest):
 
 class SettingsUpdate(BaseModel):
     case_storage: str | None = None
+    foam_bashrc: str | None = None
 
 
 @app.get("/api/settings")

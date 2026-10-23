@@ -41,7 +41,11 @@ export const WorkflowStrip: React.FC<WorkflowStripProps> = ({
           <React.Fragment key={st.id}>
             <button
               onClick={() => onSelectStage(st.id)}
-              title={locked ? stageStatus?.[st.id]?.reason : undefined}
+              title={
+                locked
+                  ? `${stageStatus?.[st.id]?.reason}  ·  Press ${idx + 1}`
+                  : `${st.label}  ·  Press ${idx + 1}`
+              }
               className={`relative h-full px-3 flex items-center gap-1.5 text-xs font-medium transition-colors ${
                 isActive
                   ? 'text-[#171A1F] font-semibold'

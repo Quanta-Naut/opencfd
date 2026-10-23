@@ -1,21 +1,32 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Pencil, LayoutGrid, Settings } from 'lucide-react';
+import { Pencil, LayoutGrid, Settings, Search, Keyboard } from 'lucide-react';
 import { PreferencesDialog } from '../settings/PreferencesDialog';
+import { Kbd } from '../ui/Kbd';
+import { MOD_LABEL } from '../../utils/platform';
 
 interface TopHeaderProps {
   projectName: string;
   onProjectNameChange: (name: string) => void;
   onExitHome?: () => void;
-  onOpenCaseFiles?: () => void;
+  onOpenCommandPalette?: () => void;
+  onOpenShortcuts?: () => void;
+  /** Controlled by App so the command palette can open this dialog too. */
+  preferencesOpen?: boolean;
+  onPreferencesOpenChange?: (open: boolean) => void;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
   projectName,
   onProjectNameChange,
   onExitHome,
-  onOpenCaseFiles,
+  onOpenCommandPalette,
+  onOpenShortcuts,
+  preferencesOpen,
+  onPreferencesOpenChange,
 }) => {
-  const [showPreferences, setShowPreferences] = useState(false);
+  const [internalPrefsOpen, setInternalPrefsOpen] = useState(false);
+  const showPreferences = preferencesOpen ?? internalPrefsOpen;
+  const setShowPreferences = onPreferencesOpenChange ?? setInternalPrefsOpen;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(projectName);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -91,7 +102,30 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
 
       {/* Right: Project actions. Everything autosaves to the project on disk, so
           there is no manual Save; the how-to guide lives on the home screen. */}
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5">
+        {onOpenCommandPalette && (
+          <button
+            onClick={onOpenCommandPalette}
+            title="Search or jump to…"
+            className="flex items-center gap-2 h-7 pl-2.5 pr-1.5 border border-[#E1E4E8] bg-[#F5F6F8] hover:bg-white hover:border-[#C4C9D0] rounded-sm text-[#69717D] transition-colors"
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span className="hidden md:inline text-[12px]">Search or jump to…</span>
+            <span className="hidden md:flex items-center gap-0.5 ml-2">
+              <Kbd>{MOD_LABEL}</Kbd>
+              <Kbd>K</Kbd>
+            </span>
+          </button>
+        )}
+        {onOpenShortcuts && (
+          <button
+            onClick={onOpenShortcuts}
+            className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded transition-colors"
+            title="Keyboard shortcuts (?)"
+          >
+            <Keyboard className="w-4 h-4" />
+          </button>
+        )}
         <button
           onClick={() => setShowPreferences(true)}
           className="p-1.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded transition-colors"
@@ -104,7 +138,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
       <PreferencesDialog
         open={showPreferences}
         onClose={() => setShowPreferences(false)}
-        onOpenCaseFiles={onOpenCaseFiles}
       />
     </header>
   );

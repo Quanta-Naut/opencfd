@@ -11,7 +11,24 @@ import { RunHistoryRail } from './components/results/RunHistoryRail';
 import { ResultsRightRail } from './components/results/ResultsRightRail';
 import { CreatePlotModal } from './components/results/CreatePlotModal';
 import { PlotViewDialog } from './components/results/PlotViewDialog';
-import { Crosshair } from 'lucide-react';
+import {
+  Crosshair,
+  PenTool,
+  SlidersHorizontal,
+  Grid3x3,
+  Play,
+  Square,
+  BarChart3,
+  Plus,
+  RefreshCw,
+  FileCode,
+  Settings,
+  LayoutGrid,
+  Layers,
+  Wand2,
+  Ruler,
+  FileDown,
+} from 'lucide-react';
 import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { StatusBar } from './components/layout/StatusBar';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
@@ -46,6 +63,10 @@ import { useHistoricalRunField } from './hooks/useHistoricalRunField';
 import { useResultsPlayback } from './hooks/useResultsPlayback';
 import { useSolverRun } from './hooks/useSolverRun';
 import { toast } from './components/ui/Toast';
+import { CommandPalette, Command } from './components/ui/CommandPalette';
+import { ShortcutsDialog } from './components/ui/ShortcutsDialog';
+import { useGlobalHotkeys } from './hooks/useGlobalHotkeys';
+import { MOD_LABEL } from './utils/platform';
 import {
   CadWorkflowStep,
   FlowType,
@@ -1168,6 +1189,9 @@ export function App({
   const [pickedP1, setPickedP1] = useState<[number, number] | null>(null);
   const [pickedP2, setPickedP2] = useState<[number, number] | null>(null);
   const [caseFilesOpen, setCaseFilesOpen] = useState(false); // OpenFOAM dicts modal
+  const [paletteOpen, setPaletteOpen] = useState(false); // ⌘K command palette
+  const [shortcutsOpen, setShortcutsOpen] = useState(false); // ? shortcut sheet
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   useEffect(() => {
     if (activeDialogPlot) {
@@ -1377,6 +1401,134 @@ export function App({
     loadResults,
   });
 
+  // ── Command palette registry ──────────────────────────────────────────────
+  // One flat list of everything worth reaching without hunting through panels.
+  // The palette groups by `group` and fuzzy-filters the whole list.
+  const solverRunning = state.executionStatus === 'running';
+  const solverBusy = solverRunning || isMeshing;
+  const modalOpen =
+    paletteOpen ||
+    shortcutsOpen ||
+    caseFilesOpen ||
+    createPlotModalOpen ||
+    preferencesOpen ||
+    !!activeDialogPlot;
+
+  const commands = useMemo<Command[]>(
+    () => [
+      // Navigate
+      { id: 'go-geometry', group: 'Navigate', title: 'Go to Geometry', icon: <PenTool className="w-4 h-4" />, shortcut: ['1'], run: () => setActiveStage('geometry') },
+      { id: 'go-case-setup', group: 'Navigate', title: 'Go to Case Setup', icon: <SlidersHorizontal className="w-4 h-4" />, shortcut: ['2'], run: () => setActiveStage('caseSetup') },
+      { id: 'go-mesh', group: 'Navigate', title: 'Go to Mesh', icon: <Grid3x3 className="w-4 h-4" />, shortcut: ['3'], run: () => setActiveStage('mesh') },
+      { id: 'go-solver', group: 'Navigate', title: 'Go to Solver', icon: <Play className="w-4 h-4" />, shortcut: ['4'], run: () => setActiveStage('solver') },
+      { id: 'go-results', group: 'Navigate', title: 'Go to Results', icon: <BarChart3 className="w-4 h-4" />, shortcut: ['5'], run: () => setActiveStage('results') },
+
+      // Mesh
+      {
+        id: 'mesh-generate',
+        group: 'Mesh',
+        title: 'Generate Mesh (Gmsh)',
+        keywords: 'unstructured triangulate remesh',
+        icon: <Grid3x3 className="w-4 h-4" />,
+        disabled: !meshGate.ready || isMeshing,
+        disabledReason: !meshGate.ready
+          ? meshGate.missing.join('; ')
+          : 'A mesh is already being generated',
+        run: handleGenerateMesh,
+      },
+      { id: 'mesh-blocks-h', group: 'Mesh', title: 'Build Structured Blocks · H-grid', keywords: 'blocking hexa structured', icon: <Layers className="w-4 h-4" />, run: () => handleBuildBlocks('hgrid') },
+      { id: 'mesh-blocks-o', group: 'Mesh', title: 'Build Structured Blocks · O-grid', keywords: 'blocking ring body', icon: <Layers className="w-4 h-4" />, run: () => handleBuildBlocks('ogrid') },
+      { id: 'mesh-blocks-c', group: 'Mesh', title: 'Build Structured Blocks · C-grid', keywords: 'blocking airfoil wake', icon: <Layers className="w-4 h-4" />, run: () => handleBuildBlocks('cgrid') },
+      {
+        id: 'mesh-structured-generate',
+        group: 'Mesh',
+        title: 'Generate Structured Mesh',
+        keywords: 'transfinite quad',
+        icon: <Wand2 className="w-4 h-4" />,
+        disabled: !blocking || isMeshing,
+        disabledReason: 'Build the block topology first',
+        run: handleGenerateStructuredMesh,
+      },
+      { id: 'mesh-apply-yplus', group: 'Mesh', title: 'Apply y⁺ Sizing to Mesh', keywords: 'first layer prism boundary layer', icon: <Ruler className="w-4 h-4" />, run: handleApplyYPlusToMesh },
+      { id: 'mesh-blockmeshdict', group: 'Mesh', title: 'Download blockMeshDict', keywords: 'export native openfoam', icon: <FileDown className="w-4 h-4" />, run: () => requestDownloadBlockMeshDictRef.current?.() },
+
+      // Solver
+      solverRunning
+        ? { id: 'solver-stop', group: 'Solver', title: 'Stop Solver', icon: <Square className="w-4 h-4" />, shortcut: [MOD_LABEL, '↵'], run: handleStopSolver }
+        : {
+            id: 'solver-run',
+            group: 'Solver',
+            title: 'Run Solver',
+            icon: <Play className="w-4 h-4" />,
+            shortcut: [MOD_LABEL, '↵'],
+            disabled: !meshReady || solverBusy,
+            disabledReason: !meshReady ? 'Generate a mesh first' : 'A run is already in progress',
+            run: handleRunSolver,
+          },
+      { id: 'solver-reload', group: 'Solver', title: 'Reload Results', keywords: 'refresh refetch field', icon: <RefreshCw className="w-4 h-4" />, run: () => { clearResultsCache(); void loadResults(true); } },
+
+      // Results
+      { id: 'results-new-plot', group: 'Results', title: 'New Plot', keywords: 'chart line probe compare', icon: <Plus className="w-4 h-4" />, run: () => setCreatePlotModalOpen(true) },
+      { id: 'results-view-latest', group: 'Results', title: 'View Latest Run', keywords: 'open field viewport', icon: <BarChart3 className="w-4 h-4" />, run: selectLatestFinishedRun },
+
+      // Project
+      { id: 'project-case-files', group: 'Project', title: 'Open OpenFOAM Case Files', keywords: 'dicts browse system constant', icon: <FileCode className="w-4 h-4" />, run: () => setCaseFilesOpen(true) },
+      { id: 'project-preferences', group: 'Project', title: 'Open Preferences', keywords: 'settings options', icon: <Settings className="w-4 h-4" />, run: () => setPreferencesOpen(true) },
+      { id: 'project-home', group: 'Project', title: 'Back to Projects', keywords: 'close home exit', icon: <LayoutGrid className="w-4 h-4" />, run: handleExitHome },
+    ],
+    [
+      meshGate,
+      isMeshing,
+      blocking,
+      meshReady,
+      solverRunning,
+      solverBusy,
+      handleGenerateMesh,
+      handleBuildBlocks,
+      handleGenerateStructuredMesh,
+      handleApplyYPlusToMesh,
+      handleRunSolver,
+      handleStopSolver,
+      selectLatestFinishedRun,
+      clearResultsCache,
+      loadResults,
+      handleExitHome,
+    ],
+  );
+
+  useGlobalHotkeys([
+    {
+      combo: 'mod+k',
+      allowInInput: true,
+      handler: (e) => {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      },
+    },
+    {
+      combo: 'shift+?',
+      handler: (e) => {
+        e.preventDefault();
+        setShortcutsOpen((o) => !o);
+      },
+    },
+    { combo: '1', handler: () => { if (!modalOpen) setActiveStage('geometry'); } },
+    { combo: '2', handler: () => { if (!modalOpen) setActiveStage('caseSetup'); } },
+    { combo: '3', handler: () => { if (!modalOpen) setActiveStage('mesh'); } },
+    { combo: '4', handler: () => { if (!modalOpen) setActiveStage('solver'); } },
+    { combo: '5', handler: () => { if (!modalOpen) setActiveStage('results'); } },
+    {
+      combo: 'mod+enter',
+      handler: (e) => {
+        e.preventDefault();
+        if (modalOpen) return;
+        if (solverRunning) handleStopSolver();
+        else if (meshReady && !solverBusy) handleRunSolver();
+      },
+    },
+    { combo: 'escape', handler: () => setShortcutsOpen(false) },
+  ]);
+
   return (
     <div className="flex flex-col h-screen w-screen bg-[#F5F6F8] overflow-hidden font-sans text-[#171A1F]">
       {/* 1. TOP BAR (52px) */}
@@ -1384,7 +1536,10 @@ export function App({
         projectName={projectName}
         onProjectNameChange={handleRenameProject}
         onExitHome={handleExitHome}
-        onOpenCaseFiles={() => setCaseFilesOpen(true)}
+        onOpenCommandPalette={() => setPaletteOpen(true)}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
+        preferencesOpen={preferencesOpen}
+        onPreferencesOpenChange={setPreferencesOpen}
       />
 
       {/* 2. WORKFLOW NAVIGATION STRIP (36px) */}
@@ -1747,6 +1902,16 @@ export function App({
         projectId={projectId}
         solverRuns={state.solverRuns ?? []}
       />
+
+      {paletteOpen && (
+        <CommandPalette
+          open
+          onClose={() => setPaletteOpen(false)}
+          commands={commands}
+        />
+      )}
+
+      {shortcutsOpen && <ShortcutsDialog open onClose={() => setShortcutsOpen(false)} />}
     </div>
   );
 }

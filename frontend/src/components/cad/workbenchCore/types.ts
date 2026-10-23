@@ -42,6 +42,8 @@ export interface GuideLine {
     | 'parallel'
     | 'perpendicular'
     | 'projection'
+    | 'polar'
+    | 'extension'
     | 'origin'
     | 'xaxis'
     | 'yaxis';
@@ -56,13 +58,16 @@ export interface Snap {
     | 'endpoint'
     | 'midpoint'
     | 'center'
+    | 'quadrant'
     | 'origin'
     | 'grid'
     | 'perpendicular'
     | 'parallel'
     | 'alignment'
+    | 'polar'
     | 'tangent'
-    | 'intersection';
+    | 'intersection'
+    | 'nearest';
   guides?: GuideLine[];
 }
 

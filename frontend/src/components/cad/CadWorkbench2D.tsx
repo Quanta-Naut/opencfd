@@ -128,6 +128,12 @@ import type {
 import {
   SNAP_RADIUS_PX,
   INITIAL_ZOOM,
+  DEFAULT_SNAP_SETTINGS,
+  POLAR_STEP_CHOICES,
+  SNAP_LABELS,
+  loadSnapSettings,
+  saveSnapSettings,
+  computeSnapPoint,
   cadReducer,
   cellSkewness,
   colormapRGB,
@@ -135,14 +141,13 @@ import {
   moveEntityVertex,
   translateEntity,
   dist,
-  midpt,
   pointInPolygon,
   distToSegment,
   getMapScaleInfo,
   pointsToLineSegments,
-  normalizeAngle,
   getTrimTarget,
 } from './workbenchCore';
+import type { SnapSettings } from './workbenchCore';
 
 // Fill colors cycled by block index for the Mesh-view direction-coloring
 // overlay (one color per block, so the block layout reads at a glance on the
@@ -157,6 +162,9 @@ const BLOCK_FILL_CYCLE = [
   '#0891B2',
   '#65A30D',
 ];
+
+/** Boolean snap modes - everything in SnapSettings except the polar step. */
+type SnapBoolKey = Exclude<keyof SnapSettings, 'polarStepDeg'>;
 
 const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   onApplySketchMesh,
@@ -641,9 +649,36 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // ── Snap ────────────────────────────────────────────────────────────────────
   const [snap, setSnap] = useState<Snap>({ pt: { x: 0, y: 0 }, type: 'grid' });
   const [snapEnabled, setSnapEnabled] = useState(true);
-  const [gridSnapEnabled, setGridSnapEnabled] = useState(true);
   const [ortho, setOrtho] = useState(false);
   const [showGrid, setShowGrid] = useState(true);
+  // Per-browser drafting preferences (which inferences are armed, polar step,
+  // grid snap). Persisted so a user's habits survive a reload. This is the
+  // single source of truth for "grid snap" as well - the toolbar and the
+  // drafting popover both edit it.
+  const [snapSettings, setSnapSettings] = useState<SnapSettings>(() => loadSnapSettings());
+  const [draftingOpen, setDraftingOpen] = useState(false);
+  const draftingRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    saveSnapSettings(snapSettings);
+  }, [snapSettings]);
+  // Dismiss the drafting popover on an outside click or Escape (keyboard users).
+  useEffect(() => {
+    if (!draftingOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (draftingRef.current && !draftingRef.current.contains(e.target as Node)) {
+        setDraftingOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDraftingOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [draftingOpen]);
 
   // Pick a sensible canvas mode when the STAGE changes; after that the user
   // drives it with the Blocks / Mesh / Quality toggle (a stale mesh no longer
@@ -1115,7 +1150,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       if (ay !== null) pt.y = ay;
 
       // 3. grid snap when not otherwise constrained
-      if (gridSnapEnabled && ax === null && ay === null) {
+      if (snapSettings.grid && ax === null && ay === null) {
         const raw40 = 40 / Math.max(zoom, 1e-6);
         const mag = Math.pow(10, Math.floor(Math.log10(raw40)));
         const n = raw40 / mag;
@@ -1153,7 +1188,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       if (ay !== null) guides.push({ a: { x: pt.x - BIG, y: ay }, b: { x: pt.x + BIG, y: ay } });
       return { pt, guides };
     },
-    [zoom, cadState.entities, blocking, gridSnapEnabled, domainRing, blockOutlines],
+    [zoom, cadState.entities, blocking, snapSettings.grid, domainRing, blockOutlines],
   );
 
   // ── Dynamic Dimension Input (Onshape / Fusion 360 style) ───────────────────
@@ -1526,282 +1561,27 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [origin, zoom],
   );
 
-  // ── Clean Professional CAD OSNAP & Inferencing Engine ──────────────────────
+  // ── Snap / inferencing ─────────────────────────────────────────────────────
+  // All the Onshape/Fusion-style logic (vertex, midpoint, centre, quadrant,
+  // edge-intersection, perpendicular/parallel, polar angle tracking, same-axis
+  // alignment guides and grid) lives in workbenchCore/snap.ts. Here we only
+  // supply the current view/state plus the viewport extent so guide lines can
+  // reach across the canvas.
   const computeSnap = useCallback(
     (raw: Point2D): Snap => {
-      const snapR = SNAP_RADIUS_PX / zoom;
-      const alignTol = 10 / zoom; // screen-scaled tolerance for tracking & alignments
-      let minD = Infinity;
-
-      if (!snapEnabled) {
-        return { pt: raw, type: 'grid', guides: [] };
-      }
-
-      const activeStart = tempPts.length > 0 ? tempPts[tempPts.length - 1] : null;
-
-      // The origin is a snap CANDIDATE (below, same radius/priority as any other
-      // point) but must never magnetically grab the cursor on its own - it used
-      // to have an enlarged, always-on capture radius here, which made ordinary
-      // drawing near the middle of the canvas "snap to center" unexpectedly. A
-      // deliberate re-centre is still one double middle-click away (handleAuxClick).
-
-      // 2. COLLECT KEY GEOMETRIC VERTICES (Endpoints, Midpoints, Centers)
-      const keyPoints: { pt: Point2D; type: Snap['type'] }[] = [
-        { pt: { x: 0, y: 0 }, type: 'origin' },
-      ];
-
-      for (const e of cadState.entities) {
-        if (e.pts.length >= 2) {
-          keyPoints.push({ pt: e.pts[0], type: 'endpoint' });
-          keyPoints.push({ pt: e.pts[e.pts.length - 1], type: 'endpoint' });
-          for (let i = 0; i < e.pts.length - 1; i++) {
-            keyPoints.push({ pt: midpt(e.pts[i], e.pts[i + 1]), type: 'midpoint' });
-            if (i > 0 && i < e.pts.length - 1) {
-              keyPoints.push({ pt: e.pts[i], type: 'endpoint' });
-            }
-          }
-        }
-        if (e.type === 'circle' && e.pts[0]) {
-          keyPoints.push({ pt: e.pts[0], type: 'center' });
-          const c = e.pts[0];
-          const r = e.radius ?? (e.pts[1] ? dist(c, e.pts[1]) : 0);
-          if (r > 0) {
-            keyPoints.push({
-              pt: { x: +(c.x + r).toFixed(5), y: +c.y.toFixed(5) },
-              type: 'endpoint',
-            });
-            keyPoints.push({
-              pt: { x: +(c.x - r).toFixed(5), y: +c.y.toFixed(5) },
-              type: 'endpoint',
-            });
-            keyPoints.push({
-              pt: { x: +c.x.toFixed(5), y: +(c.y + r).toFixed(5) },
-              type: 'endpoint',
-            });
-            keyPoints.push({
-              pt: { x: +c.x.toFixed(5), y: +(c.y - r).toFixed(5) },
-              type: 'endpoint',
-            });
-          }
-        }
-        if (e.type === 'ellipse' && e.pts[0]) {
-          keyPoints.push({ pt: e.pts[0], type: 'center' });
-          if (typeof e.rx === 'number' && typeof e.ry === 'number') {
-            const c = e.pts[0];
-            const rx = e.rx;
-            const ry = e.ry;
-            const rot = e.rotation || 0;
-            const cosR = Math.cos(rot);
-            const sinR = Math.sin(rot);
-            keyPoints.push({ pt: { x: c.x + rx * cosR, y: c.y + rx * sinR }, type: 'endpoint' });
-            keyPoints.push({ pt: { x: c.x - rx * cosR, y: c.y - rx * sinR }, type: 'endpoint' });
-            keyPoints.push({ pt: { x: c.x - ry * sinR, y: c.y + ry * cosR }, type: 'endpoint' });
-            keyPoints.push({ pt: { x: c.x + ry * sinR, y: c.y - ry * cosR }, type: 'endpoint' });
-
-            // 4 true AXIS-ALIGNED quadrant points (extreme points of the ellipse in world x and y)
-            const tx = Math.atan2(-ry * sinR, rx * cosR);
-            const ty = Math.atan2(ry * cosR, rx * sinR);
-            const evalE = (t: number): Point2D => ({
-              x: +(c.x + rx * Math.cos(t) * cosR - ry * Math.sin(t) * sinR).toFixed(5),
-              y: +(c.y + rx * Math.cos(t) * sinR + ry * Math.sin(t) * cosR).toFixed(5),
-            });
-            keyPoints.push({ pt: evalE(tx), type: 'endpoint' });
-            keyPoints.push({ pt: evalE(tx + Math.PI), type: 'endpoint' });
-            keyPoints.push({ pt: evalE(ty), type: 'endpoint' });
-            keyPoints.push({ pt: evalE(ty + Math.PI), type: 'endpoint' });
-          }
-        }
-        if (e.type === 'arc' && e.pts[0]) {
-          keyPoints.push({ pt: e.pts[0], type: 'center' });
-          keyPoints.push({ pt: e.pts[1], type: 'endpoint' });
-          if (e.pts[2]) keyPoints.push({ pt: e.pts[2], type: 'endpoint' });
-        }
-      }
-
-      // Direct Vertex / Point Snapping (highest priority)
-      let directSnap: Snap | null = null;
-      for (const kp of keyPoints) {
-        const d = dist(raw, kp.pt);
-        if (d < snapR && d < minD) {
-          minD = d;
-          directSnap = { pt: kp.pt, type: kp.type, guides: [] };
-        }
-      }
-      if (directSnap) {
-        if (activeStart && dist(directSnap.pt, activeStart) > 1e-4) {
-          const dx = Math.abs(directSnap.pt.x - activeStart.x);
-          const dy = Math.abs(directSnap.pt.y - activeStart.y);
-          if (dx < alignTol) {
-            directSnap.guides = [{ type: 'vertical', from: activeStart, to: directSnap.pt }];
-          } else if (dy < alignTol) {
-            directSnap.guides = [{ type: 'horizontal', from: activeStart, to: directSnap.pt }];
-          }
-        }
-        return directSnap;
-      }
-
-      // 3. INFERENCING WHILE ACTIVELY DRAWING
-      if (activeStart && dist(raw, activeStart) > snapR) {
-        const dx = raw.x - activeStart.x;
-        const dy = raw.y - activeStart.y;
-        const absDx = Math.abs(dx);
-        const absDy = Math.abs(dy);
-
-        // Check if drawing near X-axis (y=0) or Y-axis (x=0)
-        const onXAxis = Math.abs(raw.y) < alignTol;
-        const onYAxis = Math.abs(raw.x) < alignTol;
-
-        // Check if moving predominantly horizontal or vertical from start
-        const isHorizontal = absDy < alignTol || onXAxis;
-        const isVertical = absDx < alignTol || onYAxis;
-
-        if (isHorizontal) {
-          const targetY = onXAxis ? 0 : activeStart.y;
-          let targetX = raw.x;
-          const guides: GuideLine[] = [
-            {
-              type: onXAxis ? 'xaxis' : 'horizontal',
-              from: activeStart,
-              to: { x: targetX, y: targetY },
-            },
-          ];
-
-          // Check if there is an opposing endpoint that aligns vertically with current cursor
-          let bestAlignX: Point2D | null = null;
-          let minDiffX = alignTol;
-          for (const kp of keyPoints) {
-            if (dist(kp.pt, activeStart) < 1e-4) continue;
-            const diff = Math.abs(raw.x - kp.pt.x);
-            if (diff < minDiffX) {
-              minDiffX = diff;
-              bestAlignX = kp.pt;
-            }
-          }
-
-          if (bestAlignX) {
-            targetX = bestAlignX.x;
-            guides[0].to.x = targetX;
-            guides.push({
-              type: 'vertical',
-              from: bestAlignX,
-              to: { x: targetX, y: targetY },
-            });
-          }
-
-          return {
-            pt: { x: +targetX.toFixed(5), y: +targetY.toFixed(5) },
-            type: 'alignment',
-            guides,
-          };
-        }
-
-        if (isVertical) {
-          const targetX = onYAxis ? 0 : activeStart.x;
-          let targetY = raw.y;
-          const guides: GuideLine[] = [
-            {
-              type: onYAxis ? 'yaxis' : 'vertical',
-              from: activeStart,
-              to: { x: targetX, y: targetY },
-            },
-          ];
-
-          // Check if there is an opposing endpoint that aligns horizontally with current cursor
-          let bestAlignY: Point2D | null = null;
-          let minDiffY = alignTol;
-          for (const kp of keyPoints) {
-            if (dist(kp.pt, activeStart) < 1e-4) continue;
-            const diff = Math.abs(raw.y - kp.pt.y);
-            if (diff < minDiffY) {
-              minDiffY = diff;
-              bestAlignY = kp.pt;
-            }
-          }
-
-          if (bestAlignY) {
-            targetY = bestAlignY.y;
-            guides[0].to.y = targetY;
-            guides.push({
-              type: 'horizontal',
-              from: bestAlignY,
-              to: { x: targetX, y: targetY },
-            });
-          }
-
-          return {
-            pt: { x: +targetX.toFixed(5), y: +targetY.toFixed(5) },
-            type: 'alignment',
-            guides,
-          };
-        }
-
-        // Check 90° Perpendicular and Parallel to existing segments (only when not H/V)
-        const curLen = Math.hypot(dx, dy);
-        const curAng = Math.atan2(dy, dx);
-
-        for (const e of cadState.entities) {
-          if (e.pts.length < 2) continue;
-          for (let i = 0; i < e.pts.length - 1; i++) {
-            const segA = e.pts[i];
-            const segB = e.pts[i + 1];
-            const segAng = Math.atan2(segB.y - segA.y, segB.x - segA.x);
-
-            // 90° Perpendicular snap
-            const perp1 = segAng + Math.PI / 2;
-            const perp2 = segAng - Math.PI / 2;
-            const diffPerp1 = Math.abs(normalizeAngle(curAng - perp1));
-            const diffPerp2 = Math.abs(normalizeAngle(curAng - perp2));
-            if (diffPerp1 < 0.05 || diffPerp2 < 0.05) {
-              const targetAng = diffPerp1 < 0.05 ? perp1 : perp2;
-              const pt = {
-                x: +(activeStart.x + curLen * Math.cos(targetAng)).toFixed(5),
-                y: +(activeStart.y + curLen * Math.sin(targetAng)).toFixed(5),
-              };
-              return {
-                pt,
-                type: 'perpendicular',
-                guides: [{ type: 'perpendicular', from: activeStart, to: pt }],
-              };
-            }
-
-            // Parallel snap
-            const diffPar = Math.abs(normalizeAngle(curAng - segAng));
-            const diffParOpp = Math.abs(normalizeAngle(curAng - (segAng + Math.PI)));
-            if (diffPar < 0.05 || diffParOpp < 0.05) {
-              const targetAng = diffPar < 0.05 ? segAng : segAng + Math.PI;
-              const pt = {
-                x: +(activeStart.x + curLen * Math.cos(targetAng)).toFixed(5),
-                y: +(activeStart.y + curLen * Math.sin(targetAng)).toFixed(5),
-              };
-              return {
-                pt,
-                type: 'parallel',
-                guides: [{ type: 'parallel', from: activeStart, to: pt }],
-              };
-            }
-          }
-        }
-      }
-
-      // Grid snap fallback
-      if (gridSnapEnabled) {
-        const rawStep = 40 / Math.max(zoom, 1e-6);
-        const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
-        const norm = rawStep / mag;
-        let g = mag;
-        if (norm >= 5) g = 5 * mag;
-        else if (norm >= 2) g = 2 * mag;
-        else g = mag;
-        g = Math.max(0.0002, g); // Min grid snap step: 0.2 mm
-
-        const gx = Math.round(raw.x / g) * g;
-        const gy = Math.round(raw.y / g) * g;
-        return { pt: { x: +gx.toFixed(6), y: +gy.toFixed(6) }, type: 'grid', guides: [] };
-      }
-
-      return { pt: raw, type: 'grid', guides: [] };
+      const cw = containerRef.current?.clientWidth || 800;
+      const ch = containerRef.current?.clientHeight || 600;
+      return computeSnapPoint(raw, {
+        entities: cadState.entities,
+        tempPts,
+        zoom,
+        ortho,
+        settings: snapSettings,
+        guideExtent: (Math.max(cw, ch) / Math.max(zoom, 1e-6)) * 0.6,
+        enabled: snapEnabled,
+      });
     },
-    [cadState.entities, snapEnabled, gridSnapEnabled, tempPts, zoom],
+    [cadState.entities, snapEnabled, snapSettings, tempPts, zoom, ortho],
   );
 
   // ── Canvas render ─────────────────────────────────────────────────────────
@@ -2377,21 +2157,37 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const p1 = ws(g.from.x, g.from.y);
         const p2 = ws(g.to.x, g.to.y);
         const isAxis = g.type === 'xaxis' || g.type === 'yaxis';
+        const isPolar = g.type === 'polar';
+        const isExt = g.type === 'extension';
 
-        // Thin warm orange line for axis snapping, sky blue for other inferencing
-        ctx.strokeStyle = isAxis ? '#F59E0B' : '#0284C7';
-        ctx.lineWidth = 1.2;
-        ctx.setLineDash([3, 3]);
+        // Amber for the sketch axes, violet for angle tracking, sky blue for
+        // every other inference (vertex alignment, perpendicular, ...), and a
+        // faint slate for the tracking lines through a hovered point.
+        ctx.strokeStyle = isAxis
+          ? '#F59E0B'
+          : isPolar
+            ? '#7C3AED'
+            : isExt
+              ? '#94A3B8'
+              : '#0284C7';
+        ctx.lineWidth = isExt ? 1 : 1.2;
+        ctx.setLineDash(isExt ? [2, 4] : [3, 3]);
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        if (!isAxis && g.type !== 'perpendicular') {
-          // Small origin square at tracking reference point
-          ctx.fillStyle = '#0284C7';
+        if (!isAxis && !isExt && g.type !== 'perpendicular') {
+          // Small origin square at the tracking reference point
+          ctx.fillStyle = ctx.strokeStyle;
           ctx.fillRect(p1.x - 2.5, p1.y - 2.5, 5, 5);
+        }
+
+        if (g.label) {
+          ctx.font = '10px JetBrains Mono';
+          ctx.fillStyle = isPolar ? '#7C3AED' : '#0284C7';
+          ctx.fillText(g.label, p2.x + 6, p2.y - 4);
         }
 
         // For 90° perpendicular snap, draw the right-angle corner square at intersection
@@ -2418,10 +2214,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       }
     }
 
-    // ─── Snap indicator ───────────────────────────────────────────────────────
+    // ─── Snap marker + label ──────────────────────────────────────────────────
     if (tool !== 'select' && snap.type !== 'grid') {
       const sp = ws(snap.pt.x, snap.pt.y);
       ctx.setLineDash([]);
+      const GREEN = '#16A34A';
+      const BLUE = '#0284C7';
 
       if (snap.type === 'origin') {
         // Amber Origin Snap Double Circle with Crosshair
@@ -2437,11 +2235,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.lineTo(sp.x, sp.y + 8);
         ctx.stroke();
       } else if (snap.type === 'endpoint') {
-        ctx.strokeStyle = '#16A34A';
+        ctx.strokeStyle = GREEN;
         ctx.lineWidth = 1.8;
         ctx.strokeRect(sp.x - 5, sp.y - 5, 10, 10);
       } else if (snap.type === 'midpoint') {
-        ctx.strokeStyle = '#16A34A';
+        ctx.strokeStyle = GREEN;
         ctx.lineWidth = 1.8;
         ctx.beginPath();
         ctx.moveTo(sp.x, sp.y - 6);
@@ -2450,25 +2248,63 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.closePath();
         ctx.stroke();
       } else if (snap.type === 'center') {
-        ctx.strokeStyle = '#16A34A';
+        ctx.strokeStyle = GREEN;
         ctx.lineWidth = 1.8;
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2);
         ctx.stroke();
-        ctx.fillStyle = '#16A34A';
+        ctx.fillStyle = GREEN;
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, 1.5, 0, Math.PI * 2);
         ctx.fill();
-      } else if (
-        snap.type === 'perpendicular' ||
-        snap.type === 'parallel' ||
-        snap.type === 'alignment'
-      ) {
-        ctx.strokeStyle = '#0284C7';
+      } else if (snap.type === 'quadrant') {
+        ctx.strokeStyle = GREEN;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(sp.x, sp.y - 6);
+        ctx.lineTo(sp.x + 6, sp.y);
+        ctx.lineTo(sp.x, sp.y + 6);
+        ctx.lineTo(sp.x - 6, sp.y);
+        ctx.closePath();
+        ctx.stroke();
+      } else if (snap.type === 'intersection') {
+        ctx.strokeStyle = BLUE;
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - 5, sp.y - 5);
+        ctx.lineTo(sp.x + 5, sp.y + 5);
+        ctx.moveTo(sp.x + 5, sp.y - 5);
+        ctx.lineTo(sp.x - 5, sp.y + 5);
+        ctx.stroke();
+      } else if (snap.type === 'nearest') {
+        ctx.strokeStyle = BLUE;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([2, 2]);
+        ctx.strokeRect(sp.x - 4, sp.y - 4, 8, 8);
+        ctx.setLineDash([]);
+      } else {
+        // perpendicular / parallel / alignment / polar / tangent
+        ctx.strokeStyle = snap.type === 'polar' ? '#7C3AED' : BLUE;
         ctx.lineWidth = 1.8;
         ctx.beginPath();
         ctx.arc(sp.x, sp.y, 3.5, 0, Math.PI * 2);
         ctx.stroke();
+      }
+
+      // Name the active inference, the way Onshape/Fusion tag the cursor.
+      const label = SNAP_LABELS[snap.type];
+      if (label) {
+        ctx.font = '10px JetBrains Mono';
+        const tw = ctx.measureText(label).width;
+        const lx = sp.x + 11;
+        const ly = sp.y - 11;
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.fillRect(lx - 3, ly - 10, tw + 7, 14);
+        ctx.strokeStyle = '#E1E4E8';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(lx - 3, ly - 10, tw + 7, 14);
+        ctx.fillStyle = '#171A1F';
+        ctx.fillText(label, lx, ly + 1);
       }
     }
 
@@ -4845,6 +4681,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       if (e.key === 'F8') setOrtho((o) => !o);
       if (e.key === 'F3') setSnapEnabled((s) => !s);
       if (e.key === 'F7') setShowGrid((g) => !g);
+      if (e.key === 'F9') setSnapSettings((s) => ({ ...s, grid: !s.grid }));
       if (e.key === 'l' || e.key === 'L') {
         setTool('line');
         setIsDrawing(false);
@@ -5341,14 +5178,17 @@ boundary
     kbd?: string;
   }) => (
     <button
+      type="button"
       title={`${label}${kbd ? ` [${kbd}]` : ''}`}
+      aria-label={`${label} tool${kbd ? ` (${kbd})` : ''}`}
+      aria-pressed={tool === t}
       onClick={() => {
         setTool(t);
         setIsDrawing(false);
         setTempPts([]);
         setCmdText(`${label}: ${prompt_for(t)}`);
       }}
-      className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors min-w-[42px] ${
+      className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors min-w-[42px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#2563EB] ${
         tool === t
           ? 'bg-[#2563EB] text-white '
           : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'
@@ -5565,29 +5405,43 @@ boundary
           </button>
         </div>
 
-        {/* ── Snap Toggles ──── */}
+        {/* ── Snap / Drafting Toggles ──── */}
         <div className="flex items-center gap-1">
           {[
             {
               label: 'GRID',
-              title: 'Toggle Grid (F7)',
+              title: 'Grid visible (F7)',
               state: showGrid,
               toggle: () => setShowGrid((g) => !g),
               icon: <Grid3x3 className="w-3 h-3" />,
             },
             {
+              label: 'G-SNAP',
+              title: 'Snap to grid (F9)',
+              state: snapSettings.grid,
+              toggle: () => setSnapSettings((s) => ({ ...s, grid: !s.grid })),
+              icon: <Grid3x3 className="w-3 h-3" />,
+            },
+            {
               label: 'SNAP',
-              title: 'Toggle OSNAP (F3)',
+              title: 'Object snap / OSNAP, all inferences (F3)',
               state: snapEnabled,
               toggle: () => setSnapEnabled((s) => !s),
               icon: <Magnet className="w-3 h-3" />,
             },
             {
               label: 'ORTHO',
-              title: 'Ortho Lock (F8)',
+              title: 'Ortho lock - constrain to horizontal / vertical (F8)',
               state: ortho,
               toggle: () => setOrtho((o) => !o),
               icon: <Crosshair className="w-3 h-3" />,
+            },
+            {
+              label: 'ANGLE',
+              title: `Angle tracking in ${snapSettings.polarStepDeg}° steps`,
+              state: snapSettings.polar,
+              toggle: () => setSnapSettings((s) => ({ ...s, polar: !s.polar })),
+              icon: <Compass className="w-3 h-3" />,
             },
             {
               label: 'CONSTR',
@@ -5599,9 +5453,12 @@ boundary
           ].map(({ label, title, state: on, toggle, icon }) => (
             <button
               key={label}
+              type="button"
               title={title}
+              aria-label={title}
+              aria-pressed={on}
               onClick={toggle}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors ${
+              className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#2563EB] ${
                 on
                   ? 'bg-[#2563EB] text-white border-[#2563EB]'
                   : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#2563EB]'
@@ -5611,6 +5468,119 @@ boundary
               <span>{label}</span>
             </button>
           ))}
+
+          {/* ── Drafting settings popover ──── */}
+          <div className="relative" ref={draftingRef}>
+            <button
+              type="button"
+              title="Drafting & snap settings"
+              aria-label="Drafting and snap settings"
+              aria-haspopup="dialog"
+              aria-expanded={draftingOpen}
+              onClick={() => setDraftingOpen((o) => !o)}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#2563EB] ${
+                draftingOpen
+                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
+                  : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#2563EB]'
+              }`}
+            >
+              <Sliders className="w-3 h-3" />
+              <span>DRAFT</span>
+            </button>
+
+            {draftingOpen && (
+              <div
+                role="dialog"
+                aria-label="Drafting and snap settings"
+                className="absolute right-0 top-full mt-1.5 z-50 w-72 bg-white border border-[#E1E4E8] rounded-sm shadow-lg p-3 text-[11px] text-[#171A1F]"
+              >
+                <label className="flex items-center gap-1.5 pb-2 mb-2 border-b border-[#EDEFF3] font-semibold cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={snapEnabled}
+                    onChange={(e) => setSnapEnabled(e.target.checked)}
+                    className="accent-[#2563EB]"
+                  />
+                  <span>Snapping enabled</span>
+                  <span className="ml-auto text-[10px] font-normal text-[#8A929E]">F3</span>
+                </label>
+
+                <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+                  Snap to
+                </span>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                  {(
+                    [
+                      ['endpoint', 'Endpoints'],
+                      ['midpoint', 'Midpoints'],
+                      ['center', 'Centres'],
+                      ['quadrant', 'Quadrants'],
+                      ['intersection', 'Intersections'],
+                      ['perpendicular', 'Perpendicular'],
+                      ['parallel', 'Parallel'],
+                      ['onCurve', 'On edge'],
+                      ['alignment', 'Align guides'],
+                      ['grid', 'Grid snap'],
+                    ] as [SnapBoolKey, string][]
+                  ).map(([k, lbl]) => (
+                    <label
+                      key={k}
+                      className="flex items-center gap-1.5 cursor-pointer select-none"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(snapSettings[k])}
+                        onChange={(e) => setSnapSettings((s) => ({ ...s, [k]: e.target.checked }))}
+                        className="accent-[#2563EB]"
+                      />
+                      <span>{lbl}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-[#EDEFF3]">
+                  <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                    <span className="flex items-center gap-1.5">
+                      <input
+                        type="checkbox"
+                        checked={snapSettings.polar}
+                        onChange={(e) => setSnapSettings((s) => ({ ...s, polar: e.target.checked }))}
+                        className="accent-[#2563EB]"
+                      />
+                      <span>Angle tracking</span>
+                    </span>
+                    <select
+                      value={snapSettings.polarStepDeg}
+                      disabled={!snapSettings.polar}
+                      onChange={(e) =>
+                        setSnapSettings((s) => ({ ...s, polarStepDeg: Number(e.target.value) }))
+                      }
+                      className="px-1.5 py-0.5 bg-white border border-[#E1E4E8] rounded text-[11px] disabled:opacity-40"
+                    >
+                      {POLAR_STEP_CHOICES.map((d) => (
+                        <option key={d} value={d}>
+                          {d}°
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-[#EDEFF3] flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-[#8A929E] leading-tight">
+                    F3 snap · F7 grid · F8 ortho · F9 grid snap
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSnapSettings({ ...DEFAULT_SNAP_SETTINGS })}
+                    className="px-2 py-0.5 rounded border border-[#E1E4E8] text-[10px] font-semibold text-[#69717D] hover:text-[#171A1F] hover:border-[#2563EB] transition-colors shrink-0"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

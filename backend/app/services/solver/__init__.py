@@ -17,7 +17,7 @@ from typing import Any, Dict
 from app.services.wsl import distro_alive, raw_list
 from .base import SolverAdapter
 from .mock import MockAdapter
-from .openfoam import LocalOpenFoam, WslOpenFoam, wsl_distros, wsl_present
+from .openfoam import LocalOpenFoam, WslOpenFoam, auto_detected_bashrc, wsl_distros, wsl_present
 from .paths import resolve_case_dir
 
 # The private distro the Windows installer provisions (see app.services.setup).
@@ -33,7 +33,17 @@ __all__ = [
 
 
 def _foam_bashrc() -> str | None:
-    return os.environ.get("OPENCFD_FOAM_BASHRC") or None
+    """Explicit OpenFOAM env script: the OPENCFD_FOAM_BASHRC env var wins (for
+    scripting), else the `foam_bashrc` preference from the Settings dialog."""
+    explicit = os.environ.get("OPENCFD_FOAM_BASHRC")
+    if explicit:
+        return explicit or None
+    try:
+        from app.services.settings_service import get_settings
+
+        return get_settings().get("foam_bashrc") or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 _ON_WINDOWS = os.name == "nt"
@@ -80,6 +90,12 @@ def detect_environment() -> Dict[str, Any]:
         env["active"] = "openfoam-wsl"
     else:
         env["active"] = "mock"
+
+    # What environment script is actually in use, and what auto-detection would
+    # pick with no override - surfaced read-only in the Settings dialog.
+    env["foam_bashrc"] = _foam_bashrc()
+    if not _ON_WINDOWS:
+        env["foam_bashrc_auto"] = auto_detected_bashrc()
     return env
 
 
