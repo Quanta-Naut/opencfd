@@ -26,7 +26,7 @@ from app.services.cad2d_service import (
     compute_2d_fillet,
     generate_mesh_from_cad_loop
 )
-from app.services import project_service, run_service, settings_service
+from app.services import project_service, run_service, settings_service, mesh_codec
 
 app = FastAPI(title="OpenCFD Backend API", version="1.0.0")
 
@@ -138,31 +138,40 @@ def _json_default(o: Any) -> Any:
     raise TypeError(f"{type(o).__name__} is not JSON serialisable")
 
 
-def _mesh_response(mesh: Any) -> Response:
-    """Serialise a mesh payload directly with json.dumps. FastAPI's default
-    path walks every node and element through jsonable_encoder first, which
-    takes seconds on a few-hundred-thousand-cell mesh."""
+def _wants_binary_mesh(request: Request) -> bool:
+    return mesh_codec.MEDIA_TYPE in request.headers.get("accept", "")
+
+
+def _mesh_response(mesh: Any, binary: bool = False) -> Response:
+    """Serialise a mesh payload: the binary container when the client asks
+    for it (Accept: application/x-opencfd-mesh), otherwise JSON written
+    directly with json.dumps. FastAPI's default path walks every node and
+    element through jsonable_encoder first, which takes seconds on a
+    few-hundred-thousand-cell mesh."""
+    if binary:
+        return Response(content=mesh_codec.encode_mesh(mesh), media_type=mesh_codec.MEDIA_TYPE)
     body = json.dumps({"success": True, "data": mesh}, separators=(",", ":"), default=_json_default)
     return Response(content=body, media_type="application/json")
 
 
-async def _run_mesher(fn, *args, **kwargs) -> Response:
+async def _run_mesher(request: Request, fn, *args, **kwargs) -> Response:
     # Off the event loop, so autosave, progress and the solver socket keep
     # working while Gmsh runs (it used to freeze the whole backend).
-    return await asyncio.to_thread(lambda: _mesh_response(fn(*args, **kwargs)))
+    binary = _wants_binary_mesh(request)
+    return await asyncio.to_thread(lambda: _mesh_response(fn(*args, **kwargs), binary))
 
 
 @app.post("/api/geometry/mesh")
-async def mesh_endpoint(req: MeshRequest):
+async def mesh_endpoint(req: MeshRequest, request: Request):
     try:
-        return await _run_mesher(generate_mesh_data, req.geometry_type, req.params)
+        return await _run_mesher(request, generate_mesh_data, req.geometry_type, req.params)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/geometry/mesh-structured")
-async def structured_mesh_endpoint(req: MeshRequest):
+async def structured_mesh_endpoint(req: MeshRequest, request: Request):
     try:
-        return await _run_mesher(generate_structured_mesh, req.params)
+        return await _run_mesher(request, generate_structured_mesh, req.params)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -236,10 +245,11 @@ async def fillet_endpoint(req: FilletRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/cad/mesh-from-sketch")
-async def mesh_from_sketch_endpoint(req: MeshFromSketchRequest):
+async def mesh_from_sketch_endpoint(req: MeshFromSketchRequest, request: Request):
     try:
         pts = [(p[0], p[1]) for p in req.sketch_points]
         return await _run_mesher(
+            request,
             generate_mesh_from_cad_loop,
             cad_loop=pts,
             domain_length=req.domain_length,
@@ -523,6 +533,19 @@ async def save_project_blob_endpoint(pid: str, key: str, request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/projects/{pid}/blobs/{key}")
+async def get_project_blob_endpoint(pid: str, key: str):
+    try:
+        raw = await asyncio.to_thread(project_service.get_blob_bytes, pid, key)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if raw is None:
+        raise HTTPException(status_code=404, detail=f"Project '{pid}' has no {key}")
+    media = mesh_codec.MEDIA_TYPE if key in project_service.BINARY_BLOBS else "application/json"
+    return Response(content=raw, media_type=media)
+
 @app.put("/api/projects/{pid}/session")
 async def save_project_session_endpoint(pid: str, req: SessionSave):
     try:
@@ -686,6 +709,11 @@ async def websocket_solver_stream(websocket: WebSocket):
             run_id = str(uuid.uuid4())
             config["run_id"] = run_id
         config["project_id"] = project_id
+        # The client normally sends no mesh: the run uses the project's saved
+        # mesh, so a 200k-cell grid is not serialised into the socket message
+        # (that froze the UI on Run). An inline mesh is still accepted.
+        if not config.get("mesh") and config.get("mesh_source") == "project":
+            config["mesh"] = await asyncio.to_thread(project_service.load_mesh, project_id)
 
         mode = config.get("mode", "auto")
         adapter = select_adapter(mode, config)

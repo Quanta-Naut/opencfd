@@ -4,7 +4,8 @@ On-disk project store for OpenCFD Studio.
 Every project is a folder under ~/.OpenCFD/projects/<slug>/ containing:
   project.json   metadata + a small summary used by the home screen
   session.json   the StudioSession sent by the frontend, minus the heavy blobs
-  mesh.json      the generated mesh (session key `meshData`)
+  mesh.bin       the generated mesh (session key `meshData`), in the binary
+                 format of services/mesh_codec.py
   field.json     the loaded result field (session key `fieldData`)
   (mesh/ and case/ subdirs are reserved for future Gmsh / OpenFOAM output)
 
@@ -14,9 +15,11 @@ display name inside project.json.
 The mesh and field are kept out of session.json because they can be tens of
 megabytes: the session is autosaved after nearly every edit, and re-sending
 and re-writing the mesh each time froze the UI. The frontend writes them
-through `save_blob` only when they change, and `get_project` merges them back
-so the client still receives one session object. Projects saved before the
-split carry them inline and are migrated on first open.
+through `save_blob` only when they change. `get_project` merges field.json
+back into the session; the mesh is listed in `binaryBlobs` instead and the
+client fetches it separately with `get_blob_bytes`, which skips ~17 MB of
+JSON on every project open. Older projects (inline blobs, or a mesh.json) are
+migrated on first open.
 """
 
 import json
@@ -26,6 +29,8 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from . import mesh_codec
 
 SCHEMA_VERSION = 1
 PROJECTS_ROOT = Path.home() / ".OpenCFD" / "projects"
@@ -76,19 +81,33 @@ def _write_json(path: Path, data: Any) -> None:
 
 
 # Session keys stored in their own file, written only when they change.
-BLOB_FILES = {"meshData": "mesh.json", "fieldData": "field.json"}
+BLOB_FILES = {"meshData": "mesh.bin", "fieldData": "field.json"}
+# Blobs stored in a binary format, fetched separately rather than inlined.
+BINARY_BLOBS = {"meshData"}
+LEGACY_MESH_JSON = "mesh.json"
 
 
 def _write_blob_bytes(pdir: Path, key: str, raw: bytes) -> None:
     """Write a blob atomically (temp file + rename) so a crash mid-write never
-    leaves a truncated mesh behind. `null` removes it."""
+    leaves a truncated mesh behind. `null` removes it. A JSON mesh (older
+    client, or an inline session blob) is converted to the binary format."""
     path = pdir / BLOB_FILES[key]
+    if key == "meshData":
+        (pdir / LEGACY_MESH_JSON).unlink(missing_ok=True)
     if raw.strip() in (b"", b"null"):
         path.unlink(missing_ok=True)
         return
+    if key in BINARY_BLOBS and not mesh_codec.is_binary_mesh(raw):
+        raw = mesh_codec.encode_mesh(json.loads(raw))
     tmp = path.with_suffix(".tmp")
     tmp.write_bytes(raw)
     tmp.replace(path)
+
+
+def _migrate_legacy_mesh(pdir: Path) -> None:
+    legacy = pdir / LEGACY_MESH_JSON
+    if legacy.is_file() and not (pdir / BLOB_FILES["meshData"]).is_file():
+        _write_blob_bytes(pdir, "meshData", legacy.read_bytes())
 
 
 def _split_blobs(pdir: Path, session: Dict[str, Any]) -> bool:
@@ -251,11 +270,36 @@ def get_project(pid: str) -> Dict[str, Any]:
     session = _read_json(_session_path(pdir), {})
     if _split_blobs(pdir, session):
         _write_json(_session_path(pdir), session)  # one-time migration
+    _migrate_legacy_mesh(pdir)
+    binary: List[str] = []
     for key, fname in BLOB_FILES.items():
+        if key in BINARY_BLOBS:
+            if (pdir / fname).is_file():
+                binary.append(key)
+            continue
         blob = _read_json(pdir / fname, None)
         if blob is not None:
             session[key] = blob
-    return {"meta": meta, "session": session}
+    return {"meta": meta, "session": session, "binaryBlobs": binary}
+
+
+def get_blob_bytes(pid: str, key: str) -> Optional[bytes]:
+    """Raw bytes of one stored blob (binary for BINARY_BLOBS), or None."""
+    if key not in BLOB_FILES:
+        raise ValueError(f"Unknown blob '{key}'")
+    pdir = _project_dir(pid)
+    if not pdir.is_dir():
+        raise FileNotFoundError(f"Project '{pid}' not found")
+    if key == "meshData":
+        _migrate_legacy_mesh(pdir)
+    path = pdir / BLOB_FILES[key]
+    return path.read_bytes() if path.is_file() else None
+
+
+def load_mesh(pid: str) -> Optional[Dict[str, Any]]:
+    """The project's stored mesh as a plain dict, or None."""
+    raw = get_blob_bytes(pid, "meshData")
+    return mesh_codec.decode_mesh(raw) if raw else None
 
 
 def save_session(pid: str, session: Dict[str, Any]) -> Dict[str, Any]:
@@ -280,16 +324,20 @@ def save_session(pid: str, session: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def save_blob(pid: str, key: str, raw: bytes) -> None:
-    """Store one heavy session value (see BLOB_FILES) from its raw JSON body.
-    The bytes are written as-is, not parsed and re-serialised."""
+    """Store one heavy session value (see BLOB_FILES) from its raw body: JSON,
+    or for the mesh the binary format of mesh_codec. Binary and JSON field
+    bodies are written as-is, not parsed and re-serialised."""
     if key not in BLOB_FILES:
         raise ValueError(f"Unknown blob '{key}'")
     pdir = _project_dir(pid)
     if not pdir.is_dir():
         raise FileNotFoundError(f"Project '{pid}' not found")
-    head = raw.lstrip()[:1]
-    if head not in (b"{", b"[", b"n", b""):
-        raise ValueError("Blob body must be a JSON object, array or null")
+    if key in BINARY_BLOBS and mesh_codec.is_binary_mesh(raw):
+        mesh_codec.decode_header(raw)  # reject a truncated or corrupt body
+    else:
+        head = raw.lstrip()[:1]
+        if head not in (b"{", b"[", b"n", b""):
+            raise ValueError("Blob body must be a JSON object, array or null")
     _write_blob_bytes(pdir, key, raw)
 
 
@@ -330,6 +378,10 @@ def duplicate_project(pid: str) -> Dict[str, Any]:
     meta = _read_json(_meta_path(pdir), None)
     if not meta:
         raise FileNotFoundError(f"Project '{pid}' is missing metadata")
-    session = get_project(pid)["session"]  # includes the mesh / field blobs
+    session = get_project(pid)["session"]  # includes the field blob
     new_meta = create_project(f"{meta.get('name', pid)} copy")
-    return save_session(new_meta["id"], session)
+    saved = save_session(new_meta["id"], session)
+    mesh = get_blob_bytes(pid, "meshData")
+    if mesh:
+        _write_blob_bytes(_project_dir(new_meta["id"]), "meshData", mesh)
+    return saved

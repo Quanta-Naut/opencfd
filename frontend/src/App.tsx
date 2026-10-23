@@ -1432,6 +1432,7 @@ export function App({
     setHistoricalFieldData,
     setHistoricalFieldStatus,
     loadResults,
+    flushBlobs,
   });
 
   // ── Command palette registry ──────────────────────────────────────────────

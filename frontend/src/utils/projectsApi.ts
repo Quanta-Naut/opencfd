@@ -1,4 +1,5 @@
 import { API_BASE } from './backend';
+import { decodeMesh, encodeMesh, MESH_MEDIA_TYPE } from './meshCodec';
 
 export type PreviewShape =
   | { kind: 'circle'; c: [number, number]; r: number }
@@ -57,7 +58,26 @@ export async function createProject(name: string): Promise<ProjectMeta> {
 
 export async function getProject(id: string): Promise<{ meta: ProjectMeta; session: any }> {
   const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(id)}`);
-  return json<{ meta: ProjectMeta; session: any }>(res, 'Open project');
+  const project = await json<{ meta: ProjectMeta; session: any; binaryBlobs?: ProjectBlobKey[] }>(
+    res,
+    'Open project',
+  );
+  // The mesh is stored in the binary container and fetched on its own rather
+  // than inlined in the session JSON (see project_service).
+  for (const key of project.binaryBlobs ?? []) {
+    project.session[key] = await getProjectBlob(id, key);
+  }
+  return { meta: project.meta, session: project.session };
+}
+
+async function getProjectBlob(id: string, key: ProjectBlobKey): Promise<unknown> {
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(id)}/blobs/${key}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Load ${key} failed (${res.status})`);
+  if ((res.headers.get('content-type') ?? '').includes(MESH_MEDIA_TYPE)) {
+    return decodeMesh(await res.arrayBuffer());
+  }
+  return res.json();
 }
 
 export async function saveProjectSession(id: string, session: any): Promise<ProjectMeta> {
@@ -72,16 +92,19 @@ export async function saveProjectSession(id: string, session: any): Promise<Proj
 /** Session keys stored server-side in their own file (see project_service). */
 export type ProjectBlobKey = 'meshData' | 'fieldData';
 
-/** Write one heavy session value. Sent as a raw JSON body, stored verbatim. */
-export async function saveProjectBlob(id: string, key: ProjectBlobKey, value: unknown): Promise<void> {
-  const res = await fetch(
-    `${API_BASE}/api/projects/${encodeURIComponent(id)}/blobs/${key}`,
-    {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(value ?? null),
-    },
-  );
+/** Write one heavy session value: the mesh in the binary container, the
+ * field as a raw JSON body. Stored verbatim either way. */
+export async function saveProjectBlob(
+  id: string,
+  key: ProjectBlobKey,
+  value: unknown,
+): Promise<void> {
+  const binary = key === 'meshData' && value != null;
+  const res = await fetch(`${API_BASE}/api/projects/${encodeURIComponent(id)}/blobs/${key}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': binary ? MESH_MEDIA_TYPE : 'application/json' },
+    body: binary ? encodeMesh(value) : JSON.stringify(value ?? null),
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail || `Save ${key} failed (${res.status})`);

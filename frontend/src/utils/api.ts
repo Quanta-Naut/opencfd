@@ -1,6 +1,19 @@
 import { arrayRange } from './numeric';
-import { YPlusCalculation, GeometryConfig, PhysicsConfig, BoundaryConditions, SolverControls } from '../types/cfd';
+import {
+  YPlusCalculation,
+  GeometryConfig,
+  PhysicsConfig,
+  BoundaryConditions,
+  SolverControls,
+} from '../types/cfd';
 import { API_BASE, WS_BASE } from './backend';
+import { MESH_MEDIA_TYPE, readMeshResponse } from './meshCodec';
+
+/** Mesh endpoints answer in the binary container when asked (see meshCodec). */
+const MESH_REQUEST_HEADERS = {
+  'Content-Type': 'application/json',
+  Accept: `${MESH_MEDIA_TYPE}, application/json`,
+};
 
 export { WS_BASE };
 
@@ -52,7 +65,8 @@ export function computeFallbackYPlus(params: {
   expansion_ratio: number;
   flow_regime: string;
 }): YPlusCalculation {
-  const { velocity, length, density, viscosity, target_yplus, expansion_ratio, flow_regime } = params;
+  const { velocity, length, density, viscosity, target_yplus, expansion_ratio, flow_regime } =
+    params;
   const nu = viscosity / density;
   const reynolds = (density * velocity * length) / viscosity;
 
@@ -75,7 +89,9 @@ export function computeFallbackYPlus(params: {
   let num_layers = 15;
   if (first_layer_height < delta) {
     try {
-      num_layers = Math.ceil(Math.log(1.0 + (delta * (r - 1.0)) / first_layer_height) / Math.log(r));
+      num_layers = Math.ceil(
+        Math.log(1.0 + (delta * (r - 1.0)) / first_layer_height) / Math.log(r),
+      );
       num_layers = Math.max(1, Math.min(num_layers, 100));
     } catch {
       num_layers = 15;
@@ -103,7 +119,11 @@ export function computeFallbackYPlus(params: {
   };
 }
 
-export function computeFallbackInflow(velocity: number, length_scale: number, intensity_percent: number) {
+export function computeFallbackInflow(
+  velocity: number,
+  length_scale: number,
+  intensity_percent: number,
+) {
   const intensity = intensity_percent / 100.0;
   const l_t = 0.07 * length_scale;
   const k = 1.5 * Math.pow(velocity * intensity, 2);
@@ -169,7 +189,15 @@ export function generateFallbackMesh(geometryType: string, params: any) {
   for (let i = 0; i <= numAirfoilPts; i++) {
     const beta = (i / numAirfoilPts) * 2 * Math.PI;
     const xNorm = 0.5 * (1 - Math.cos(beta));
-    const yt = 5 * 0.12 * chord * (0.2969 * Math.sqrt(xNorm) - 0.126 * xNorm - 0.3516 * xNorm * xNorm + 0.2843 * Math.pow(xNorm, 3) - 0.1015 * Math.pow(xNorm, 4));
+    const yt =
+      5 *
+      0.12 *
+      chord *
+      (0.2969 * Math.sqrt(xNorm) -
+        0.126 * xNorm -
+        0.3516 * xNorm * xNorm +
+        0.2843 * Math.pow(xNorm, 3) -
+        0.1015 * Math.pow(xNorm, 4));
     const sign = beta <= Math.PI ? 1 : -1;
     const rawX = xNorm * chord - 0.25 * chord;
     const rawY = sign * yt;
@@ -227,7 +255,6 @@ export function generateFallbackFields(meshData: any, velocity: number = 25.0) {
     streamlines.push(pts);
   }
 
-
   return {
     fields: {
       U_mag: uMag,
@@ -282,7 +309,7 @@ export async function generateMesh(geometryType: string, params: any) {
   try {
     const res = await fetch(`${API_BASE}/api/geometry/mesh`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: MESH_REQUEST_HEADERS,
       body: JSON.stringify({ geometry_type: geometryType, params }),
       signal: controller.signal,
     });
@@ -290,11 +317,12 @@ export async function generateMesh(geometryType: string, params: any) {
       const errorBody = await res.json().catch(() => null);
       throw new Error(errorBody?.detail || `Mesh generation failed (${res.status})`);
     }
-    const data = await res.json();
-    return data.data;
+    return await readMeshResponse(res);
   } catch (error: any) {
     if (error?.name === 'AbortError') {
-      throw new Error('Meshing timed out (>2 min). Use a coarser Resolution, a larger Local wall / Max size, or fewer prism layers.');
+      throw new Error(
+        'Meshing timed out (>2 min). Use a coarser Resolution, a larger Local wall / Max size, or fewer prism layers.',
+      );
     }
     throw error instanceof Error ? error : new Error('Mesh generation service is unavailable');
   } finally {
@@ -308,7 +336,7 @@ export async function generateStructuredMesh(blocking: any, opts?: { smooth?: bo
   try {
     const res = await fetch(`${API_BASE}/api/geometry/mesh-structured`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: MESH_REQUEST_HEADERS,
       body: JSON.stringify({
         geometry_type: 'structured',
         params: { blocking, smooth: opts?.smooth !== false },
@@ -319,7 +347,7 @@ export async function generateStructuredMesh(blocking: any, opts?: { smooth?: bo
       const body = await res.json().catch(() => null);
       throw new Error(body?.detail || `Structured meshing failed (${res.status})`);
     }
-    return (await res.json()).data;
+    return await readMeshResponse(res);
   } catch (error: any) {
     if (error?.name === 'AbortError') throw new Error('Structured meshing timed out (>2 min).');
     throw error instanceof Error ? error : new Error('Mesh service is unavailable');
@@ -413,12 +441,11 @@ export async function requestMeshFromSketch(params: {
 }) {
   const res = await fetch(`${API_BASE}/api/cad/mesh-from-sketch`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: MESH_REQUEST_HEADERS,
     body: JSON.stringify(params),
   });
   if (!res.ok) throw new Error('Failed to mesh CAD sketch');
-  const data = await res.json();
-  return data.data;
+  return readMeshResponse(res);
 }
 
 export async function solverEnvironment(): Promise<any> {
@@ -427,7 +454,11 @@ export async function solverEnvironment(): Promise<any> {
     if (!res.ok) throw new Error('API failed');
     return (await res.json()).data;
   } catch {
-    return { platform: 'unknown', adapters: { mock: { ok: true, detail: 'Built-in mock solver.' } }, active: 'mock' };
+    return {
+      platform: 'unknown',
+      adapters: { mock: { ok: true, detail: 'Built-in mock solver.' } },
+      active: 'mock',
+    };
   }
 }
 
@@ -495,7 +526,12 @@ export async function generateCaseFiles(
   }
 }
 
-export async function fetchFieldSolution(meshData: any, geometryType: string, velocity: number, regime: string) {
+export async function fetchFieldSolution(
+  meshData: any,
+  geometryType: string,
+  velocity: number,
+  regime: string,
+) {
   try {
     const res = await fetch(`${API_BASE}/api/postprocess/fields`, {
       method: 'POST',
@@ -526,7 +562,9 @@ export async function checkParaviewStatus(): Promise<{ available: boolean; path?
   }
 }
 
-export async function launchParaview(projectId?: string): Promise<{ success: boolean; detail?: string }> {
+export async function launchParaview(
+  projectId?: string,
+): Promise<{ success: boolean; detail?: string }> {
   try {
     const res = await fetch(`${API_BASE}/api/solver/paraview/launch`, {
       method: 'POST',
@@ -569,7 +607,8 @@ export async function fetchRunField(
     );
     const j = await res.json().catch(() => ({}));
     if (!res.ok) return { data: null, detail: j.detail || `HTTP ${res.status}` };
-    if (j.success === false) return { data: null, detail: j.detail || 'no stored field for this run' };
+    if (j.success === false)
+      return { data: null, detail: j.detail || 'no stored field for this run' };
     const payload = j.data ?? (j.fields ? j : null);
     return payload ? { data: payload } : { data: null, detail: j.detail || 'no field data' };
   } catch (e: any) {
@@ -595,7 +634,7 @@ export async function fetchRunStream(
     const j = await res.json().catch(() => null);
     if (!res.ok) return { data: null, detail: j?.detail || `HTTP ${res.status}` };
     if (j && j.success === false) return { data: null, detail: j.detail || 'stream not found' };
-    const items = Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : null);
+    const items = Array.isArray(j) ? j : Array.isArray(j?.data) ? j.data : null;
     return items ? { data: items } : { data: null, detail: j?.detail || 'no stream data' };
   } catch (e: any) {
     if (e?.name === 'AbortError') return { data: null, detail: '__aborted__' };
@@ -673,7 +712,8 @@ export async function fetchSettings(): Promise<{ data: AppSettings | null; detai
   try {
     const res = await fetch(`${API_BASE}/api/settings`);
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || j.success === false) return { data: null, detail: j.detail || `HTTP ${res.status}` };
+    if (!res.ok || j.success === false)
+      return { data: null, detail: j.detail || `HTTP ${res.status}` };
     return { data: j.data ?? null };
   } catch (e: any) {
     return { data: null, detail: e?.message || 'request failed' };
@@ -690,11 +730,10 @@ export async function updateSettings(
       body: JSON.stringify(patch),
     });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || j.success === false) return { data: null, detail: j.detail || `HTTP ${res.status}` };
+    if (!res.ok || j.success === false)
+      return { data: null, detail: j.detail || `HTTP ${res.status}` };
     return { data: j.data ?? null };
   } catch (e: any) {
     return { data: null, detail: e?.message || 'request failed' };
   }
 }
-
-

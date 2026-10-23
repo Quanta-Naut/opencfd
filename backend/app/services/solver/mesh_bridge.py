@@ -18,6 +18,8 @@ import math
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
+import numpy as np
+
 # MSH element type ids
 _TRI, _QUAD, _TET, _HEX, _PRISM, _PYRAMID = 2, 3, 4, 5, 6, 7
 _FRONT_BACK = "frontAndBack"
@@ -65,6 +67,31 @@ def _name_edges(
     return out
 
 
+def _orient_ccw(nodes: Sequence[Sequence[float]],
+                elements: List[Sequence[int]]) -> List[Sequence[int]]:
+    """Return `elements` with every clockwise cell reversed to counter-clockwise.
+
+    Both extruders assume CCW 2D cells (that is what makes the extruded hex /
+    prism, and the wedge's pyramid / tet, come out with positive volume).
+    Structured meshes can contain whole blocks wound clockwise; gmshToFoam
+    then flips each inverted hex and prints a four-line warning per cell -
+    80,000 warnings on a 227k-cell airfoil grid, which flooded the solver
+    console - and it cannot repair a pyramid or tet at all."""
+
+    xy = np.asarray([(p[0], p[1]) for p in nodes], dtype=float)
+    out = list(elements)
+    for size in (3, 4):
+        idx = [i for i, el in enumerate(elements) if len(el) == size]
+        if not idx:
+            continue
+        conn = np.asarray([elements[i] for i in idx], dtype=np.int64)
+        x, y = xy[conn, 0], xy[conn, 1]
+        area2 = np.sum(x * np.roll(y, -1, axis=1) - np.roll(x, -1, axis=1) * y, axis=1)
+        for k in np.flatnonzero(area2 < 0):
+            out[idx[k]] = list(reversed(elements[idx[k]]))
+    return out
+
+
 def write_foam_msh(
     mesh: Dict,
     path: str | Path,
@@ -85,6 +112,7 @@ def write_foam_msh(
     boundaries: Dict[str, Sequence[int]] = mesh.get("boundaries") or {}
     if not nodes or not elements:
         raise ValueError("mesh has no nodes/elements to extrude")
+    elements = _orient_ccw(nodes, elements)
 
     if axisymmetric:
         return _write_wedge_msh(nodes, elements, boundaries, path, wedge_angle_deg)
