@@ -1,63 +1,23 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { AppBar } from './components/layout/AppBar';
 import type { StageId } from './components/layout/stages';
 import { LeftStagePanel } from './components/layout/LeftStagePanel';
 import { CadWorkbench2D } from './components/cad/CadWorkbench2D';
-import { TransientPlaybackControls } from './components/viewport/TransientPlaybackControls';
-import { RightContextInspector } from './components/layout/RightContextInspector';
 import { BottomSolverDrawer } from './components/layout/BottomSolverDrawer';
 import { SolverMonitorRail } from './components/solver/SolverMonitorRail';
-import { RunHistoryRail } from './components/results/RunHistoryRail';
 import { ResultsRightRail } from './components/results/ResultsRightRail';
 import { CreatePlotModal } from './components/results/CreatePlotModal';
 import { PlotViewDialog } from './components/results/PlotViewDialog';
-import {
-  Crosshair,
-  PenTool,
-  SlidersHorizontal,
-  Grid3x3,
-  Play,
-  Square,
-  BarChart3,
-  Plus,
-  RefreshCw,
-  FileCode,
-  Settings,
-  LayoutGrid,
-  Layers,
-  Wand2,
-  Ruler,
-  FileDown,
-  SunMoon,
-  PanelLeft,
-  Monitor,
-} from 'lucide-react';
-import { setThemePreference, toggleTheme } from './utils/theme';
+import { Crosshair } from 'lucide-react';
 import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
-import { wallResolution } from './caseSetup/flowCalc';
 import { defaultPatchBC } from './caseSetup/bcCatalog';
 import { directionsForAoA } from './solver/solverConfig';
+import { CFDProjectState, SolverRunRecord, PlotDefinition } from './types/cfd';
 import {
-  CFDProjectState,
-  GeometryConfig,
-  PhysicsConfig,
-  BoundaryConditions,
-  YPlusCalculation,
-  SolverControls,
-  PostProcessConfig,
-  SolverRunRecord,
-  PlotDefinition,
-} from './types/cfd';
-import {
-  fetchYPlus,
-  fetchTurbulenceInflow,
-  generateMesh,
-  generateStructuredMesh,
   generateCaseFiles,
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
-  fetchRunStream,
   deleteSolverRun,
 } from './utils/api';
 import { saveProjectSession, saveProjectBlob, renameProject } from './utils/projectsApi';
@@ -69,7 +29,6 @@ import { toast } from './components/ui/Toast';
 import { CommandPalette, Command } from './components/ui/CommandPalette';
 import { ShortcutsDialog } from './components/ui/ShortcutsDialog';
 import { useGlobalHotkeys } from './hooks/useGlobalHotkeys';
-import { MOD_LABEL } from './utils/platform';
 import {
   CadWorkflowStep,
   FlowType,
@@ -89,17 +48,22 @@ import {
   autoBlockingFromOutline,
   initializeBlocking,
   propagateNodeCounts,
-  toStructuredRequest,
   wrapBodyOgrid,
   bodiesForOgrid,
   entityRing,
-  cGridFromAirfoil,
-  wrapAirfoilOgrid,
   airfoilsForCGrid,
-  outlineRing,
   applyTargetCellSize,
   autoCellSize,
 } from './types/blocking';
+import { restoreRememberedTags } from './app/boundaryTagMemory';
+import { computePatchRoles } from './app/boundaryTagMemory';
+import { scheduleAutosave } from './app/autosave';
+import { updateCaseCalculations } from './app/caseCalculations';
+import { syncFirstCellToMesh } from './app/caseCalculations';
+import { runGenerateMesh } from './app/meshingActions';
+import { runBuildBlocks } from './app/meshingActions';
+import { runGenerateStructuredMesh } from './app/meshingActions';
+import { buildCommands } from './app/commands';
 
 export interface StudioSession {
   state: CFDProjectState;
@@ -295,39 +259,10 @@ export function App({
   // entity id) close to where a tag used to be, it gets that tag back - even if
   // you deleted it and redrew it several edits later.
   const tagMemoryRef = useRef<Map<string, { mx: number; my: number; tag: BoundaryTag }>>(new Map());
-  useEffect(() => {
-    const edges = extractBoundaryEdges(cadEntities, flowType, edgeTagMap);
-    const bbox = getGeometryBBox(cadEntities);
-    const tol = Math.max(bbox.chord, bbox.height, 1) * 0.04;
-
-    // Record where each currently-explicit tag lives.
-    for (const e of edges) {
-      if (e.explicit) {
-        tagMemoryRef.current.set(e.key, { mx: e.midpoint.x, my: e.midpoint.y, tag: e.tag });
-      }
-    }
-
-    // Re-associate untagged edges to a remembered tag position.
-    const remap: Record<string, BoundaryTag> = {};
-    for (const e of edges) {
-      if (e.explicit) continue;
-      let best: { d: number; tag: BoundaryTag } | null = null;
-      for (const p of tagMemoryRef.current.values()) {
-        const d = Math.hypot(p.mx - e.midpoint.x, p.my - e.midpoint.y);
-        if (d < tol && (!best || d < best.d)) best = { d, tag: p.tag };
-      }
-      if (best) remap[e.key] = best.tag;
-    }
-
-    if (Object.keys(remap).length) {
-      setEdgeTagMap((prev) => ({ ...prev, ...remap }));
-      for (const [k, tag] of Object.entries(remap)) {
-        const e = edges.find((x) => x.key === k)!;
-        tagMemoryRef.current.set(k, { mx: e.midpoint.x, my: e.midpoint.y, tag });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cadEntities]);
+  useEffect(
+    () => restoreRememberedTags({ cadEntities, flowType, edgeTagMap, tagMemoryRef, setEdgeTagMap }),
+    [cadEntities],
+  );
 
   // Flow-type change never destroys anything the user drew. The canvas handles
   // the domain: an auto far-field box is regenerable so it is dropped on
@@ -413,55 +348,16 @@ export function App({
   // domain edge the user left untagged (inlet / outlet / symmetry), so a patch
   // can appear here with no explicit tag - infer its role from the name so it
   // still gets a real BC and the solver never hits a missing-patchField error.
-  const patchRoles = useMemo(() => {
-    const order: BoundaryTag[] = [
-      'inlet',
-      'outlet',
-      'wall',
-      'farfield',
-      'symmetry',
-      'periodic',
-      'axis',
-    ];
-    const roleFromName = (n: string): BoundaryTag => {
-      const k = n.toLowerCase();
-      return (order.find((t) => k === t || k.startsWith(t)) as BoundaryTag) || 'wall';
-    };
-    // Supersonic external flow: a `symmetry` plane mirrors the shock straight
-    // back into the domain, so treat any lateral symmetry patch as a
-    // non-reflecting far-field instead (unless the flow is genuinely a half-model
-    // on the centreline, which the box domains never are).
-    const ss =
-      state.physics.compressibility === 'compressible' &&
-      (state.physics.speedRegime === 'supersonic' || state.physics.speedRegime === 'hypersonic') &&
-      flowType === 'external';
-    const fix = (r: BoundaryTag): BoundaryTag => (ss && r === 'symmetry' ? 'farfield' : r);
-
-    const meshNames = Object.keys(meshData?.boundaries || {}).filter(
-      (n) => n !== 'frontAndBack' && n !== 'defaultFaces',
-    );
-    if (meshNames.length) {
-      const explicit = new Map<string, BoundaryTag>();
-      for (const e of boundaryEdges) if (e.explicit) explicit.set(e.tag, e.tag);
-      return meshNames
-        .map((name) => ({
-          name,
-          role: fix(explicit.get(name as BoundaryTag) || roleFromName(name)) as any,
-        }))
-        .sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
-    }
-    const seen = new Map<BoundaryTag, BoundaryTag>();
-    for (const e of boundaryEdges) if (e.explicit) seen.set(e.tag, e.tag);
-    return [...seen.keys()]
-      .sort((a, b) => order.indexOf(a) - order.indexOf(b))
-      .map((t) => ({ name: t, role: fix(t) as any }));
-  }, [
-    boundaryEdges,
-    meshData?.boundaries,
-    state.physics.compressibility,
-    state.physics.speedRegime,
-    flowType,
-  ]);
+  const patchRoles = useMemo(
+    () => computePatchRoles({ state, flowType, meshData, boundaryEdges }),
+    [
+      boundaryEdges,
+      meshData?.boundaries,
+      state.physics.compressibility,
+      state.physics.speedRegime,
+      flowType,
+    ],
+  );
 
   // Full patch BC spec (roles + per-patch overrides) sent to the case generator.
   const patchSpec = useMemo(
@@ -545,44 +441,29 @@ export function App({
   sessionRef.current = buildSession();
 
   const saveWarned = useRef(false);
-  useEffect(() => {
-    // during a solve the residual stream fires constantly - back the autosave
-    // off; the final state is saved when executionStatus leaves 'running'
-    const delay = state.executionStatus === 'running' ? 8000 : 400;
-    const timer = setTimeout(() => {
-      saveProjectSession(projectId, sessionRef.current)
-        .then(() => {
-          saveWarned.current = false;
-        })
-        .catch((err) => {
-          console.warn('Project autosave note:', err);
-          if (!saveWarned.current) {
-            saveWarned.current = true;
-            toast('Could not autosave - check the backend connection.', 'error', 6000);
-          }
-        });
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [
-    projectId,
-    state,
-    cadEntities,
-    edgeTagMap,
-    cadWorkflowStep,
-    flowType,
-    domainShape,
-    domainPreset,
-    upstreamChordFactor,
-    downstreamChordFactor,
-    lateralHeightFactor,
-    angleOfAttackDeg,
-    freestreamVelocity,
-    activeTagTool,
-    blocking,
-    meshTopology,
-    meshData,
-    caseFiles,
-  ]);
+  useEffect(
+    () => scheduleAutosave({ state, projectId, sessionRef, saveWarned }),
+    [
+      projectId,
+      state,
+      cadEntities,
+      edgeTagMap,
+      cadWorkflowStep,
+      flowType,
+      domainShape,
+      domainPreset,
+      upstreamChordFactor,
+      downstreamChordFactor,
+      lateralHeightFactor,
+      angleOfAttackDeg,
+      freestreamVelocity,
+      activeTagTool,
+      blocking,
+      meshTopology,
+      meshData,
+      caseFiles,
+    ],
+  );
 
   // The mesh and result field can be tens of MB, so they are not part of the
   // session autosave above (serialising them on every edit froze the UI).
@@ -634,55 +515,19 @@ export function App({
   };
 
   // Auto calculate Y+ on parameter changes
-  useEffect(() => {
-    const updateCalculations = async () => {
-      try {
-        const yplusRes = await fetchYPlus({
-          velocity: state.boundaries.inletVelocity,
-          length: state.geometry.chord || state.geometry.domainLength,
-          density: state.physics.density,
-          viscosity: state.physics.density * state.physics.kinematicViscosity,
-          target_yplus: state.yplus.target_yplus,
-          expansion_ratio: state.yplus.expansion_ratio,
-          flow_regime: state.physics.regime,
-        });
-        // Keep the user's latest target while an older async calculation finishes.
-        // The target is an input; the API response should only replace derived values.
-        setState((prev) => ({
-          ...prev,
-          yplus: { ...yplusRes, target_yplus: prev.yplus.target_yplus },
-        }));
-
-        const turbRes = await fetchTurbulenceInflow({
-          velocity: state.boundaries.inletVelocity,
-          length_scale: state.boundaries.turbulentLengthScaleM || 0.01,
-          intensity_percent: state.boundaries.turbulenceIntensityPercent,
-        });
-        setState((prev) => ({
-          ...prev,
-          boundaries: {
-            ...prev.boundaries,
-            inletK: turbRes.k,
-            inletOmega: turbRes.omega,
-            inletEpsilon: turbRes.epsilon,
-            inletNut: turbRes.nut,
-          },
-        }));
-      } catch (err) {
-        console.warn('Calculation update note:', err);
-      }
-    };
-    updateCalculations();
-  }, [
-    state.boundaries.inletVelocity,
-    state.geometry.chord,
-    state.physics.density,
-    state.physics.kinematicViscosity,
-    state.physics.regime,
-    state.yplus.target_yplus,
-    state.yplus.expansion_ratio,
-    state.boundaries.turbulenceIntensityPercent,
-  ]);
+  useEffect(
+    () => updateCaseCalculations({ state, setState }),
+    [
+      state.boundaries.inletVelocity,
+      state.geometry.chord,
+      state.physics.density,
+      state.physics.kinematicViscosity,
+      state.physics.regime,
+      state.yplus.target_yplus,
+      state.yplus.expansion_ratio,
+      state.boundaries.turbulenceIntensityPercent,
+    ],
+  );
 
   // ── Mesh gate ────────────────────────────────────────────────────────────
   // Requirements: geometry drawn, a valid fluid domain (defined or auto), and
@@ -749,107 +594,25 @@ export function App({
     },
   };
 
-  const handleGenerateMesh = async () => {
-    if (!meshGate.ready) {
-      setState((prev) => ({
-        ...prev,
-        terminalLogs: [
-          ...prev.terminalLogs,
-          `[Gmsh] Cannot mesh yet - ${meshGate.missing.join('; ')}.`,
-        ],
-      }));
-      return;
-    }
-    setIsMeshing(true);
-    // A failed regeneration must not leave an old or placeholder mesh visible.
-    setMeshData(null);
-    setMeshError(null);
-    clearResultsCache();
-    setState((prev) => ({
-      ...prev,
-      executionStatus: 'meshing',
-      terminalLogs: [...prev.terminalLogs, `[Gmsh] Meshing geometry ${state.geometry.name}...`],
-    }));
-
-    try {
-      const mesh = await generateMesh(state.geometry.type, {
-        chord: state.geometry.chord,
-        // Angle of attack has no meaning for a body of revolution - it would
-        // break the axisymmetry assumption itself.
-        angleOfAttackDeg: state.physics.axisymmetric ? 0 : state.geometry.angleOfAttackDeg,
-        cylinderDiameter: state.geometry.cylinderDiameter,
-        domainLength: state.geometry.domainLength,
-        domainHeight: state.geometry.domainHeight,
-        meshResolution: state.geometry.meshResolution,
-        firstLayerHeightMm: state.geometry.firstLayerHeightMm,
-        usePrismLayers: state.geometry.usePrismLayers,
-        numPrismLayers: state.geometry.numPrismLayers,
-        prismExpansionRatio: state.geometry.prismExpansionRatio,
-        meshAlgorithm: state.geometry.meshAlgorithm,
-        elementType: state.geometry.elementType,
-        growthRate: state.geometry.growthRate,
-        elementsPerCurve: state.geometry.elementsPerCurve,
-        useProximityRefinement: state.geometry.useProximityRefinement,
-        minElementSize: state.geometry.minElementSize,
-        maxElementSize: state.geometry.maxElementSize,
-        localRefinementSize: state.geometry.localRefinementSize,
-        optimizeMesh: state.geometry.optimizeMesh,
-        cadEntities,
-        edgeTagMap,
-        flowType,
-        // Supersonic: an untagged lateral boundary must become a non-reflecting
-        // far-field, not a `symmetry` plane (a symmetry plane mirrors the shock
-        // straight back into the domain).
-        speedRegime: state.physics.speedRegime,
-        compressibility: state.physics.compressibility,
-        axisymmetric: state.physics.axisymmetric,
-      });
-
-      setMeshData(mesh);
-      meshSigRef.current = geomSignature;
-      meshCoreSigRef.current = geomSigCore;
-
-      toast(`Mesh ready: ${mesh.num_nodes} nodes, ${mesh.num_elements} cells.`, 'success');
-      // Only surface warnings the user can act on. Routine internal fallbacks
-      // (boundary layer dropped, MeshAdapt fallback, prism-to-graded) are noise.
-      (mesh.warnings || [])
-        .filter((w: string) =>
-          /coarsen|too aggressive|cell sizes|closed loop|inlet|outlet/i.test(w),
-        )
-        .forEach((w: string) => toast(w, 'info', 7000));
-
-      // Mesh generation succeeded independently of optional post-processing.
-      setState((prev) => ({
-        ...prev,
-        executionStatus: 'idle',
-        terminalLogs: [
-          ...prev.terminalLogs,
-          `[Gmsh] Complete: ${mesh.num_nodes} nodes, ${mesh.num_elements} elements.`,
-        ],
-      }));
-
-      try {
-        const dicts = await makeCaseFiles();
-        setCaseFiles(dicts);
-      } catch (caseErr: any) {
-        setState((prev) => ({
-          ...prev,
-          terminalLogs: [...prev.terminalLogs, `[Case] ${caseErr.message}`],
-        }));
-      }
-    } catch (err: any) {
-      const msg = err?.message || 'Mesh generation failed.';
-      setMeshError(msg);
-      toast(msg, 'error', 8000);
-      setState((prev) => ({
-        ...prev,
-        executionStatus: 'error',
-        terminalLogs: [...prev.terminalLogs, `[Error] ${msg}`],
-      }));
-    } finally {
-      setIsMeshing(false);
-    }
-  };
+  const handleGenerateMesh = async () =>
+    runGenerateMesh({
+      meshGate,
+      setState,
+      setIsMeshing,
+      setMeshData,
+      setMeshError,
+      clearResultsCache,
+      state,
+      cadEntities,
+      edgeTagMap,
+      flowType,
+      meshSigRef,
+      geomSignature,
+      meshCoreSigRef,
+      geomSigCore,
+      makeCaseFiles,
+      setCaseFiles,
+    });
 
   // ── Structured meshing (H-block transfinite) ──────────────────────────────
   const bodyPatchFor = (entId: string): any => {
@@ -875,109 +638,15 @@ export function App({
     return body ? 'ogrid' : 'hgrid';
   }, [cadEntities]);
 
-  const handleBuildBlocks = (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') => {
-    setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
-    if (kind === 'cgrid') {
-      const af = airfoilsForCGrid(cadEntities)[0];
-      const domEnts = cadEntities.filter((e) => e.role === 'domain_boundary');
-      const domain = outlineRing(domEnts);
-      if (!af || domain.length < 3) {
-        toast('C-grid needs an elongated body (airfoil) inside a closed domain.', 'error', 7000);
-        return;
-      }
-      const ent = cadEntities[af.index];
-      const domEnt =
-        domEnts.length === 1
-          ? domEnts[0]
-          : domEnts.find(
-              (e) =>
-                e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse',
-            );
-      const raw = cGridFromAirfoil(
-        entityRing(ent),
-        domain,
-        bodyPatchFor(ent.id),
-        ent.id,
-        domEnt?.id,
-      );
-      if (!raw) {
-        toast(
-          'Could not build a C-grid. Give the airfoil more room downstream of the trailing edge.',
-          'error',
-          7000,
-        );
-        return;
-      }
-      const bk = applyTargetCellSize(raw, autoCellSize(raw));
-      setBlocking(bk);
-      toast(`Built a ${bk.blocks.length}-block C-grid around the airfoil.`, 'success');
-      return;
-    }
-    if (kind === 'cgrid_closed') {
-      const af = airfoilsForCGrid(cadEntities)[0];
-      if (!af) {
-        toast('Closed O-grid needs an elongated body (airfoil) in the domain.', 'error', 7000);
-        return;
-      }
-      const ent = cadEntities[af.index];
-      const base = autoBlockingFromOutline(cadEntities, edgeTagMap);
-      if (!base) {
-        toast('Could not auto-block this outline. Define a closed domain first.', 'error', 7000);
-        return;
-      }
-      const raw = wrapAirfoilOgrid(base, entityRing(ent), bodyPatchFor(ent.id), {
-        airfoilEntityId: ent.id,
-      });
-      if (!raw) {
-        toast(
-          'Could not wrap a closed O-grid around this airfoil - it may need more clearance from the domain edges.',
-          'error',
-          7000,
-        );
-        return;
-      }
-      const bk = applyTargetCellSize(propagateNodeCounts(raw), autoCellSize(raw));
-      setBlocking(bk);
-      toast(`Built a ${bk.blocks.length}-block closed O-grid around the airfoil.`, 'success');
-      return;
-    }
-
-    let bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
-    if (!bk) {
-      toast('Could not auto-block this outline. Define a closed domain first.', 'error', 7000);
-      return;
-    }
-    let wrapped = 0;
-    if (kind === 'ogrid') {
-      for (const b of bodiesForOgrid(cadEntities, bk)) {
-        const ent = cadEntities[b.index];
-        const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id), {
-          bodyEntityId: ent.id,
-          ...ogridParams,
-        });
-        if (next) {
-          bk = next;
-          wrapped += 1;
-        }
-      }
-    }
-    bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
-    setBlocking(bk);
-    if (kind === 'ogrid' && wrapped === 0) {
-      toast(
-        'Built blocks, but no body could be wrapped - it must sit clear of the domain edges.',
-        'info',
-        7000,
-      );
-    } else if (wrapped > 0) {
-      toast(
-        `Built ${bk.blocks.length} blocks with an O-grid around ${wrapped} bod${wrapped > 1 ? 'ies' : 'y'}.`,
-        'success',
-      );
-    } else {
-      toast(`Built ${bk.blocks.length} block${bk.blocks.length > 1 ? 's' : ''}.`, 'success');
-    }
-  };
+  const handleBuildBlocks = (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') =>
+    runBuildBlocks(kind, {
+      setBlocksBuiltTick,
+      cadEntities,
+      bodyPatchFor,
+      setBlocking,
+      edgeTagMap,
+      ogridParams,
+    });
 
   // Manual (ICEM-style) blocking: one block around all the geometry, which the
   // user then splits, deletes, associates and O-grids on the canvas.
@@ -1052,60 +721,22 @@ export function App({
     toast('Rebuilt the O-grid ring.', 'info');
   };
 
-  const handleGenerateStructuredMesh = async () => {
-    if (!blocking) {
-      toast('Build the block topology first.', 'info');
-      return;
-    }
-    setIsMeshing(true);
-    setMeshData(null);
-    setMeshError(null);
-    clearResultsCache();
-    setState((prev) => ({
-      ...prev,
-      executionStatus: 'meshing',
-      terminalLogs: [...prev.terminalLogs, '[Gmsh] Generating structured (transfinite) mesh...'],
-    }));
-    try {
-      const req = toStructuredRequest(propagateNodeCounts(blocking));
-      const mesh = await generateStructuredMesh(req, { smooth: structuredSmooth });
-      setMeshData(mesh);
-      meshSigRef.current = geomSignature;
-      meshCoreSigRef.current = geomSigCore;
-      toast(`Structured mesh: ${mesh.num_nodes} nodes, ${mesh.num_elements} quads.`, 'success');
-      (mesh.warnings || [])
-        .filter((w: string) => /coarsen|too aggressive|cell sizes|tris|non-quad/i.test(w))
-        .forEach((w: string) => toast(w, 'info', 7000));
-      setState((prev) => ({
-        ...prev,
-        executionStatus: 'idle',
-        terminalLogs: [
-          ...prev.terminalLogs,
-          `[Gmsh] Structured mesh complete: ${mesh.num_nodes} nodes, ${mesh.num_elements} quads.`,
-        ],
-      }));
-      try {
-        const dicts = await makeCaseFiles();
-        setCaseFiles(dicts);
-      } catch (caseErr: any) {
-        setState((prev) => ({
-          ...prev,
-          terminalLogs: [...prev.terminalLogs, `[Case] ${caseErr.message}`],
-        }));
-      }
-    } catch (err: any) {
-      const msg = err?.message || 'Structured meshing failed.';
-      setMeshError(msg);
-      toast(msg, 'error', 8000);
-      setState((prev) => ({
-        ...prev,
-        executionStatus: 'error',
-        terminalLogs: [...prev.terminalLogs, `[Error] ${msg}`],
-      }));
-    } finally {
-      setIsMeshing(false);
-    }
-  };
+  const handleGenerateStructuredMesh = async () =>
+    runGenerateStructuredMesh({
+      blocking,
+      setIsMeshing,
+      setMeshData,
+      setMeshError,
+      clearResultsCache,
+      setState,
+      structuredSmooth,
+      meshSigRef,
+      geomSignature,
+      meshCoreSigRef,
+      geomSigCore,
+      makeCaseFiles,
+      setCaseFiles,
+    });
 
   const handleUpdateBlocking = (bk: Blocking | null) => setBlocking(bk);
 
@@ -1148,53 +779,21 @@ export function App({
   };
 
   // Case Setup drives the mesh first-cell height when the link is on.
-  useEffect(() => {
-    const cs = state.caseSetup;
-    if (!cs.linkFirstCellToMesh) return;
-    const refLen =
-      cs.refLengthOverride && cs.refLengthOverride > 0
-        ? cs.refLengthOverride
-        : (flowType === 'internal' ? state.geometry.domainHeight : state.geometry.chord) || 1;
-    const wr = wallResolution(
-      {
-        velocity: state.physics.inletVelocity,
-        density: state.physics.density,
-        kinematicViscosity: state.physics.kinematicViscosity,
-        refLength: refLen,
-      },
-      cs.targetYPlus,
-      cs.growthRate,
-    );
-    const mm = Number(wr.firstCellHeightMm.toPrecision(4));
-    setState((prev) => {
-      if (
-        Math.abs(prev.geometry.firstLayerHeightMm - mm) < mm * 1e-3 &&
-        prev.geometry.numPrismLayers === wr.layerCount
-      )
-        return prev;
-      return {
-        ...prev,
-        geometry: {
-          ...prev.geometry,
-          firstLayerHeightMm: mm,
-          numPrismLayers: wr.layerCount,
-          prismExpansionRatio: cs.growthRate,
-          usePrismLayers: true,
-        },
-      };
-    });
-  }, [
-    state.caseSetup.linkFirstCellToMesh,
-    state.caseSetup.targetYPlus,
-    state.caseSetup.growthRate,
-    state.caseSetup.refLengthOverride,
-    state.physics.inletVelocity,
-    state.physics.density,
-    state.physics.kinematicViscosity,
-    flowType,
-    state.geometry.chord,
-    state.geometry.domainHeight,
-  ]);
+  useEffect(
+    () => syncFirstCellToMesh({ state, flowType, setState }),
+    [
+      state.caseSetup.linkFirstCellToMesh,
+      state.caseSetup.targetYPlus,
+      state.caseSetup.growthRate,
+      state.caseSetup.refLengthOverride,
+      state.physics.inletVelocity,
+      state.physics.density,
+      state.physics.kinematicViscosity,
+      flowType,
+      state.geometry.chord,
+      state.geometry.domainHeight,
+    ],
+  );
 
   const handleSetSolution = (
     patch: (
@@ -1449,214 +1048,31 @@ export function App({
     !!activeDialogPlot;
 
   const commands = useMemo<Command[]>(
-    () => [
-      // Navigate
-      {
-        id: 'go-geometry',
-        group: 'Navigate',
-        title: 'Go to Geometry',
-        icon: <PenTool className="w-4 h-4" />,
-        shortcut: ['1'],
-        run: () => setActiveStage('geometry'),
-      },
-      {
-        id: 'go-case-setup',
-        group: 'Navigate',
-        title: 'Go to Case Setup',
-        icon: <SlidersHorizontal className="w-4 h-4" />,
-        shortcut: ['2'],
-        run: () => setActiveStage('caseSetup'),
-      },
-      {
-        id: 'go-mesh',
-        group: 'Navigate',
-        title: 'Go to Mesh',
-        icon: <Grid3x3 className="w-4 h-4" />,
-        shortcut: ['3'],
-        run: () => setActiveStage('mesh'),
-      },
-      {
-        id: 'go-solver',
-        group: 'Navigate',
-        title: 'Go to Solver',
-        icon: <Play className="w-4 h-4" />,
-        shortcut: ['4'],
-        run: () => setActiveStage('solver'),
-      },
-      {
-        id: 'go-results',
-        group: 'Navigate',
-        title: 'Go to Results',
-        icon: <BarChart3 className="w-4 h-4" />,
-        shortcut: ['5'],
-        run: () => setActiveStage('results'),
-      },
-
-      // Mesh
-      {
-        id: 'mesh-generate',
-        group: 'Mesh',
-        title: 'Generate Mesh (Gmsh)',
-        keywords: 'unstructured triangulate remesh',
-        icon: <Grid3x3 className="w-4 h-4" />,
-        disabled: !meshGate.ready || isMeshing,
-        disabledReason: !meshGate.ready
-          ? meshGate.missing.join('; ')
-          : 'A mesh is already being generated',
-        run: handleGenerateMesh,
-      },
-      {
-        id: 'mesh-blocks-h',
-        group: 'Mesh',
-        title: 'Build Structured Blocks · H-grid',
-        keywords: 'blocking hexa structured',
-        icon: <Layers className="w-4 h-4" />,
-        run: () => handleBuildBlocks('hgrid'),
-      },
-      {
-        id: 'mesh-blocks-o',
-        group: 'Mesh',
-        title: 'Build Structured Blocks · O-grid',
-        keywords: 'blocking ring body',
-        icon: <Layers className="w-4 h-4" />,
-        run: () => handleBuildBlocks('ogrid'),
-      },
-      {
-        id: 'mesh-blocks-c',
-        group: 'Mesh',
-        title: 'Build Structured Blocks · C-grid',
-        keywords: 'blocking airfoil wake',
-        icon: <Layers className="w-4 h-4" />,
-        run: () => handleBuildBlocks('cgrid'),
-      },
-      {
-        id: 'mesh-structured-generate',
-        group: 'Mesh',
-        title: 'Generate Structured Mesh',
-        keywords: 'transfinite quad',
-        icon: <Wand2 className="w-4 h-4" />,
-        disabled: !blocking || isMeshing,
-        disabledReason: 'Build the block topology first',
-        run: handleGenerateStructuredMesh,
-      },
-      {
-        id: 'mesh-apply-yplus',
-        group: 'Mesh',
-        title: 'Apply y⁺ Sizing to Mesh',
-        keywords: 'first layer prism boundary layer',
-        icon: <Ruler className="w-4 h-4" />,
-        run: handleApplyYPlusToMesh,
-      },
-      {
-        id: 'mesh-blockmeshdict',
-        group: 'Mesh',
-        title: 'Download blockMeshDict',
-        keywords: 'export native openfoam',
-        icon: <FileDown className="w-4 h-4" />,
-        run: () => requestDownloadBlockMeshDictRef.current?.(),
-      },
-
-      // Solver
-      solverRunning
-        ? {
-            id: 'solver-stop',
-            group: 'Solver',
-            title: 'Stop Solver',
-            icon: <Square className="w-4 h-4" />,
-            shortcut: [MOD_LABEL, '↵'],
-            run: handleStopSolver,
-          }
-        : {
-            id: 'solver-run',
-            group: 'Solver',
-            title: 'Run Solver',
-            icon: <Play className="w-4 h-4" />,
-            shortcut: [MOD_LABEL, '↵'],
-            disabled: !meshReady || solverBusy,
-            disabledReason: !meshReady ? 'Generate a mesh first' : 'A run is already in progress',
-            run: handleRunSolver,
-          },
-      {
-        id: 'solver-reload',
-        group: 'Solver',
-        title: 'Reload Results',
-        keywords: 'refresh refetch field',
-        icon: <RefreshCw className="w-4 h-4" />,
-        run: () => {
-          clearResultsCache();
-          void loadResults(true);
-        },
-      },
-
-      // Results
-      {
-        id: 'results-new-plot',
-        group: 'Results',
-        title: 'New Plot',
-        keywords: 'chart line probe compare',
-        icon: <Plus className="w-4 h-4" />,
-        run: () => setCreatePlotModalOpen(true),
-      },
-      {
-        id: 'results-view-latest',
-        group: 'Results',
-        title: 'View Latest Run',
-        keywords: 'open field viewport',
-        icon: <BarChart3 className="w-4 h-4" />,
-        run: selectLatestFinishedRun,
-      },
-
-      // Project
-      {
-        id: 'project-case-files',
-        group: 'Project',
-        title: 'Open OpenFOAM Case Files',
-        keywords: 'dicts browse system constant',
-        icon: <FileCode className="w-4 h-4" />,
-        run: () => setCaseFilesOpen(true),
-      },
-      {
-        id: 'project-preferences',
-        group: 'Project',
-        title: 'Open Preferences',
-        keywords: 'settings options',
-        icon: <Settings className="w-4 h-4" />,
-        run: () => setPreferencesOpen(true),
-      },
-      {
-        id: 'view-toggle-left-panel',
-        group: 'View',
-        title: 'Toggle Stage Panel',
-        keywords: 'sidebar left hide show collapse focus',
-        icon: <PanelLeft className="w-4 h-4" />,
-        shortcut: [MOD_LABEL, 'B'],
-        run: () => setLeftPanelHidden((h) => !h),
-      },
-      {
-        id: 'view-theme-toggle',
-        group: 'View',
-        title: 'Toggle Light / Dark Theme',
-        keywords: 'appearance dark mode light mode colour',
-        icon: <SunMoon className="w-4 h-4" />,
-        run: toggleTheme,
-      },
-      {
-        id: 'view-theme-system',
-        group: 'View',
-        title: 'Use System Theme',
-        keywords: 'appearance auto os',
-        icon: <Monitor className="w-4 h-4" />,
-        run: () => setThemePreference('system'),
-      },
-      {
-        id: 'project-home',
-        group: 'Project',
-        title: 'Back to Projects',
-        keywords: 'close home exit',
-        icon: <LayoutGrid className="w-4 h-4" />,
-        run: handleExitHome,
-      },
-    ],
+    () =>
+      buildCommands({
+        setActiveStage,
+        meshGate,
+        isMeshing,
+        handleGenerateMesh,
+        blocking,
+        handleBuildBlocks,
+        handleGenerateStructuredMesh,
+        handleApplyYPlusToMesh,
+        requestDownloadBlockMeshDictRef,
+        solverRunning,
+        handleStopSolver,
+        meshReady,
+        solverBusy,
+        handleRunSolver,
+        clearResultsCache,
+        loadResults,
+        setCreatePlotModalOpen,
+        selectLatestFinishedRun,
+        setCaseFilesOpen,
+        setPreferencesOpen,
+        setLeftPanelHidden,
+        handleExitHome,
+      }),
     [
       meshGate,
       isMeshing,
