@@ -35,6 +35,9 @@ export interface SnapSettings {
   grid: boolean;
 }
 
+/** Boolean snap modes - everything in SnapSettings except the polar step. */
+export type SnapBoolKey = Exclude<keyof SnapSettings, 'polarStepDeg'>;
+
 export const DEFAULT_SNAP_SETTINGS: SnapSettings = {
   endpoint: true,
   midpoint: true,

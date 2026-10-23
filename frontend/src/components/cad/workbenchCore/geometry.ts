@@ -137,3 +137,18 @@ export function normalizeAngle(a: number): number {
   if (res < -Math.PI) res += 2 * Math.PI;
   return res;
 }
+
+/** Bounding box of mesh nodes ([x, y, ...] rows). */
+export function nodesBBox(nodes: number[][]) {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    if (n[0] < minX) minX = n[0];
+    if (n[0] > maxX) maxX = n[0];
+    if (n[1] < minY) minY = n[1];
+    if (n[1] > maxY) maxY = n[1];
+  }
+  return { minX, maxX, minY, maxY };
+}

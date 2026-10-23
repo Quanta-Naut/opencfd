@@ -10,3 +10,20 @@ export const PROXIMITY_PX = 64;
 /** How close (degrees) to a polar step before angle tracking engages. */
 export const POLAR_TOL_DEG = 4;
 export const INITIAL_ZOOM = 130;
+
+/** Shared empty edge list, so "no mesh" keeps one stable identity. */
+export const EMPTY_EDGES = new Uint32Array(0);
+
+// Fill colors cycled by block index for the Mesh-view direction-coloring
+// overlay (one color per block, so the block layout reads at a glance on the
+// real generated mesh, not just the block diagram).
+export const BLOCK_FILL_CYCLE = [
+  '#2563EB',
+  '#DC2626',
+  '#059669',
+  '#D97706',
+  '#7C3AED',
+  '#DB2777',
+  '#0891B2',
+  '#65A30D',
+];

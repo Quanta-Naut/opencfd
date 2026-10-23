@@ -13,9 +13,16 @@ export type {
   CadWorkbenchProps,
 } from './types';
 
-export { SNAP_RADIUS_PX, ALIGN_TOL_PX, POLAR_TOL_DEG, INITIAL_ZOOM } from './constants';
+export {
+  SNAP_RADIUS_PX,
+  ALIGN_TOL_PX,
+  POLAR_TOL_DEG,
+  INITIAL_ZOOM,
+  EMPTY_EDGES,
+  BLOCK_FILL_CYCLE,
+} from './constants';
 
-export type { SnapSettings, SnapKeyPoint, SnapContext } from './snap';
+export type { SnapSettings, SnapBoolKey, SnapKeyPoint, SnapContext } from './snap';
 export {
   DEFAULT_SNAP_SETTINGS,
   POLAR_STEP_CHOICES,
@@ -46,6 +53,7 @@ export {
   getMapScaleInfo,
   pointsToLineSegments,
   normalizeAngle,
+  nodesBBox,
 } from './geometry';
 
 export {
