@@ -133,7 +133,7 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
 
   if (!open) {
     return (
-      <div className="h-full w-9 shrink-0 border-l border-[#E1E4E8] bg-white flex flex-col select-none">
+      <div className="h-full w-9 shrink-0 border-l border-line bg-surface flex flex-col select-none">
         {/* Top half: PLOTS */}
         <button
           type="button"
@@ -142,14 +142,14 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
             onOpenChange(true);
           }}
           title="Open Plots sidebar"
-          className="h-1/2 w-full flex flex-col items-center justify-center gap-2 border-b border-[#E1E4E8] hover:bg-[#F5F6F8] text-[#69717D] hover:text-[#171A1F] cursor-pointer transition-colors group p-1"
+          className="h-1/2 w-full flex flex-col items-center justify-center gap-2 border-b border-line hover:bg-app text-fg-2 hover:text-fg cursor-pointer transition-colors group p-1"
         >
-          <LineChart className="w-4 h-4 text-[#2563EB] group-hover:scale-110 transition-transform" />
+          <LineChart className="w-4 h-4 text-accent group-hover:scale-110 transition-transform" />
           <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-semibold uppercase tracking-wider">
             PLOTS
           </span>
           {plots.length > 0 && (
-            <span className="text-[9px] font-mono text-[#8A929E] bg-[#F0F2F5] px-1 py-0.5 rounded border border-[#E1E4E8]">
+            <span className="text-[10px] font-mono text-fg-3 bg-surface-3 px-1 py-0.5 rounded border border-line">
               {plots.length}
             </span>
           )}
@@ -163,23 +163,23 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
             onOpenChange(true);
           }}
           title="Open Runs sidebar"
-          className="h-1/2 w-full flex flex-col items-center justify-center gap-2 hover:bg-[#F5F6F8] text-[#69717D] hover:text-[#171A1F] cursor-pointer transition-colors group p-1"
+          className="h-1/2 w-full flex flex-col items-center justify-center gap-2 hover:bg-app text-fg-2 hover:text-fg cursor-pointer transition-colors group p-1"
         >
           <History
             className={`w-4 h-4 ${
-              executionStatus === 'running' ? 'text-[#2563EB]' : ''
+              executionStatus === 'running' ? 'text-accent' : ''
             } group-hover:scale-110 transition-transform`}
           />
           <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-semibold uppercase tracking-wider">
             RUNS
           </span>
           {runs.length > 0 && (
-            <span className="text-[9px] font-mono text-[#8A929E] bg-[#F0F2F5] px-1 py-0.5 rounded border border-[#E1E4E8]">
+            <span className="text-[10px] font-mono text-fg-3 bg-surface-3 px-1 py-0.5 rounded border border-line">
               {runs.length}
             </span>
           )}
           {executionStatus === 'running' && (
-            <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
           )}
         </button>
       </div>
@@ -188,38 +188,34 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
 
   return (
     <div
-      className="relative h-full shrink-0 border-l border-[#E1E4E8] bg-[#F5F6F8] flex flex-col select-none overflow-hidden"
+      className="relative h-full shrink-0 border-l border-line bg-app flex flex-col select-none overflow-hidden"
       style={{ width }}
     >
       {/* Left resize handle */}
       <div
         onMouseDown={startDragW}
         title="Drag to resize sidebar width"
-        className="absolute left-0 top-0 bottom-0 -ml-1 w-2 cursor-col-resize z-20 hover:bg-[#2563EB]/40 transition-colors"
+        className="absolute left-0 top-0 bottom-0 -ml-1 w-2 cursor-col-resize z-20 hover:bg-accent/40 transition-colors"
       />
 
       {/* Unified Tab Switcher Header */}
-      <div className="h-9 px-2 flex items-center justify-between border-b border-[#E1E4E8] bg-[#F5F6F8] shrink-0">
-        <div className="flex items-center gap-1 bg-[#EAECEF] p-0.5 rounded">
+      <div className="h-9 px-2 flex items-center justify-between border-b border-line bg-app shrink-0">
+        <div className="flex items-center gap-1 bg-surface-3 p-0.5 rounded">
           <button
             type="button"
             onClick={() => handleTabChange('plots')}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === 'plots'
-                ? 'bg-white text-[#171A1F]'
-                : 'text-[#69717D] hover:text-[#171A1F]'
+              activeTab === 'plots' ? 'bg-surface text-fg' : 'text-fg-2 hover:text-fg'
             }`}
           >
             <LineChart
-              className={`w-3.5 h-3.5 ${activeTab === 'plots' ? 'text-[#2563EB]' : 'text-[#69717D]'}`}
+              className={`w-3.5 h-3.5 ${activeTab === 'plots' ? 'text-accent' : 'text-fg-2'}`}
             />
             <span>Plots</span>
             {plots.length > 0 && (
               <span
                 className={`text-[10px] font-mono px-1 rounded ${
-                  activeTab === 'plots'
-                    ? 'bg-[#F0F2F5] text-[#4B5563]'
-                    : 'bg-black/5 text-[#69717D]'
+                  activeTab === 'plots' ? 'bg-surface-3 text-fg' : 'bg-fg/5 text-fg-2'
                 }`}
               >
                 {plots.length}
@@ -231,26 +227,24 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
             type="button"
             onClick={() => handleTabChange('runs')}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === 'runs'
-                ? 'bg-white text-[#171A1F]'
-                : 'text-[#69717D] hover:text-[#171A1F]'
+              activeTab === 'runs' ? 'bg-surface text-fg' : 'text-fg-2 hover:text-fg'
             }`}
           >
             <History
-              className={`w-3.5 h-3.5 ${executionStatus === 'running' ? 'text-[#2563EB]' : ''}`}
+              className={`w-3.5 h-3.5 ${executionStatus === 'running' ? 'text-accent' : ''}`}
             />
             <span>Runs</span>
             {runs.length > 0 && (
               <span
                 className={`text-[10px] font-mono px-1 rounded ${
-                  activeTab === 'runs' ? 'bg-[#F0F2F5] text-[#4B5563]' : 'bg-black/5 text-[#69717D]'
+                  activeTab === 'runs' ? 'bg-surface-3 text-fg' : 'bg-fg/5 text-fg-2'
                 }`}
               >
                 {runs.length}
               </span>
             )}
             {executionStatus === 'running' && (
-              <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] animate-pulse" />
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
             )}
           </button>
         </div>
@@ -259,14 +253,14 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
           type="button"
           onClick={() => onOpenChange(false)}
           title="Collapse sidebar"
-          className="p-1 rounded text-[#69717D] hover:bg-[#E1E4E8] hover:text-[#171A1F] transition-colors cursor-pointer"
+          className="p-1 rounded text-fg-2 hover:bg-line hover:text-fg transition-colors cursor-pointer"
         >
           <ChevronRight className="w-4 h-4" />
         </button>
       </div>
 
       {/* Content Area: full-height view of the selected tab */}
-      <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-white">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden bg-surface">
         {activeTab === 'plots' ? (
           <PlotsRail
             plots={plots}

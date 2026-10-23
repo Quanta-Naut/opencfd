@@ -99,7 +99,7 @@ export const TurbulenceSection: React.FC<SectionProps> = ({
       </div>
 
       {/* moved out of the live UI - see caseSetup/TurbulenceSection.tsx, kept for a future tutorial
-      <p className="text-[10px] text-[#69717D] leading-relaxed bg-[#F8FAFC] border border-[#E8EDF1] rounded-sm px-3 py-2">
+      <p className="text-[10px] text-fg-2 leading-relaxed bg-surface-2 border border-line-soft rounded-sm px-3 py-2">
         {model.blurb} Solves: <span className="font-mono">{['U', 'p', ...model.fields].join(', ')}</span>
         {compressible && ', T'}.
       </p>
@@ -125,7 +125,7 @@ export const TurbulenceSection: React.FC<SectionProps> = ({
           />
         </Field>
         <Field label="Inlet k / omega (computed)">
-          <div className="w-full px-2.5 py-2 bg-[#F5F6F8] border border-[#DDE2E8] rounded-sm font-mono text-[11px] text-[#69717D]">
+          <div className="w-full px-2.5 py-2 bg-app border border-line rounded-sm font-mono text-[11px] text-fg-2">
             k {it.k.toExponential(2)} · ω {it.omega.toFixed(1)}
           </div>
         </Field>

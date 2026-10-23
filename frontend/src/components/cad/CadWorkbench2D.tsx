@@ -117,6 +117,10 @@ import {
 } from '../../types/blocking';
 import { useMeshGL, type MeshGLScene } from './useMeshGL';
 import { arrayRange } from '../../utils/numeric';
+import { useResolvedTheme } from '../../utils/theme';
+import { IS_MAC, MOD_LABEL } from '../../utils/platform';
+import { Tooltip } from '../ui/Tooltip';
+import { Kbd } from '../ui/Kbd';
 
 import type {
   CadTool,
@@ -138,6 +142,7 @@ import {
   cadReducer,
   meshEdgeSets,
   meshSkewness,
+  canvasPalette,
   colormapRGB,
   uid,
   moveEntityVertex,
@@ -265,6 +270,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     updateGeometry: glUpdateGeometry,
     render: glRender,
   } = useMeshGL();
+  // Neutral canvas colours follow the app theme.
+  const C = canvasPalette(useResolvedTheme());
 
   // ── Domain Handle Dragging State ──
   const [hoveredDomainHandle, setHoveredDomainHandle] = useState<
@@ -404,7 +411,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const panStart = useRef<Point2D>({ x: 0, y: 0 });
   const panOrigin = useRef<Point2D>({ x: 0, y: 0 });
   const lastMiddleClickRef = useRef(0);
-
 
   // ── Camera Framing Helper ───────────────────────────────────────────────────
   const fitBoundingBox = useCallback(
@@ -666,6 +672,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [snapSettings, setSnapSettings] = useState<SnapSettings>(() => loadSnapSettings());
   const [draftingOpen, setDraftingOpen] = useState(false);
   const draftingRef = useRef<HTMLDivElement>(null);
+  // Fillet / Offset take one parameter each; it lives in a small flyout next
+  // to the rail button instead of permanently occupying toolbar space.
+  const [modifyFlyout, setModifyFlyout] = useState<'fillet' | 'offset' | null>(null);
+  const modifyFlyoutRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     saveSnapSettings(snapSettings);
   }, [snapSettings]);
@@ -687,6 +697,23 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       document.removeEventListener('keydown', onKey);
     };
   }, [draftingOpen]);
+  useEffect(() => {
+    if (!modifyFlyout) return;
+    const onDown = (e: MouseEvent) => {
+      if (modifyFlyoutRef.current && !modifyFlyoutRef.current.contains(e.target as Node)) {
+        setModifyFlyout(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setModifyFlyout(null);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [modifyFlyout]);
 
   // Pick a sensible canvas mode when the STAGE changes; after that the user
   // drives it with the Blocks / Mesh / Quality toggle (a stale mesh no longer
@@ -874,7 +901,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const glScene = useMemo<MeshGLScene>(() => {
     const nodes: number[][] | undefined = meshData?.nodes;
     const elements: number[][] | undefined = meshData?.elements;
-    const hidden: MeshGLScene = { visible: false, fill: { kind: 'solid', color: [1, 1, 1, 1] }, wire: null };
+    const hidden: MeshGLScene = {
+      visible: false,
+      fill: { kind: 'solid', color: [1, 1, 1, 1] },
+      wire: null,
+    };
     if (
       !displayOnly ||
       !showMesh ||
@@ -920,17 +951,21 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         wire: showMeshWireframe ? [1, 1, 1, 0.3] : null,
       };
     }
-    // #CBD5E1 lines over white (or block-tinted) cells. Slightly translucent:
-    // GL lines are a full pixel wide where the 2D path drew 0.65px.
-    const wire: [number, number, number, number] = [203 / 255, 213 / 255, 225 / 255, 0.8];
+    // Theme mesh lines over plain (or block-tinted) cells.
+    const wire = C.meshLineRGBA;
     if (directionColors && elementBlockColor) {
       return {
         visible: true,
-        fill: { kind: 'cellRGBA', colors: elementBlockColor, alpha: 0x26 / 255, base: [1, 1, 1, 1] },
+        fill: {
+          kind: 'cellRGBA',
+          colors: elementBlockColor,
+          alpha: C.blockTint,
+          base: C.meshFillRGBA,
+        },
         wire,
       };
     }
-    return { visible: true, fill: { kind: 'solid', color: [1, 1, 1, 1] }, wire };
+    return { visible: true, fill: { kind: 'solid', color: C.meshFillRGBA }, wire };
   }, [
     meshData?.nodes,
     meshData?.elements,
@@ -951,6 +986,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     showMeshWireframe,
     directionColors,
     elementBlockColor,
+    C,
   ]);
   const glMeshActive = glReady && glScene.visible;
 
@@ -1693,7 +1729,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     if (glMeshActive) {
       ctx.clearRect(0, 0, cw, ch);
     } else {
-      ctx.fillStyle = '#FAFAFA';
+      ctx.fillStyle = C.bg;
       ctx.fillRect(0, 0, cw, ch);
     }
 
@@ -1729,12 +1765,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         }
         ctx.stroke();
       };
-      drawGridLines(minorStep, '#EBEBEB', 1);
-      drawGridLines(majorStep, '#D8D8D8', 1.2);
+      drawGridLines(minorStep, C.gridMinor, 1);
+      drawGridLines(majorStep, C.gridMajor, 1.2);
 
       // Axes: X-axis in light red, Y-axis in light green
       // X-axis (y = 0 line)
-      ctx.strokeStyle = '#F87171'; // Light red (tailwind red-400)
+      ctx.strokeStyle = C.axisX;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(0, o.y);
@@ -1742,7 +1778,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.stroke();
 
       // Y-axis (x = 0 line)
-      ctx.strokeStyle = '#4ADE80'; // Light green (tailwind green-400)
+      ctx.strokeStyle = C.axisY;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(o.x, 0);
@@ -1751,9 +1787,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
       // Axis labels
       ctx.font = '10px JetBrains Mono';
-      ctx.fillStyle = '#EF4444'; // Red label for X
+      ctx.fillStyle = C.axisX;
       ctx.fillText('X', cw - 16, o.y - 6);
-      ctx.fillStyle = '#22C55E'; // Green label for Y
+      ctx.fillStyle = C.axisY;
       ctx.fillText('Y', o.x + 6, 14);
     }
 
@@ -1793,7 +1829,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       const liveMode = !!liveVals && liveVals.length === elements.length && !qualityMode;
       const liveLo = Number(liveRange[0]);
       const liveSpan = Number(liveRange[1]) - liveLo || 1;
-      ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.18)' : '#CBD5E1';
+      ctx.strokeStyle = haveField ? 'rgba(255,255,255,0.18)' : C.meshLine;
       ctx.lineWidth = haveField ? 0.45 : 0.65;
 
       // When the GPU canvas is drawing the mesh, skip the per-element loop.
@@ -1852,8 +1888,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             if (shouldDrawWireframe) ctx.stroke();
           } else {
             const blockCol = directionColors ? elementBlockColor?.[elIdx] : null;
-            ctx.fillStyle = blockCol ? blockCol + '26' : '#FFFFFF';
-            ctx.strokeStyle = '#CBD5E1';
+            ctx.fillStyle = blockCol ? blockCol + '26' : C.meshFill;
+            ctx.strokeStyle = C.meshLine;
             ctx.lineWidth = 0.65;
             ctx.beginPath();
             ctx.moveTo(points[0].x, points[0].y);
@@ -1868,7 +1904,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       }
 
       // Exterior edges explicitly show both the airfoil hole and domain edge.
-      ctx.strokeStyle = '#111827';
+      ctx.strokeStyle = C.boundary;
       ctx.lineWidth = 1.7;
       ctx.beginPath();
       for (let i = 0; i < meshBoundaryEdges.length; i += 2) {
@@ -1945,7 +1981,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     // else (no CAD geometry, no domain handles, no blocking).
     if (meshOnly) {
       if (!meshData?.nodes?.length) {
-        ctx.fillStyle = '#8B95A1';
+        ctx.fillStyle = C.label;
         ctx.font = '12px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('No mesh yet - generate one in the Mesh tab', cw / 2, ch / 2);
@@ -1968,7 +2004,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.setLineDash([8, 4]);
         ctx.fillStyle = domainBroken ? 'rgba(220, 38, 38, 0.04)' : 'rgba(37, 99, 235, 0.03)';
       } else {
-        ctx.strokeStyle = isConst ? '#4A90D9' : isSel ? '#E05A00' : '#1A1D21';
+        ctx.strokeStyle = isConst ? '#4A90D9' : isSel ? '#E05A00' : C.entity;
         ctx.lineWidth = isSel ? 2.5 : isConst ? 1.2 : 1.8;
         if (isConst) ctx.setLineDash([6, 4]);
         else ctx.setLineDash([]);
@@ -2039,10 +2075,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             } else if (editable) {
               ctx.beginPath();
               ctx.arc(ps.x, ps.y, 2.6, 0, Math.PI * 2);
-              ctx.fillStyle = '#5B6472';
+              ctx.fillStyle = C.vertexDim;
               ctx.fill();
             } else {
-              ctx.fillStyle = isConst ? '#4A90D9' : '#888';
+              ctx.fillStyle = isConst ? '#4A90D9' : C.vertex;
               ctx.beginPath();
               ctx.arc(ps.x, ps.y, 2.2, 0, Math.PI * 2);
               ctx.fill();
@@ -2156,7 +2192,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         }
         const cur = ws(snap.pt.x, snap.pt.y);
         ctx.save();
-        ctx.strokeStyle = '#94A3B8';
+        ctx.strokeStyle = C.guide;
         ctx.lineWidth = 1;
         ctx.setLineDash([2, 2]);
         ctx.beginPath();
@@ -2243,13 +2279,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         // Amber for the sketch axes, violet for angle tracking, sky blue for
         // every other inference (vertex alignment, perpendicular, ...), and a
         // faint slate for the tracking lines through a hovered point.
-        ctx.strokeStyle = isAxis
-          ? '#F59E0B'
-          : isPolar
-            ? '#7C3AED'
-            : isExt
-              ? '#94A3B8'
-              : '#0284C7';
+        ctx.strokeStyle = isAxis ? '#F59E0B' : isPolar ? '#7C3AED' : isExt ? C.guide : '#0284C7';
         ctx.lineWidth = isExt ? 1 : 1.2;
         ctx.setLineDash(isExt ? [2, 4] : [3, 3]);
         ctx.beginPath();
@@ -2378,12 +2408,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const tw = ctx.measureText(label).width;
         const lx = sp.x + 11;
         const ly = sp.y - 11;
-        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.fillStyle = C.chipBg;
         ctx.fillRect(lx - 3, ly - 10, tw + 7, 14);
-        ctx.strokeStyle = '#E1E4E8';
+        ctx.strokeStyle = C.chipLine;
         ctx.lineWidth = 1;
         ctx.strokeRect(lx - 3, ly - 10, tw + 7, 14);
-        ctx.fillStyle = '#171A1F';
+        ctx.fillStyle = C.chipText;
         ctx.fillText(label, lx, ly + 1);
       }
     }
@@ -2391,7 +2421,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     // ─── Cursor crosshair ─────────────────────────────────────────────────────
     if (tool !== 'select') {
       const sp = ws(snap.pt.x, snap.pt.y);
-      ctx.strokeStyle = '#888';
+      ctx.strokeStyle = C.cursor;
       ctx.lineWidth = 1;
       ctx.setLineDash([]);
       ctx.beginPath();
@@ -2454,7 +2484,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           }
 
           ctx.fillStyle = isDrag ? '#1D4ED8' : '#2563EB';
-          ctx.strokeStyle = '#FFFFFF';
+          ctx.strokeStyle = C.halo;
           ctx.lineWidth = 2;
           ctx.beginPath();
           ctx.arc(s.x, s.y, isHov || isDrag ? 6.5 : 5, 0, Math.PI * 2);
@@ -2464,9 +2494,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           if (isHov || isDrag) {
             ctx.font = 'bold 9px Inter, sans-serif';
             const tw = ctx.measureText(tooltip).width;
-            ctx.fillStyle = '#171A1F';
+            ctx.fillStyle = C.tipBg;
             ctx.fillRect(s.x - tw / 2 - 4, s.y - 20, tw + 8, 14);
-            ctx.fillStyle = '#FFFFFF';
+            ctx.fillStyle = C.tipText;
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(tooltip, s.x, s.y - 13);
@@ -2606,7 +2636,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.setLineDash([]);
 
         // Badge pill
-        ctx.fillStyle = isChainHovered ? '#FFFFFF' : 'rgba(255, 255, 255, 0.96)';
+        ctx.fillStyle = isChainHovered ? C.handleFill : C.chipBg;
         ctx.strokeStyle = colorConfig.hex;
         ctx.lineWidth = isChainHovered ? 2.5 : 1.5;
         ctx.beginPath();
@@ -2817,7 +2847,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           const q = ws(p.x, p.y);
           ctx.beginPath();
           ctx.arc(q.x, q.y, 3, 0, Math.PI * 2);
-          ctx.fillStyle = i < blockDrawPts.length ? '#E05A00' : '#FFFFFF';
+          ctx.fillStyle = i < blockDrawPts.length ? '#E05A00' : C.handleFill;
           ctx.fill();
           ctx.strokeStyle = '#E05A00';
           ctx.lineWidth = 1.2;
@@ -2888,7 +2918,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         ctx.beginPath();
         ctx.arc(s2.x, s2.y, 5, 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = '#FFFFFF';
+        ctx.strokeStyle = C.halo;
         ctx.lineWidth = 2;
         ctx.stroke();
 
@@ -2902,7 +2932,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ctx.beginPath();
       ctx.arc(s1.x, s1.y, 5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#FFFFFF';
+      ctx.strokeStyle = C.halo;
       ctx.lineWidth = 2;
       ctx.stroke();
 
@@ -2914,7 +2944,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         const midX = p2 ? (s1.x + ws(p2[0], p2[1]).x) / 2 : s1.x;
         const midY = p2 ? (s1.y + ws(p2[0], p2[1]).y) / 2 : s1.y;
         ctx.font = '600 11px Inter, sans-serif';
-        ctx.fillStyle = '#1E293B';
+        ctx.fillStyle = C.ink;
         ctx.fillText(activePlotLine.label, midX + 8, midY - 8);
       }
       ctx.restore();
@@ -2981,6 +3011,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     activePlotLine,
     plotPickPreviewP1,
     glMeshActive,
+    C,
   ]);
 
   // ── Mouse handlers ────────────────────────────────────────────────────────
@@ -5246,38 +5277,128 @@ boundary
       onRequestDownloadBlockMeshDictRef.current = handleDownloadBlockMeshDict;
   });
 
-  // ── Toolbar button helper ─────────────────────────────────────────────────────
-  const Btn = ({
-    t,
-    icon,
-    label,
-    kbd,
-  }: {
-    t: CadTool;
-    icon: React.ReactNode;
-    label: string;
-    kbd?: string;
-  }) => (
-    <button
-      type="button"
-      title={`${label}${kbd ? ` [${kbd}]` : ''}`}
-      aria-label={`${label} tool${kbd ? ` (${kbd})` : ''}`}
-      aria-pressed={tool === t}
-      onClick={() => {
-        setTool(t);
-        setIsDrawing(false);
-        setTempPts([]);
-        setCmdText(`${label}: ${prompt_for(t)}`);
-      }}
-      className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors min-w-[42px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#2563EB] ${
-        tool === t
-          ? 'bg-[#2563EB] text-white '
-          : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'
-      }`}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
+  // ── Tool rail helpers ─────────────────────────────────────────────────────────
+  // Plain render functions, not components: a component declared inside the
+  // render would remount (and drop its tooltip state) on every render.
+  const railBtn = (active: boolean) =>
+    `w-8 h-8 inline-flex items-center justify-center rounded transition-colors disabled:opacity-30 disabled:pointer-events-none ${
+      active ? 'bg-accent-soft text-accent-fg' : 'text-fg-2 hover:bg-surface-3 hover:text-fg'
+    }`;
+  const tip = (label: string, kbd?: string) => (
+    <span className="flex items-center gap-2">
+      {label}
+      {kbd && <Kbd>{kbd}</Kbd>}
+    </span>
+  );
+  const toolBtn = (t: CadTool, icon: React.ReactNode, label: string, kbd?: string) => (
+    <Tooltip key={t} content={tip(label, kbd)} delay={350} side="right">
+      <button
+        type="button"
+        aria-label={`${label} tool${kbd ? ` (${kbd})` : ''}`}
+        aria-pressed={tool === t}
+        onClick={() => {
+          setTool(t);
+          setIsDrawing(false);
+          setTempPts([]);
+          setCmdText(`${label}: ${prompt_for(t)}`);
+        }}
+        className={railBtn(tool === t)}
+      >
+        {icon}
+      </button>
+    </Tooltip>
+  );
+  const railSep = <span className="h-px w-5 bg-line my-1 shrink-0" />;
+
+  const fitView = () => {
+    if (showMesh && meshData?.nodes?.length) {
+      fitBoundingBox(nodesBBox(meshData.nodes), 0.72);
+      return;
+    }
+    const allGeom = cadState.entities.filter((e) => e.layer !== 'construction');
+    let minX = Infinity,
+      maxX = -Infinity,
+      minY = Infinity,
+      maxY = -Infinity;
+    for (const ent of allGeom) {
+      for (const p of ent.pts) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    if (minX !== Infinity && maxX !== -Infinity) {
+      fitBoundingBox({ minX, maxX, minY, maxY }, 0.72);
+      return;
+    }
+    const bottomBarPx =
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar')) ||
+      32;
+    setZoom(INITIAL_ZOOM);
+    setPan({ x: 0, y: -(bottomBarPx / 2) });
+  };
+
+  // One-parameter modify commands: the rail button opens a flyout holding the
+  // value and an Apply button, so the parameter is only on screen when used.
+  const modifyBtn = (
+    id: 'fillet' | 'offset',
+    icon: React.ReactNode,
+    label: string,
+    hint: string,
+    value: number,
+    setValue: (v: number) => void,
+    apply: () => void,
+  ) => (
+    <div className="relative" ref={modifyFlyout === id ? modifyFlyoutRef : undefined}>
+      <Tooltip content={label} delay={350} side="right">
+        <button
+          type="button"
+          aria-label={label}
+          aria-haspopup="dialog"
+          aria-expanded={modifyFlyout === id}
+          disabled={isLoading}
+          onClick={() => setModifyFlyout((f) => (f === id ? null : id))}
+          className={railBtn(modifyFlyout === id)}
+        >
+          {icon}
+        </button>
+      </Tooltip>
+      {modifyFlyout === id && (
+        <div
+          role="dialog"
+          aria-label={label}
+          className="absolute left-full top-0 ml-2 z-50 w-56 bg-surface border border-line rounded p-2.5 text-[12px] text-fg"
+        >
+          <div className="font-semibold mb-0.5">{label}</div>
+          <div className="text-[11px] text-fg-3 mb-2 leading-snug">{hint}</div>
+          <form
+            className="flex items-center gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setModifyFlyout(null);
+              apply();
+            }}
+          >
+            <input
+              type="number"
+              step="0.005"
+              autoFocus
+              value={value}
+              onChange={(e) => setValue(+e.target.value)}
+              className="w-full h-7 px-2 bg-surface-2 border border-line rounded text-right text-fg font-mono text-[12px]"
+            />
+            <span className="text-[11px] text-fg-3">m</span>
+            <button
+              type="submit"
+              className="h-7 px-2.5 rounded bg-accent text-white text-[12px] font-medium hover:bg-accent-hover shrink-0"
+            >
+              Apply
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
   );
 
   const prompt_for = (t: CadTool) => {
@@ -5298,366 +5419,7 @@ boundary
   const selectedCount = cadState.entities.filter((e) => e.selected).length;
 
   return (
-    <div
-      className="relative w-full h-full flex flex-col bg-white overflow-hidden"
-      style={{ fontFamily: 'Inter, sans-serif' }}
-    >
-      {/* ═══════════════════════════════ CAD TOOLBAR ═══════════════════════════════ */}
-      <div
-        className={`shrink-0 bg-[#F5F6F8] border-b border-[#E1E4E8] px-2 py-1 flex items-center gap-1 flex-wrap ${displayOnly ? 'hidden' : ''}`}
-      >
-        {/* ── File/Edit Group ────── */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <button
-            title="Undo [Ctrl+Z]"
-            onClick={undo}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
-          >
-            <Undo2 className="w-4 h-4" />
-          </button>
-          <button
-            title="Redo [Ctrl+Y]"
-            onClick={redo}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
-          >
-            <Redo2 className="w-4 h-4" />
-          </button>
-          <button
-            title="Delete Selected [Del]"
-            onClick={() => dispatch({ type: 'DELETE_SELECTED' })}
-            disabled={selectedCount === 0}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#DC2626] disabled:opacity-30 transition-colors"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-          <button
-            title="Clear All"
-            onClick={() => {
-              dispatch({ type: 'CLEAR' });
-              setCmdText('Canvas cleared.');
-            }}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#DC2626] transition-colors"
-          >
-            <Eraser className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* ── Select Group ──────── */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <Btn t="select" icon={<MousePointer2 className="w-4 h-4" />} label="Select" kbd="S" />
-        </div>
-
-        {/* ── Create Group ─────── */}
-        <span className="text-[9px] font-semibold text-[#A5ACB5] uppercase tracking-wider px-1">
-          Draw
-        </span>
-        <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <Btn t="line" icon={<Minus className="w-4 h-4" />} label="Line" kbd="L" />
-          <Btn t="polyline" icon={<ArrowUpRight className="w-4 h-4" />} label="Pline" kbd="P" />
-          <Btn t="rectangle" icon={<Square className="w-4 h-4" />} label="Rect" kbd="R" />
-          <Btn
-            t="circle_center_radius"
-            icon={<Circle className="w-4 h-4" />}
-            label="Circle"
-            kbd="C"
-          />
-          <Btn
-            t="ellipse_center"
-            icon={<CircleDot className="w-4 h-4" />}
-            label="Ellipse"
-            kbd="E"
-          />
-          <Btn t="arc_center" icon={<TriangleRight className="w-4 h-4" />} label="Arc" kbd="A" />
-          <Btn t="construction_line" icon={<ScanLine className="w-4 h-4" />} label="XLine" />
-        </div>
-
-        {/* ── Modify Group ────── */}
-        <span className="text-[9px] font-semibold text-[#A5ACB5] uppercase tracking-wider px-1">
-          Modify
-        </span>
-        <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <button
-            title="Fillet"
-            onClick={applyFillet}
-            disabled={isLoading}
-            className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${isLoading ? 'opacity-40' : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'}`}
-          >
-            <CornerUpRight className="w-4 h-4" />
-            <span>Fillet</span>
-          </button>
-          <button
-            title="Offset"
-            onClick={applyOffset}
-            disabled={isLoading}
-            className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded text-[10px] font-medium transition-colors ${isLoading ? 'opacity-40' : 'text-[#69717D] hover:bg-white hover:text-[#171A1F]'}`}
-          >
-            <Maximize2 className="w-4 h-4" />
-            <span>Offset</span>
-          </button>
-          <Btn t="trim" icon={<Scissors className="w-4 h-4" />} label="Trim" kbd="T" />
-        </div>
-
-        {/* ── Modify Params ──── */}
-        <div className="flex items-center gap-2 text-[10px] font-mono text-[#69717D] pr-2 border-r border-[#E1E4E8] mr-1">
-          <label className="flex items-center gap-1">
-            R:{' '}
-            <input
-              type="number"
-              step="0.005"
-              value={filletR}
-              onChange={(e) => setFilletR(+e.target.value)}
-              className="w-14 px-1 py-0.5 bg-white border border-[#E1E4E8] rounded text-right text-[#171A1F] font-mono text-[10px]"
-            />
-          </label>
-          <label className="flex items-center gap-1">
-            Δd:{' '}
-            <input
-              type="number"
-              step="0.005"
-              value={offsetD}
-              onChange={(e) => setOffsetD(+e.target.value)}
-              className="w-14 px-1 py-0.5 bg-white border border-[#E1E4E8] rounded text-right text-[#171A1F] font-mono text-[10px]"
-            />
-          </label>
-        </div>
-
-        {/* ── View Controls ──── */}
-        <div className="flex items-center gap-0.5 pr-2 border-r border-[#E1E4E8] mr-1">
-          <button
-            title="Zoom In"
-            onClick={() => setZoom((z) => Math.min(25000, z * 1.35))}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-          <button
-            title="Zoom Out"
-            onClick={() => setZoom((z) => Math.max(0.5, z / 1.35))}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
-          >
-            <ZoomOut className="w-4 h-4" />
-          </button>
-          <button
-            title="Fit to Screen"
-            onClick={() => {
-              if (showMesh && meshData?.nodes?.length) {
-                fitBoundingBox(
-                  nodesBBox(meshData.nodes),
-                  0.72,
-                );
-                return;
-              }
-              const allGeom = cadState.entities.filter((e) => e.layer !== 'construction');
-              if (allGeom.length > 0) {
-                let minX = Infinity,
-                  maxX = -Infinity,
-                  minY = Infinity,
-                  maxY = -Infinity;
-                for (const ent of allGeom) {
-                  for (const p of ent.pts) {
-                    if (p.x < minX) minX = p.x;
-                    if (p.x > maxX) maxX = p.x;
-                    if (p.y < minY) minY = p.y;
-                    if (p.y > maxY) maxY = p.y;
-                  }
-                }
-                if (minX !== Infinity && maxX !== -Infinity) {
-                  fitBoundingBox({ minX, maxX, minY, maxY }, 0.72);
-                  return;
-                }
-              }
-              const bottomBarPx =
-                parseFloat(
-                  getComputedStyle(document.documentElement).getPropertyValue('--app-bottom-bar'),
-                ) || 32;
-              setZoom(INITIAL_ZOOM);
-              setPan({ x: 0, y: -(bottomBarPx / 2) });
-            }}
-            className="p-1.5 rounded hover:bg-white text-[#69717D] hover:text-[#171A1F] transition-colors"
-          >
-            <Maximize className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* ── Snap / Drafting Toggles ──── */}
-        <div className="flex items-center gap-1">
-          {[
-            {
-              label: 'GRID',
-              title: 'Grid visible (F7)',
-              state: showGrid,
-              toggle: () => setShowGrid((g) => !g),
-              icon: <Grid3x3 className="w-3 h-3" />,
-            },
-            {
-              label: 'G-SNAP',
-              title: 'Snap to grid (F9)',
-              state: snapSettings.grid,
-              toggle: () => setSnapSettings((s) => ({ ...s, grid: !s.grid })),
-              icon: <Grid3x3 className="w-3 h-3" />,
-            },
-            {
-              label: 'SNAP',
-              title: 'Object snap / OSNAP, all inferences (F3)',
-              state: snapEnabled,
-              toggle: () => setSnapEnabled((s) => !s),
-              icon: <Magnet className="w-3 h-3" />,
-            },
-            {
-              label: 'ORTHO',
-              title: 'Ortho lock - constrain to horizontal / vertical (F8)',
-              state: ortho,
-              toggle: () => setOrtho((o) => !o),
-              icon: <Crosshair className="w-3 h-3" />,
-            },
-            {
-              label: 'ANGLE',
-              title: `Angle tracking in ${snapSettings.polarStepDeg}° steps`,
-              state: snapSettings.polar,
-              toggle: () => setSnapSettings((s) => ({ ...s, polar: !s.polar })),
-              icon: <Compass className="w-3 h-3" />,
-            },
-            {
-              label: 'CONSTR',
-              title: 'Construction layer: new geometry is drawn as non-solid reference lines',
-              state: constructionMode,
-              toggle: () => setConstructionMode((c) => !c),
-              icon: <ScanLine className="w-3 h-3" />,
-            },
-          ].map(({ label, title, state: on, toggle, icon }) => (
-            <button
-              key={label}
-              type="button"
-              title={title}
-              aria-label={title}
-              aria-pressed={on}
-              onClick={toggle}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#2563EB] ${
-                on
-                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                  : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#2563EB]'
-              }`}
-            >
-              {icon}
-              <span>{label}</span>
-            </button>
-          ))}
-
-          {/* ── Drafting settings popover ──── */}
-          <div className="relative" ref={draftingRef}>
-            <button
-              type="button"
-              title="Drafting & snap settings"
-              aria-label="Drafting and snap settings"
-              aria-haspopup="dialog"
-              aria-expanded={draftingOpen}
-              onClick={() => setDraftingOpen((o) => !o)}
-              className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#2563EB] ${
-                draftingOpen
-                  ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                  : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#2563EB]'
-              }`}
-            >
-              <Sliders className="w-3 h-3" />
-              <span>DRAFT</span>
-            </button>
-
-            {draftingOpen && (
-              <div
-                role="dialog"
-                aria-label="Drafting and snap settings"
-                className="absolute right-0 top-full mt-1.5 z-50 w-72 bg-white border border-[#E1E4E8] rounded-sm shadow-lg p-3 text-[11px] text-[#171A1F]"
-              >
-                <label className="flex items-center gap-1.5 pb-2 mb-2 border-b border-[#EDEFF3] font-semibold cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={snapEnabled}
-                    onChange={(e) => setSnapEnabled(e.target.checked)}
-                    className="accent-[#2563EB]"
-                  />
-                  <span>Snapping enabled</span>
-                  <span className="ml-auto text-[10px] font-normal text-[#8A929E]">F3</span>
-                </label>
-
-                <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
-                  Snap to
-                </span>
-                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
-                  {(
-                    [
-                      ['endpoint', 'Endpoints'],
-                      ['midpoint', 'Midpoints'],
-                      ['center', 'Centres'],
-                      ['quadrant', 'Quadrants'],
-                      ['intersection', 'Intersections'],
-                      ['perpendicular', 'Perpendicular'],
-                      ['parallel', 'Parallel'],
-                      ['onCurve', 'On edge'],
-                      ['alignment', 'Align guides'],
-                      ['grid', 'Grid snap'],
-                    ] as [SnapBoolKey, string][]
-                  ).map(([k, lbl]) => (
-                    <label
-                      key={k}
-                      className="flex items-center gap-1.5 cursor-pointer select-none"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={Boolean(snapSettings[k])}
-                        onChange={(e) => setSnapSettings((s) => ({ ...s, [k]: e.target.checked }))}
-                        className="accent-[#2563EB]"
-                      />
-                      <span>{lbl}</span>
-                    </label>
-                  ))}
-                </div>
-
-                <div className="mt-3 pt-3 border-t border-[#EDEFF3]">
-                  <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
-                    <span className="flex items-center gap-1.5">
-                      <input
-                        type="checkbox"
-                        checked={snapSettings.polar}
-                        onChange={(e) => setSnapSettings((s) => ({ ...s, polar: e.target.checked }))}
-                        className="accent-[#2563EB]"
-                      />
-                      <span>Angle tracking</span>
-                    </span>
-                    <select
-                      value={snapSettings.polarStepDeg}
-                      disabled={!snapSettings.polar}
-                      onChange={(e) =>
-                        setSnapSettings((s) => ({ ...s, polarStepDeg: Number(e.target.value) }))
-                      }
-                      className="px-1.5 py-0.5 bg-white border border-[#E1E4E8] rounded text-[11px] disabled:opacity-40"
-                    >
-                      {POLAR_STEP_CHOICES.map((d) => (
-                        <option key={d} value={d}>
-                          {d}°
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <div className="mt-3 pt-3 border-t border-[#EDEFF3] flex items-center justify-between gap-2">
-                  <span className="text-[10px] text-[#8A929E] leading-tight">
-                    F3 snap · F7 grid · F8 ortho · F9 grid snap
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSnapSettings({ ...DEFAULT_SNAP_SETTINGS })}
-                    className="px-2 py-0.5 rounded border border-[#E1E4E8] text-[10px] font-semibold text-[#69717D] hover:text-[#171A1F] hover:border-[#2563EB] transition-colors shrink-0"
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
+    <div className="relative w-full h-full flex flex-col bg-surface overflow-hidden">
       {/* ════════════════════ CANVAS ════════════════════════════════════════════ */}
       <div
         ref={containerRef}
@@ -5684,11 +5446,311 @@ boundary
                       : 'crosshair',
         }}
       >
+        {/* Tool rail: floats over the viewport so drawing gets the full height. */}
+        {!displayOnly && (
+          <div className="absolute top-3 left-3 z-20 flex flex-col items-center gap-0.5 p-1 bg-surface border border-line rounded select-none">
+            <Tooltip
+              content={tip('Undo', IS_MAC ? `${MOD_LABEL}Z` : `${MOD_LABEL}+Z`)}
+              delay={350}
+              side="right"
+            >
+              <button type="button" aria-label="Undo" onClick={undo} className={railBtn(false)}>
+                <Undo2 className="w-4 h-4" />
+              </button>
+            </Tooltip>
+            <Tooltip
+              content={tip('Redo', IS_MAC ? `${MOD_LABEL}Y` : `${MOD_LABEL}+Y`)}
+              delay={350}
+              side="right"
+            >
+              <button type="button" aria-label="Redo" onClick={redo} className={railBtn(false)}>
+                <Redo2 className="w-4 h-4" />
+              </button>
+            </Tooltip>
+            {railSep}
+            {toolBtn('select', <MousePointer2 className="w-4 h-4" />, 'Select', 'S')}
+            {railSep}
+            {toolBtn('line', <Minus className="w-4 h-4" />, 'Line', 'L')}
+            {toolBtn('polyline', <ArrowUpRight className="w-4 h-4" />, 'Polyline', 'P')}
+            {toolBtn('rectangle', <Square className="w-4 h-4" />, 'Rectangle', 'R')}
+            {toolBtn('circle_center_radius', <Circle className="w-4 h-4" />, 'Circle', 'C')}
+            {toolBtn('ellipse_center', <CircleDot className="w-4 h-4" />, 'Ellipse', 'E')}
+            {toolBtn('arc_center', <TriangleRight className="w-4 h-4" />, 'Arc', 'A')}
+            {toolBtn('construction_line', <ScanLine className="w-4 h-4" />, 'Construction line')}
+            {railSep}
+            {modifyBtn(
+              'fillet',
+              <CornerUpRight className="w-4 h-4" />,
+              'Fillet',
+              'Rounds the corners of every polyline with this radius.',
+              filletR,
+              setFilletR,
+              applyFillet,
+            )}
+            {modifyBtn(
+              'offset',
+              <Maximize2 className="w-4 h-4" />,
+              'Offset',
+              'Moves the outline of every shape outward by this distance.',
+              offsetD,
+              setOffsetD,
+              applyOffset,
+            )}
+            {toolBtn('trim', <Scissors className="w-4 h-4" />, 'Trim', 'T')}
+            {railSep}
+            <Tooltip content={tip('Delete selected', 'Del')} delay={350} side="right">
+              <button
+                type="button"
+                aria-label="Delete selected"
+                onClick={() => dispatch({ type: 'DELETE_SELECTED' })}
+                disabled={selectedCount === 0}
+                className={`${railBtn(false)} hover:!text-danger`}
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </Tooltip>
+            <Tooltip content="Clear canvas" delay={350} side="right">
+              <button
+                type="button"
+                aria-label="Clear canvas"
+                onClick={() => {
+                  dispatch({ type: 'CLEAR' });
+                  setCmdText('Canvas cleared.');
+                }}
+                className={`${railBtn(false)} hover:!text-danger`}
+              >
+                <Eraser className="w-4 h-4" />
+              </button>
+            </Tooltip>
+          </div>
+        )}
+
+        {/* Drafting aids + view: one compact strip, top centre. */}
+        {!displayOnly && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-0.5 p-1 bg-surface border border-line rounded select-none text-[11px]">
+            {[
+              {
+                label: 'Grid',
+                title: 'Show grid',
+                kbd: 'F7',
+                on: showGrid,
+                toggle: () => setShowGrid((g) => !g),
+                icon: <Grid3x3 className="w-3.5 h-3.5" />,
+              },
+              {
+                label: 'Grid snap',
+                title: 'Snap to grid',
+                kbd: 'F9',
+                on: snapSettings.grid,
+                toggle: () => setSnapSettings((s) => ({ ...s, grid: !s.grid })),
+                icon: <Grid3x3 className="w-3.5 h-3.5" />,
+              },
+              {
+                label: 'Snap',
+                title: 'Object snap (endpoints, midpoints, intersections...)',
+                kbd: 'F3',
+                on: snapEnabled,
+                toggle: () => setSnapEnabled((s) => !s),
+                icon: <Magnet className="w-3.5 h-3.5" />,
+              },
+              {
+                label: 'Ortho',
+                title: 'Constrain to horizontal / vertical',
+                kbd: 'F8',
+                on: ortho,
+                toggle: () => setOrtho((o) => !o),
+                icon: <Crosshair className="w-3.5 h-3.5" />,
+              },
+              {
+                label: 'Angle',
+                title: `Angle tracking in ${snapSettings.polarStepDeg}° steps`,
+                kbd: undefined,
+                on: snapSettings.polar,
+                toggle: () => setSnapSettings((s) => ({ ...s, polar: !s.polar })),
+                icon: <Compass className="w-3.5 h-3.5" />,
+              },
+              {
+                label: 'Construction',
+                title: 'New geometry is drawn as non-solid reference lines',
+                kbd: undefined,
+                on: constructionMode,
+                toggle: () => setConstructionMode((c) => !c),
+                icon: <ScanLine className="w-3.5 h-3.5" />,
+              },
+            ].map(({ label, title, kbd, on, toggle, icon }) => (
+              <Tooltip key={label} content={tip(title, kbd)} delay={350}>
+                <button
+                  type="button"
+                  aria-label={title}
+                  aria-pressed={on}
+                  onClick={toggle}
+                  className={`h-7 px-2 inline-flex items-center gap-1.5 rounded font-medium whitespace-nowrap transition-colors ${
+                    on
+                      ? 'bg-accent-soft text-accent-fg'
+                      : 'text-fg-3 hover:bg-surface-3 hover:text-fg'
+                  }`}
+                >
+                  {icon}
+                  <span className="hidden xl:inline">{label}</span>
+                </button>
+              </Tooltip>
+            ))}
+
+            {/* Drafting settings popover */}
+            <div className="relative" ref={draftingRef}>
+              <Tooltip content="Snap settings" delay={350}>
+                <button
+                  type="button"
+                  aria-label="Drafting and snap settings"
+                  aria-haspopup="dialog"
+                  aria-expanded={draftingOpen}
+                  onClick={() => setDraftingOpen((o) => !o)}
+                  className={`h-7 w-7 inline-flex items-center justify-center rounded transition-colors ${
+                    draftingOpen
+                      ? 'bg-surface-3 text-fg'
+                      : 'text-fg-3 hover:bg-surface-3 hover:text-fg'
+                  }`}
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                </button>
+              </Tooltip>
+              {draftingOpen && (
+                <div
+                  role="dialog"
+                  aria-label="Drafting and snap settings"
+                  className="absolute left-1/2 -translate-x-1/2 top-full mt-2 z-50 w-72 bg-surface border border-line rounded-sm p-3 text-[11px] text-fg"
+                >
+                  <label className="flex items-center gap-1.5 pb-2 mb-2 border-b border-line-soft font-semibold cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={snapEnabled}
+                      onChange={(e) => setSnapEnabled(e.target.checked)}
+                      className="accent-accent"
+                    />
+                    <span>Snapping enabled</span>
+                    <span className="ml-auto text-[10px] font-normal text-fg-3">F3</span>
+                  </label>
+
+                  <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
+                    Snap to
+                  </span>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                    {(
+                      [
+                        ['endpoint', 'Endpoints'],
+                        ['midpoint', 'Midpoints'],
+                        ['center', 'Centres'],
+                        ['quadrant', 'Quadrants'],
+                        ['intersection', 'Intersections'],
+                        ['perpendicular', 'Perpendicular'],
+                        ['parallel', 'Parallel'],
+                        ['onCurve', 'On edge'],
+                        ['alignment', 'Align guides'],
+                        ['grid', 'Grid snap'],
+                      ] as [SnapBoolKey, string][]
+                    ).map(([k, lbl]) => (
+                      <label
+                        key={k}
+                        className="flex items-center gap-1.5 cursor-pointer select-none"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(snapSettings[k])}
+                          onChange={(e) =>
+                            setSnapSettings((s) => ({ ...s, [k]: e.target.checked }))
+                          }
+                          className="accent-accent"
+                        />
+                        <span>{lbl}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-line-soft">
+                    <label className="flex items-center justify-between gap-2 cursor-pointer select-none">
+                      <span className="flex items-center gap-1.5">
+                        <input
+                          type="checkbox"
+                          checked={snapSettings.polar}
+                          onChange={(e) =>
+                            setSnapSettings((s) => ({ ...s, polar: e.target.checked }))
+                          }
+                          className="accent-accent"
+                        />
+                        <span>Angle tracking</span>
+                      </span>
+                      <select
+                        value={snapSettings.polarStepDeg}
+                        disabled={!snapSettings.polar}
+                        onChange={(e) =>
+                          setSnapSettings((s) => ({ ...s, polarStepDeg: Number(e.target.value) }))
+                        }
+                        className="px-1.5 py-0.5 bg-surface border border-line rounded text-[11px] disabled:opacity-40"
+                      >
+                        {POLAR_STEP_CHOICES.map((d) => (
+                          <option key={d} value={d}>
+                            {d}°
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="mt-3 pt-3 border-t border-line-soft flex items-center justify-between gap-2">
+                    <span className="text-[10px] text-fg-3 leading-tight">
+                      F3 snap · F7 grid · F8 ortho · F9 grid snap
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSnapSettings({ ...DEFAULT_SNAP_SETTINGS })}
+                      className="px-2 py-0.5 rounded border border-line text-[10px] font-semibold text-fg-2 hover:text-fg hover:border-accent transition-colors shrink-0"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <span className="h-4 w-px bg-line mx-1" />
+            <Tooltip content="Zoom in" delay={350}>
+              <button
+                type="button"
+                aria-label="Zoom in"
+                onClick={() => setZoom((z) => Math.min(25000, z * 1.35))}
+                className="h-7 w-7 inline-flex items-center justify-center rounded text-fg-3 hover:bg-surface-3 hover:text-fg transition-colors"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+            <Tooltip content="Zoom out" delay={350}>
+              <button
+                type="button"
+                aria-label="Zoom out"
+                onClick={() => setZoom((z) => Math.max(0.5, z / 1.35))}
+                className="h-7 w-7 inline-flex items-center justify-center rounded text-fg-3 hover:bg-surface-3 hover:text-fg transition-colors"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+            <Tooltip content="Fit to view" delay={350}>
+              <button
+                type="button"
+                aria-label="Fit to view"
+                onClick={fitView}
+                className="h-7 w-7 inline-flex items-center justify-center rounded text-fg-3 hover:bg-surface-3 hover:text-fg transition-colors"
+              >
+                <Maximize className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+          </div>
+        )}
+
         {/* Top Controls Bar - only when it actually has controls (blocks/mesh
             toggle in CAD/mesh stages, overlay toggles in Results). The solver
             stage has neither, so no empty pill. */}
         {displayOnly && (!meshOnly || showField) && (
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-xs select-none">
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-surface border border-line rounded px-2 py-1 text-xs select-none">
             {!meshOnly ? (
               <>
                 {[
@@ -5735,15 +5797,15 @@ boundary
                     title={m.title || (m.disabled ? 'Generate a mesh first' : undefined)}
                     className={`px-2 py-0.5 rounded text-[11px] font-medium ${
                       m.active
-                        ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
-                        : 'text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed'
+                        ? 'bg-app text-fg font-semibold'
+                        : 'text-fg-2 hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed'
                     }`}
                   >
                     {m.label}
                   </button>
                 ))}
                 {meshStale && showMesh && (
-                  <span className="ml-1 text-[10px] text-[#D97706] font-medium">
+                  <span className="ml-1 text-[10px] text-warning font-medium">
                     stale - regenerate
                   </span>
                 )}
@@ -5756,8 +5818,8 @@ boundary
                   title="Toggle Mesh Cells Wireframe Overlay"
                   className={`px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors ${
                     showMeshWireframe
-                      ? 'bg-[#2563EB] text-white font-semibold '
-                      : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
+                      ? 'bg-accent-soft text-accent-fg font-semibold '
+                      : 'text-fg-2 hover:text-fg hover:bg-app'
                   }`}
                 >
                   <span>Mesh</span>
@@ -5769,8 +5831,8 @@ boundary
                   title="Toggle Flow Streamlines Overlay"
                   className={`px-2.5 py-1 rounded text-[11px] font-medium flex items-center gap-1.5 transition-colors ${
                     showResultsStreamlines
-                      ? 'bg-[#2563EB] text-white font-semibold '
-                      : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
+                      ? 'bg-accent-soft text-accent-fg font-semibold '
+                      : 'text-fg-2 hover:text-fg hover:bg-app'
                   }`}
                 >
                   <span>Streamlines</span>
@@ -5814,14 +5876,14 @@ boundary
                 })
                 .join(', ');
             const btn =
-              'px-2 py-0.5 rounded font-medium text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed';
+              'px-2 py-0.5 rounded font-medium text-fg-2 hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed';
             return (
               <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1 select-none max-w-[calc(100%-14rem)]">
                 <div className="flex items-center gap-1.5">
-                  <span className="px-1.5 py-0.5 rounded border border-[#F59E0B] text-[#B45309] bg-[#FFFBEB] text-[9px] font-semibold uppercase tracking-wider">
+                  <span className="px-1.5 py-0.5 rounded border border-warning text-warning bg-warning-soft text-[10px] font-semibold uppercase tracking-wider">
                     Beta
                   </span>
-                  <div className="flex items-center gap-0.5 flex-wrap bg-white border border-[#E1E4E8] rounded px-1.5 py-1 text-[11px]">
+                  <div className="flex items-center gap-0.5 flex-wrap bg-surface border border-line rounded px-1.5 py-1 text-[11px]">
                     {tools.map((t) => (
                       <button
                         key={t.id}
@@ -5832,15 +5894,15 @@ boundary
                         }}
                         className={`px-2 py-0.5 rounded font-medium ${
                           blockTool === t.id
-                            ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
-                            : 'text-[#69717D] hover:text-[#171A1F]'
+                            ? 'bg-app text-fg font-semibold'
+                            : 'text-fg-2 hover:text-fg'
                         }`}
                       >
                         {t.label}
-                        <span className="ml-1 text-[9px] text-[#9AA1AB]">{t.key}</span>
+                        <span className="ml-1 text-[10px] text-fg-3">{t.key}</span>
                       </button>
                     ))}
-                    <span className="w-px h-4 bg-[#E1E4E8] mx-0.5" />
+                    <span className="w-px h-4 bg-line mx-0.5" />
                     <button onClick={initializeBlocks} className={btn}>
                       Initialize
                     </button>
@@ -5864,7 +5926,7 @@ boundary
                         setBlockMsg({ text: 'All blocks cleared.', error: false });
                       }}
                       disabled={!blocking?.blocks.length}
-                      className="px-2 py-0.5 rounded font-medium text-[#69717D] hover:text-[#DC2626] disabled:opacity-40 disabled:cursor-not-allowed"
+                      className="px-2 py-0.5 rounded font-medium text-fg-2 hover:text-danger disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       Clear all
                     </button>
@@ -5873,8 +5935,8 @@ boundary
 
                 {/* Tool options */}
                 {blockTool === 'ogrid' && (
-                  <div className="flex items-center gap-2 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-[11px]">
-                    <span className="text-[#434A54]">Centre block size</span>
+                  <div className="flex items-center gap-2 bg-surface border border-line rounded px-2 py-1 text-[11px]">
+                    <span className="text-fg">Centre block size</span>
                     <input
                       type="range"
                       min={0.2}
@@ -5882,37 +5944,33 @@ boundary
                       step={0.05}
                       value={ogridScale}
                       onChange={(ev) => setOgridScale(parseFloat(ev.target.value))}
-                      className="w-28 accent-[#2563EB]"
+                      className="w-28 accent-accent"
                     />
-                    <span className="font-mono text-[#171A1F] w-8">{ogridScale.toFixed(2)}</span>
-                    <span className="text-[#9AA1AB]">of the block</span>
+                    <span className="font-mono text-fg w-8">{ogridScale.toFixed(2)}</span>
+                    <span className="text-fg-3">of the block</span>
                   </div>
                 )}
                 {blockTool === 'assoc' && (
-                  <div className="flex items-center gap-1 flex-wrap bg-white border border-[#E1E4E8] rounded px-2 py-1 text-[11px]">
+                  <div className="flex items-center gap-1 flex-wrap bg-surface border border-line rounded px-2 py-1 text-[11px]">
                     <span
-                      className={
-                        assocStage === 'edges' ? 'font-semibold text-[#171A1F]' : 'text-[#69717D]'
-                      }
+                      className={assocStage === 'edges' ? 'font-semibold text-fg' : 'text-fg-2'}
                     >
                       1 Pick edges ({assocEdges.length})
                     </span>
-                    <span className="text-[#9AA1AB]">then</span>
+                    <span className="text-fg-3">then</span>
                     <span
-                      className={
-                        assocStage === 'curve' ? 'font-semibold text-[#171A1F]' : 'text-[#69717D]'
-                      }
+                      className={assocStage === 'curve' ? 'font-semibold text-fg' : 'text-fg-2'}
                     >
                       2 Click a curve
                     </span>
-                    <span className="w-px h-4 bg-[#E1E4E8] mx-1" />
+                    <span className="w-px h-4 bg-line mx-1" />
                     {assocStage === 'edges' ? (
                       <button
                         disabled={!assocEdges.length}
                         onClick={() => {
                           setAssocStage('curve');
                         }}
-                        className="px-2 py-0.5 rounded bg-[#2563EB] text-white font-medium disabled:opacity-40"
+                        className="px-2 py-0.5 rounded bg-accent text-white font-medium disabled:opacity-40"
                       >
                         Pick curve (Enter)
                       </button>
@@ -5946,17 +6004,17 @@ boundary
                   </div>
                 )}
                 {blockTool === 'select' && selEdge && blocking && (
-                  <div className="bg-white border border-[#E1E4E8] rounded px-2 py-1.5 text-[11px] space-y-1.5 w-[300px]">
+                  <div className="bg-surface border border-line rounded px-2 py-1.5 text-[11px] space-y-1.5 w-[300px]">
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold text-[#171A1F]">Edge params</span>
-                      <span className="text-[#9AA1AB]">
+                      <span className="font-semibold text-fg">Edge params</span>
+                      <span className="text-fg-3">
                         {selEdge.patch ??
                           (unpatchedEdgeIds.has(selEdge.id) ? 'no patch' : 'internal')}
                       </span>
                     </div>
                     <div className="grid grid-cols-3 gap-1.5 items-end">
                       <label className="flex flex-col gap-0.5">
-                        <span className="text-[10px] text-[#69717D]">Nodes</span>
+                        <span className="text-[10px] text-fg-2">Nodes</span>
                         <input
                           type="number"
                           min={2}
@@ -5971,11 +6029,11 @@ boundary
                           onKeyDown={(ev) => {
                             if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
                           }}
-                          className="px-1.5 py-0.5 border border-[#E1E4E8] rounded font-mono"
+                          className="px-1.5 py-0.5 border border-line rounded font-mono"
                         />
                       </label>
                       <label className="flex flex-col gap-0.5">
-                        <span className="text-[10px] text-[#69717D]">Spacing law</span>
+                        <span className="text-[10px] text-fg-2">Spacing law</span>
                         <select
                           value={selEdge.law}
                           onChange={(ev) =>
@@ -5985,7 +6043,7 @@ boundary
                               }),
                             )
                           }
-                          className="px-1 py-0.5 border border-[#E1E4E8] rounded bg-white"
+                          className="px-1 py-0.5 border border-line rounded bg-surface"
                         >
                           <option value="uniform">Uniform</option>
                           <option value="geometric">Geometric</option>
@@ -5993,7 +6051,7 @@ boundary
                         </select>
                       </label>
                       <label className="flex flex-col gap-0.5">
-                        <span className="text-[10px] text-[#69717D]">Ratio</span>
+                        <span className="text-[10px] text-fg-2">Ratio</span>
                         <input
                           type="number"
                           min={0.01}
@@ -6009,7 +6067,7 @@ boundary
                           onKeyDown={(ev) => {
                             if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
                           }}
-                          className="px-1.5 py-0.5 border border-[#E1E4E8] rounded font-mono disabled:bg-[#F5F6F8]"
+                          className="px-1.5 py-0.5 border border-line rounded font-mono disabled:bg-app"
                         />
                       </label>
                     </div>
@@ -6028,13 +6086,13 @@ boundary
                             error: false,
                           });
                         }}
-                        className="px-2 py-0.5 rounded border border-[#E1E4E8] hover:border-[#2563EB] hover:text-[#1D4ED8]"
+                        className="px-2 py-0.5 rounded border border-line hover:border-accent hover:text-accent-fg"
                       >
                         Copy to parallel edges
                       </button>
                       {selEdge.curves?.length ? (
                         <>
-                          <span className="text-[#059669]">on {curveNames(selEdge.curves)}</span>
+                          <span className="text-success">on {curveNames(selEdge.curves)}</span>
                           <button
                             onClick={() =>
                               onUpdateBlocking(disassociateEdges(blocking, [selEdge.id]))
@@ -6045,7 +6103,7 @@ boundary
                           </button>
                         </>
                       ) : (
-                        <span className="text-[#9AA1AB]">not associated</span>
+                        <span className="text-fg-3">not associated</span>
                       )}
                     </div>
                   </div>
@@ -6056,31 +6114,31 @@ boundary
                   outsideBlockIds.size > 0 ||
                   unpatchedEdgeIds.size > 0 ||
                   (blockCoverage !== null && blockCoverage < 0.995)) && (
-                  <div className="bg-white border border-[#E1E4E8] rounded px-2 py-1 text-[11px] leading-snug max-w-[520px]">
+                  <div className="bg-surface border border-line rounded px-2 py-1 text-[11px] leading-snug max-w-[520px]">
                     {blockMsg && (
-                      <div className={blockMsg.error ? 'text-[#DC2626]' : 'text-[#434A54]'}>
+                      <div className={blockMsg.error ? 'text-danger' : 'text-fg'}>
                         {blockMsg.text}
                       </div>
                     )}
                     {outsideBlockIds.size > 0 && (
-                      <div className="text-[#DC2626]">
+                      <div className="text-danger">
                         {outsideBlockIds.size} block{outsideBlockIds.size > 1 ? 's' : ''} outside
                         the fluid
                       </div>
                     )}
                     {badBlockIds.size > 0 && (
-                      <div className="text-[#DC2626]">
+                      <div className="text-danger">
                         {badBlockIds.size} block{badBlockIds.size > 1 ? 's' : ''} over a body
                       </div>
                     )}
                     {unpatchedEdgeIds.size > 0 && (
-                      <div className="text-[#DC2626]">
+                      <div className="text-danger">
                         {unpatchedEdgeIds.size} unpatched boundary edge
                         {unpatchedEdgeIds.size > 1 ? 's' : ''}
                       </div>
                     )}
                     {blockCoverage !== null && blockCoverage < 0.995 && (
-                      <div className="text-[#D97706]">
+                      <div className="text-warning">
                         {Math.round(blockCoverage * 100)}% of the fluid blocked
                       </div>
                     )}
@@ -6090,14 +6148,12 @@ boundary
             );
           })()}
         {displayOnly && meshOnly && !showField && livePreview && (
-          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-white border border-[#E1E4E8] rounded px-2 py-1 text-xs select-none">
+          <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-surface border border-line rounded px-2 py-1 text-xs select-none">
             <button
               onClick={() => setLiveMeshOn((m) => !m)}
               title="Toggle mesh wireframe overlay"
               className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                liveMeshOn
-                  ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold'
-                  : 'text-[#69717D] hover:text-[#171A1F]'
+                liveMeshOn ? 'bg-app text-fg font-semibold' : 'text-fg-2 hover:text-fg'
               }`}
             >
               Mesh
@@ -6111,8 +6167,8 @@ boundary
                   title={liveField === f ? 'Click to hide this field' : undefined}
                   className={`px-2 py-0.5 rounded text-[11px] font-medium ${
                     liveField === f
-                      ? 'bg-[#2563EB] text-white font-semibold'
-                      : 'text-[#69717D] hover:text-[#171A1F]'
+                      ? 'bg-accent-soft text-accent-fg font-semibold'
+                      : 'text-fg-2 hover:text-fg'
                   }`}
                 >
                   {f === 'U_mag' ? '[U]' : f}
@@ -6123,7 +6179,7 @@ boundary
 
         <canvas
           ref={glCanvasRef}
-          className="absolute inset-0 w-full h-full block pointer-events-none bg-[#FAFAFA]"
+          className="absolute inset-0 w-full h-full block pointer-events-none bg-viewport"
         />
 
         <canvas
@@ -6156,10 +6212,10 @@ boundary
             const fieldLabel = labels[activeField] || { name: activeField, unit: '' };
             return (
               <div
-                className="absolute right-3 w-fit bg-white/95 border border-[#E1E4E8] rounded p-1.5 pr-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+                className="absolute right-3 w-fit bg-surface/95 border border-line rounded p-1.5 pr-2 text-[10px] font-mono text-fg-2 pointer-events-none"
                 style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
               >
-                <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
+                <div className="mb-1 text-right text-fg font-semibold whitespace-nowrap">
                   {fieldLabel.name} {fieldLabel.unit}
                 </div>
                 <div className="flex items-stretch justify-end h-56">
@@ -6169,7 +6225,7 @@ boundary
                     <span>{Number(r[0]).toPrecision(3)}</span>
                   </div>
                   <div
-                    className="ml-1 w-2.5 shrink-0 rounded-sm border border-[#DDE2E8]"
+                    className="ml-1 w-2.5 shrink-0 rounded-sm border border-line"
                     style={{ background: `linear-gradient(to bottom, ${stops.join(',')})` }}
                   />
                 </div>
@@ -6185,41 +6241,36 @@ boundary
           meshSkew &&
           meshSkewStats && (
             <div
-              className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+              className="absolute right-3 z-20 w-fit bg-surface/95 border border-line rounded p-2 text-[10px] font-mono text-fg-2 pointer-events-none"
               style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
             >
-              <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
+              <div className="mb-1 text-right text-fg font-semibold whitespace-nowrap">
                 Cell skewness
               </div>
               <div className="flex items-stretch justify-end h-56">
                 <div className="flex flex-col justify-between items-end whitespace-nowrap pr-1">
-                  <span className="text-[#DC2626] font-semibold">1.0 · degenerate</span>
+                  <span className="text-danger font-semibold">1.0 · degenerate</span>
                   <span>0.80 · poor</span>
                   <span>0.50 · fair</span>
                   <span>0.25 · good</span>
-                  <span className="text-[#16A34A] font-semibold">0.0 · ideal</span>
+                  <span className="text-success font-semibold">0.0 · ideal</span>
                 </div>
                 <div
-                  className="w-3 shrink-0 rounded-sm border border-[#DDE2E8]"
+                  className="w-3 shrink-0 rounded-sm border border-line"
                   style={{
                     background: `linear-gradient(to bottom, ${Array.from({ length: 16 }, (_, i) => colormapRGB(1 - i / 15, 'quality')).join(',')})`,
                   }}
                 />
               </div>
-              <div className="mt-2 pt-2 border-t border-[#EDEFF3] text-right leading-relaxed">
+              <div className="mt-2 pt-2 border-t border-line-soft text-right leading-relaxed">
                 <div>
-                  max{' '}
-                  <span className="text-[#171A1F] font-semibold">
-                    {meshSkewStats.max.toFixed(2)}
-                  </span>
+                  max <span className="text-fg font-semibold">{meshSkewStats.max.toFixed(2)}</span>
                 </div>
                 <div>
                   median{' '}
-                  <span className="text-[#171A1F] font-semibold">
-                    {meshSkewStats.median.toFixed(2)}
-                  </span>
+                  <span className="text-fg font-semibold">{meshSkewStats.median.toFixed(2)}</span>
                 </div>
-                <div className={meshSkewStats.poorPct > 2 ? 'text-[#DC2626] font-semibold' : ''}>
+                <div className={meshSkewStats.poorPct > 2 ? 'text-danger font-semibold' : ''}>
                   {meshSkewStats.poor} cells &gt; 0.8 ({meshSkewStats.poorPct.toFixed(1)}%)
                 </div>
               </div>
@@ -6229,10 +6280,10 @@ boundary
         {/* ─── Live solver preview legend (Solver tab) ─── */}
         {liveVals && (
           <div
-            className="absolute right-3 z-20 w-fit bg-white/95 border border-[#E1E4E8] rounded p-2 text-[10px] font-mono text-[#69717D] pointer-events-none"
+            className="absolute right-3 z-20 w-fit bg-surface/95 border border-line rounded p-2 text-[10px] font-mono text-fg-2 pointer-events-none"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
-            <div className="mb-1 text-right text-[#171A1F] font-semibold whitespace-nowrap">
+            <div className="mb-1 text-right text-fg font-semibold whitespace-nowrap">
               {liveField === 'U_mag' ? '[U] m/s' : liveField === 'p' ? 'p Pa' : 'k m²/s²'}
               {livePreview?.time ? ` · t=${livePreview.time}` : ''}
             </div>
@@ -6243,7 +6294,7 @@ boundary
                 <span>{Number(liveRange[0]).toPrecision(3)}</span>
               </div>
               <div
-                className="w-3 shrink-0 rounded-sm border border-[#DDE2E8]"
+                className="w-3 shrink-0 rounded-sm border border-line"
                 style={{
                   background: `linear-gradient(to bottom, ${Array.from({ length: 14 }, (_, i) => colormapRGB(1 - i / 13, colormap)).join(',')})`,
                 }}
@@ -6255,7 +6306,7 @@ boundary
         {/* ─── Transient Flow Simulation Player ─── */}
         {showField && isTransient && (
           <div
-            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-white border border-[#E1E4E8] rounded px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
+            className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-surface border border-line rounded px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
           >
             {/* 5 Playback Control Buttons: First, Prev, Play/Pause, Next, Last */}
@@ -6265,7 +6316,7 @@ boundary
                 onClick={() => onSelectTransientFrame?.(0)}
                 disabled={transientTimes.length === 0 || transientFrameIndex === 0}
                 title="First Frame"
-                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-fg-2 hover:text-fg hover:bg-app disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <ChevronFirst className="w-4 h-4" />
               </button>
@@ -6275,7 +6326,7 @@ boundary
                 onClick={() => onSelectTransientFrame?.(transientFrameIndex - 1)}
                 disabled={transientTimes.length === 0 || transientFrameIndex === 0}
                 title="Previous Frame"
-                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-fg-2 hover:text-fg hover:bg-app disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <SkipBack className="w-3.5 h-3.5" />
               </button>
@@ -6285,7 +6336,7 @@ boundary
                 onClick={() => onToggleTransientPlay?.()}
                 disabled={transientTimes.length < 2}
                 title={transientPlaying ? 'Pause' : 'Play Simulation'}
-                className="p-2 rounded-full bg-[#2563EB] hover:bg-[#1D4ED8] text-white disabled:opacity-40 disabled:pointer-events-none transition-transform active:scale-95 flex items-center justify-center mx-0.5"
+                className="p-2 rounded-full bg-accent hover:bg-accent-hover text-white disabled:opacity-40 disabled:pointer-events-none transition-transform active:scale-95 flex items-center justify-center mx-0.5"
               >
                 {transientPlaying ? (
                   <Pause className="w-4 h-4 fill-current" />
@@ -6301,7 +6352,7 @@ boundary
                   transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1
                 }
                 title="Next Frame"
-                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-fg-2 hover:text-fg hover:bg-app disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <SkipForward className="w-3.5 h-3.5" />
               </button>
@@ -6313,7 +6364,7 @@ boundary
                   transientTimes.length === 0 || transientFrameIndex >= transientTimes.length - 1
                 }
                 title="Last Frame"
-                className="p-1.5 rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                className="p-1.5 rounded text-fg-2 hover:text-fg hover:bg-app disabled:opacity-30 disabled:pointer-events-none transition-colors"
               >
                 <ChevronLast className="w-4 h-4" />
               </button>
@@ -6321,10 +6372,10 @@ boundary
 
             {/* Middle: Timeline Slider & Timestamp display */}
             <div className="flex-1 flex flex-col justify-center min-w-0 px-1 gap-1">
-              <div className="flex items-center justify-between text-[10px] font-mono text-[#69717D]">
+              <div className="flex items-center justify-between text-[10px] font-mono text-fg-2">
                 <span>
                   Time:{' '}
-                  <strong className="text-[#171A1F]">
+                  <strong className="text-fg">
                     {transientTimes[transientFrameIndex] !== undefined
                       ? `${transientTimes[transientFrameIndex]}s`
                       : '0.00s'}
@@ -6332,7 +6383,7 @@ boundary
                 </span>
                 <span>
                   Frame{' '}
-                  <strong className="text-[#171A1F]">
+                  <strong className="text-fg">
                     {transientTimes.length > 0 ? transientFrameIndex + 1 : 0}
                   </strong>{' '}
                   / {transientTimes.length || 1}
@@ -6346,20 +6397,20 @@ boundary
                 value={transientFrameIndex}
                 onChange={(e) => onSelectTransientFrame?.(parseInt(e.target.value, 10))}
                 disabled={transientTimes.length < 2}
-                className="w-full h-1.5 bg-[#E1E4E8] rounded appearance-none cursor-pointer accent-[#2563EB] disabled:cursor-not-allowed"
+                className="w-full h-1.5 bg-line rounded appearance-none cursor-pointer accent-accent disabled:cursor-not-allowed"
               />
             </div>
 
             {/* Rightmost: Speed Controls (0.05x, 0.1x, 0.25x, 0.5x, 1x, 2x) */}
-            <div className="flex items-center gap-1 shrink-0 pl-2 border-l border-[#E1E4E8]">
+            <div className="flex items-center gap-1 shrink-0 pl-2 border-l border-line">
               {([0.05, 0.1, 0.25, 0.5, 1, 2] as const).map((spd) => (
                 <button
                   key={spd}
                   onClick={() => onSelectTransientSpeed?.(spd)}
                   className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium transition-colors ${
                     transientSpeed === spd
-                      ? 'bg-[#2563EB] text-white font-semibold'
-                      : 'text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]'
+                      ? 'bg-accent-soft text-accent-fg font-semibold'
+                      : 'text-fg-2 hover:text-fg hover:bg-app'
                   }`}
                 >
                   {spd}x
@@ -6371,9 +6422,9 @@ boundary
 
         {/* --- Historical field loading overlay --- */}
         {showField && historicalStatus?.loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-30 pointer-events-none">
-            <div className="flex items-center gap-2 px-3 py-2 bg-white border border-[#E1E4E8] rounded text-xs font-medium text-[#171A1F]">
-              <Loader2 className="w-4 h-4 animate-spin text-[#2563EB]" />
+          <div className="absolute inset-0 flex items-center justify-center bg-surface/50 z-30 pointer-events-none">
+            <div className="flex items-center gap-2 px-3 py-2 bg-surface border border-line rounded text-xs font-medium text-fg">
+              <Loader2 className="w-4 h-4 animate-spin text-accent" />
               <span>Loading flow field snapshot...</span>
             </div>
           </div>
@@ -6381,16 +6432,14 @@ boundary
 
         {/* --- Historical field error overlay (e.g. 404 / no field stored) --- */}
         {showField && historicalStatus?.error && (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#FAFAFA]/90 z-30 pointer-events-auto">
-            <div className="max-w-sm bg-white border border-[#E1E4E8] rounded p-5 text-center space-y-3">
-              <div className="w-9 h-9 rounded-full bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center mx-auto">
+          <div className="absolute inset-0 flex items-center justify-center bg-viewport/90 z-30 pointer-events-auto">
+            <div className="max-w-sm bg-surface border border-line rounded p-5 text-center space-y-3">
+              <div className="w-9 h-9 rounded-full bg-warning-soft border border-warning-line text-warning flex items-center justify-center mx-auto">
                 <AlertCircle className="w-5 h-5" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-xs font-semibold text-[#171A1F]">
-                  No flow field stored for this run
-                </h3>
-                <p className="text-[11px] text-[#69717D] leading-relaxed">
+                <h3 className="text-xs font-semibold text-fg">No flow field stored for this run</h3>
+                <p className="text-[11px] text-fg-2 leading-relaxed">
                   {historicalStatus.error.toLowerCase().includes('404') ||
                   historicalStatus.error.toLowerCase().includes('no stored')
                     ? 'This solver run has no stored field snapshot on disk. It may have errored or stopped before fields were written.'
@@ -6401,7 +6450,7 @@ boundary
                 <button
                   type="button"
                   onClick={onRestoreLive}
-                  className="px-3 py-1.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded text-xs font-medium transition-colors cursor-pointer"
+                  className="px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors cursor-pointer"
                 >
                   Back to Latest Run
                 </button>
@@ -6422,14 +6471,14 @@ boundary
 
             return (
               <div
-                className="absolute z-30 flex items-center gap-2 bg-white text-[#171A1F] px-2.5 py-1.5 rounded-sm border border-[#E1E4E8] text-xs font-mono select-none transition-all duration-75"
+                className="absolute z-30 flex items-center gap-2 bg-surface text-fg px-2.5 py-1.5 rounded-sm border border-line text-xs font-mono select-none transition-all duration-75"
                 style={{ left: `${posX}px`, top: `${posY}px` }}
                 onClick={(e) => e.stopPropagation()}
                 onMouseDown={(e) => e.stopPropagation()}
               >
                 {/* Field 1 */}
                 <div className="flex items-center gap-1">
-                  <span className="text-[#2563EB] font-bold text-[11px]">{dimPrompt.label1}:</span>
+                  <span className="text-accent font-bold text-[11px]">{dimPrompt.label1}:</span>
                   <input
                     ref={input1Ref}
                     type="number"
@@ -6444,16 +6493,14 @@ boundary
                       }
                     }}
                     onKeyDown={handleDimKeyDown}
-                    className="w-20 px-1.5 py-0.5 bg-[#F5F6F8] hover:bg-white focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-right text-[#171A1F] font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
+                    className="w-20 px-1.5 py-0.5 bg-app hover:bg-surface focus:bg-surface border border-line focus:border-accent rounded text-right text-fg font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
                   />
                 </div>
 
                 {/* Field 2 */}
                 {dimPrompt.label2 && (
                   <div className="flex items-center gap-1">
-                    <span className="text-[#2563EB] font-bold text-[11px]">
-                      {dimPrompt.label2}:
-                    </span>
+                    <span className="text-accent font-bold text-[11px]">{dimPrompt.label2}:</span>
                     <input
                       ref={input2Ref}
                       type="number"
@@ -6468,17 +6515,17 @@ boundary
                         }
                       }}
                       onKeyDown={handleDimKeyDown}
-                      className="w-18 px-1.5 py-0.5 bg-[#F5F6F8] hover:bg-white focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-right text-[#171A1F] font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
+                      className="w-18 px-1.5 py-0.5 bg-app hover:bg-surface focus:bg-surface border border-line focus:border-accent rounded text-right text-fg font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none transition-colors"
                     />
                   </div>
                 )}
 
                 {/* Hints */}
-                <div className="flex items-center gap-1 pl-1.5 border-l border-[#E1E4E8] text-[9px] text-[#69717D]">
-                  <span className="px-1 py-0.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-[8px] font-semibold">
+                <div className="flex items-center gap-1 pl-1.5 border-l border-line text-[10px] text-fg-2">
+                  <span className="px-1 py-0.5 bg-app border border-line rounded text-[10px] font-semibold">
                     Tab ⇥
                   </span>
-                  <span className="px-1 py-0.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-[8px] font-semibold">
+                  <span className="px-1 py-0.5 bg-app border border-line rounded text-[10px] font-semibold">
                     ↵
                   </span>
                 </div>
@@ -6492,28 +6539,26 @@ boundary
         <>
           {/* Bottom Left: Live Cursor Position & Google Maps Style Scale Indicator */}
           <div
-            className="absolute left-3 z-20 flex items-center gap-3 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+            className="absolute left-3 z-20 flex items-center gap-3 bg-surface border border-line rounded-sm px-2.5 py-1 text-[11px] font-mono text-fg-2 pointer-events-none select-none"
             style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
           >
             <div className="flex items-center gap-2.5">
               <span>
-                X: <strong className="text-[#171A1F]">{hud.x}</strong>
+                X: <strong className="text-fg">{hud.x}</strong>
               </span>
               <span>
-                Y: <strong className="text-[#171A1F]">{hud.y}</strong>
+                Y: <strong className="text-fg">{hud.y}</strong>
               </span>
             </div>
 
-            <div className="h-3 w-px bg-[#D0D4DC]" />
+            <div className="h-3 w-px bg-line-strong" />
 
             {/* Google Maps Style Scale Indicator */}
             <div className="flex items-center gap-1.5" title={`Scale: ${scaleInfo.label}`}>
-              <span className="text-[10px] font-bold text-[#171A1F] leading-none">
-                {scaleInfo.label}
-              </span>
+              <span className="text-[10px] font-bold text-fg leading-none">{scaleInfo.label}</span>
               <div className="flex items-end h-2">
                 <div
-                  className="h-1.5 border-l-2 border-r-2 border-b border-[#171A1F] bg-black/5"
+                  className="h-1.5 border-l-2 border-r-2 border-b border-fg bg-fg/5"
                   style={{ width: `${scaleInfo.barWidthPx}px` }}
                 />
               </div>
@@ -6521,10 +6566,8 @@ boundary
 
             {tool !== 'select' && snap.type !== 'grid' && (
               <>
-                <div className="h-3 w-px bg-[#D0D4DC]" />
-                <span className="text-[10px] text-[#16A34A] uppercase font-bold">
-                  [{snap.type}]
-                </span>
+                <div className="h-3 w-px bg-line-strong" />
+                <span className="text-[10px] text-success uppercase font-bold">[{snap.type}]</span>
               </>
             )}
           </div>
@@ -6538,27 +6581,27 @@ boundary
               const skew = meshData.quality?.max_skewness;
               return (
                 <div
-                  className="absolute right-3 z-20 flex items-center gap-3 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  className="absolute right-3 z-20 flex items-center gap-3 bg-surface border border-line rounded-sm px-2.5 py-1 text-[11px] font-mono text-fg-2 pointer-events-none select-none"
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
                   <span>
-                    <strong className="text-[#171A1F]">{meshData.num_nodes}</strong> nodes
+                    <strong className="text-fg">{meshData.num_nodes}</strong> nodes
                   </span>
                   <span>
-                    <strong className="text-[#171A1F]">{meshData.num_elements}</strong> cells
+                    <strong className="text-fg">{meshData.num_elements}</strong> cells
                   </span>
                   <span>
-                    <strong className="text-[#171A1F]">{triangles}</strong> tri ·{' '}
-                    <strong className="text-[#171A1F]">{quads}</strong> quad
+                    <strong className="text-fg">{triangles}</strong> tri ·{' '}
+                    <strong className="text-fg">{quads}</strong> quad
                   </span>
                   {minAngle !== undefined && (
-                    <span className={minAngle < 15 ? 'text-amber-600' : 'text-[#16A34A]'}>
+                    <span className={minAngle < 15 ? 'text-warning' : 'text-success'}>
                       <strong>{minAngle.toFixed(0)}°</strong> min
                     </span>
                   )}
                   {skew !== undefined && (
                     <span>
-                      skew <strong className="text-[#171A1F]">{skew.toFixed(2)}</strong>
+                      skew <strong className="text-fg">{skew.toFixed(2)}</strong>
                     </span>
                   )}
                 </div>
@@ -6569,25 +6612,23 @@ boundary
               const isCircular = tool === 'circle_center_radius' || tool === 'ellipse_center';
               return (
                 <div
-                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-surface border border-line rounded-sm px-2.5 py-1 text-[11px] font-mono text-fg-2 pointer-events-none select-none"
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
                   {isCircular ? (
                     <span>
                       ⌀:{' '}
-                      <strong className="text-[#171A1F]">
-                        {(parseFloat(hud.length) * 2).toFixed(3)}
-                      </strong>{' '}
+                      <strong className="text-fg">{(parseFloat(hud.length) * 2).toFixed(3)}</strong>{' '}
                       m
                     </span>
                   ) : (
                     <>
                       <span>
-                        L: <strong className="text-[#171A1F]">{hud.length}</strong> m
+                        L: <strong className="text-fg">{hud.length}</strong> m
                       </span>
-                      <div className="h-3 w-px bg-[#D0D4DC]" />
+                      <div className="h-3 w-px bg-line-strong" />
                       <span>
-                        ∠: <strong className="text-[#171A1F]">{hud.angle}</strong>°
+                        ∠: <strong className="text-fg">{hud.angle}</strong>°
                       </span>
                     </>
                   )}
@@ -6598,15 +6639,15 @@ boundary
             if (hoveredVertex) {
               return (
                 <div
-                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1 text-[11px] font-mono text-[#69717D] pointer-events-none select-none"
+                  className="absolute right-3 z-20 flex items-center gap-2.5 bg-surface border border-line rounded-sm px-2.5 py-1 text-[11px] font-mono text-fg-2 pointer-events-none select-none"
                   style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 10px)' }}
                 >
-                  <span className="text-[10px] uppercase font-bold text-[#69717D]">Vertex</span>
+                  <span className="text-[10px] uppercase font-bold text-fg-2">Vertex</span>
                   <span>
-                    X: <strong className="text-[#171A1F]">{hoveredVertex.x.toFixed(4)}</strong>
+                    X: <strong className="text-fg">{hoveredVertex.x.toFixed(4)}</strong>
                   </span>
                   <span>
-                    Y: <strong className="text-[#171A1F]">{hoveredVertex.y.toFixed(4)}</strong>
+                    Y: <strong className="text-fg">{hoveredVertex.y.toFixed(4)}</strong>
                   </span>
                 </div>
               );
@@ -6618,18 +6659,18 @@ boundary
       )}
 
       {meshToastVisible && (
-        <div className="absolute right-4 bottom-10 z-40 w-72 rounded border border-[#D9E2F2] bg-white px-3.5 py-3 pointer-events-none">
+        <div className="absolute right-4 bottom-10 z-40 w-72 rounded border border-accent-line bg-surface px-3.5 py-3 pointer-events-none">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-[#171A1F]">
+            <span className="text-xs font-semibold text-fg">
               {meshProgress >= 100 ? 'Mesh complete' : 'Generating mesh'}
             </span>
-            <span className="text-xs font-mono font-semibold text-[#2563EB]">
+            <span className="text-xs font-mono font-semibold text-accent">
               {Math.round(meshProgress)}%
             </span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#E8EEF8]">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-accent-soft">
             <div
-              className="h-full rounded-full bg-[#2563EB] transition-[width] duration-150 ease-out"
+              className="h-full rounded-full bg-accent transition-[width] duration-150 ease-out"
               style={{ width: `${meshProgress}%` }}
             />
           </div>

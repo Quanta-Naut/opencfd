@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { StageId, StageStatus } from './WorkflowStrip';
+import type { StageId, StageStatus } from './stages';
 import { SolverPanel } from '../solver/SolverPanel';
 import { Tooltip } from '../ui/Tooltip';
 import { CFDProjectState, TurbulenceModel, SolverType } from '../../types/cfd';
@@ -356,12 +356,12 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   return (
     <aside
       style={{ width }}
-      className={`relative h-full bg-white border-r border-[#E1E4E8] flex flex-col select-none shrink-0 ${activeStage === 'mesh' || activeStage === 'results' ? 'overflow-hidden' : 'overflow-y-auto'}`}
+      className={`relative h-full bg-surface border-r border-line flex flex-col select-none shrink-0 ${activeStage === 'mesh' || activeStage === 'results' ? 'overflow-hidden' : 'overflow-y-auto'}`}
     >
       <div
         onMouseDown={startResize}
         title="Drag to resize"
-        className="absolute top-0 right-0 h-full w-1.5 z-30 cursor-col-resize hover:bg-[#2563EB]/30 transition-colors"
+        className="absolute top-0 right-0 h-full w-1.5 z-30 cursor-col-resize hover:bg-accent/30 transition-colors"
       />
       {/* 01 GEOMETRY · DOMAIN · BOUNDARY PATCHES (single-open accordion) */}
       {activeStage === 'geometry' &&
@@ -373,8 +373,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           // Selection state: subtle blue outline + tint instead of a solid fill.
           const sel = (active: boolean) =>
             active
-              ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]'
-              : 'border-[#E1E4E8] bg-white text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]';
+              ? 'border-accent bg-accent-soft text-accent-fg'
+              : 'border-line bg-surface text-fg-2 hover:border-line-strong hover:bg-surface-2';
 
           const toggle = (n: CadWorkflowStep) => {
             setOpenGeoSection((prev) => (prev === n ? null : n));
@@ -384,23 +384,23 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           const section = (n: CadWorkflowStep, label: string, body: React.ReactNode) => {
             const isOpen = openGeoSection === n;
             return (
-              <div className="border border-[#E1E4E8] rounded bg-white overflow-hidden">
+              <div className="border border-line rounded bg-surface overflow-hidden">
                 <button
                   onClick={() => toggle(n)}
-                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${isOpen ? 'bg-[#F8FAFC]' : 'hover:bg-[#F8FAFC]'}`}
+                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${isOpen ? 'bg-surface-2' : 'hover:bg-surface-2'}`}
                 >
                   <span
-                    className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold shrink-0 border ${isOpen ? 'bg-blue-50 text-[#2563EB] border-[#2563EB]' : 'bg-[#F1F3F5] text-[#A5ACB5] border-transparent'}`}
+                    className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold shrink-0 border ${isOpen ? 'bg-accent-soft text-accent border-accent' : 'bg-surface-3 text-fg-4 border-transparent'}`}
                   >
                     {n}
                   </span>
                   <span
-                    className={`flex-1 text-[11px] font-semibold uppercase tracking-wider ${isOpen ? 'text-[#2563EB]' : 'text-[#69717D]'}`}
+                    className={`flex-1 text-[11px] font-semibold uppercase tracking-wider ${isOpen ? 'text-accent' : 'text-fg-2'}`}
                   >
                     {label}
                   </span>
                   <ChevronDown
-                    className={`w-3.5 h-3.5 text-[#A5ACB5] transition-transform ${isOpen ? 'rotate-180' : ''}`}
+                    className={`w-3.5 h-3.5 text-fg-4 transition-transform ${isOpen ? 'rotate-180' : ''}`}
                   />
                 </button>
                 {isOpen && <div className="px-3 pb-3.5 pt-1">{body}</div>}
@@ -409,7 +409,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           };
 
           return (
-            <div className="p-3 pb-10 space-y-2 text-xs text-[#171A1F]">
+            <div className="p-3 pb-10 space-y-2 text-xs text-fg">
               {/* ══════════ 1 · GEOMETRY ══════════ */}
               {section(
                 1,
@@ -433,31 +433,31 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={() => fileInputAirfoilRef.current?.click()}
-                      className="group py-3 px-2 bg-white hover:bg-[#F8FAFC] border border-[#E1E4E8] hover:border-[#171A1F] rounded font-medium flex flex-col items-center gap-1.5 transition-all"
+                      className="group py-3 px-2 bg-surface hover:bg-surface-2 border border-line hover:border-fg rounded font-medium flex flex-col items-center gap-1.5 transition-all"
                     >
-                      <Upload className="w-4 h-4 text-[#69717D] group-hover:text-[#171A1F]" />
-                      <span className="text-[11px] text-[#171A1F]">.dat / .csv</span>
-                      <span className="text-[9px] text-[#A5ACB5]">airfoil coords</span>
+                      <Upload className="w-4 h-4 text-fg-2 group-hover:text-fg" />
+                      <span className="text-[11px] text-fg">.dat / .csv</span>
+                      <span className="text-[10px] text-fg-4">airfoil coords</span>
                     </button>
                     <button
                       onClick={() => fileInputDxfRef.current?.click()}
-                      className="group py-3 px-2 bg-white hover:bg-[#F8FAFC] border border-[#E1E4E8] hover:border-[#171A1F] rounded font-medium flex flex-col items-center gap-1.5 transition-all"
+                      className="group py-3 px-2 bg-surface hover:bg-surface-2 border border-line hover:border-fg rounded font-medium flex flex-col items-center gap-1.5 transition-all"
                     >
-                      <FileCode className="w-4 h-4 text-[#69717D] group-hover:text-[#171A1F]" />
-                      <span className="text-[11px] text-[#171A1F]">DXF drawing</span>
-                      <span className="text-[9px] text-[#A5ACB5]">2D CAD outline</span>
+                      <FileCode className="w-4 h-4 text-fg-2 group-hover:text-fg" />
+                      <span className="text-[11px] text-fg">DXF drawing</span>
+                      <span className="text-[10px] text-fg-4">2D CAD outline</span>
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-2 text-[9px] font-semibold uppercase tracking-wider text-[#A5ACB5]">
-                    <span className="h-px flex-1 bg-[#E1E4E8]" />
+                  <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-fg-4">
+                    <span className="h-px flex-1 bg-line" />
                     or paste a URL
-                    <span className="h-px flex-1 bg-[#E1E4E8]" />
+                    <span className="h-px flex-1 bg-line" />
                   </div>
 
                   <div className="space-y-1.5">
                     <div className="relative">
-                      <Link className="w-3.5 h-3.5 text-[#A5ACB5] absolute left-2.5 top-2.5" />
+                      <Link className="w-3.5 h-3.5 text-fg-4 absolute left-2.5 top-2.5" />
                       <input
                         type="url"
                         value={airfoilUrl}
@@ -472,31 +472,31 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           }
                         }}
                         placeholder="Selig / UIUC .dat link…"
-                        className="w-full pl-8 pr-2 py-2 bg-[#F8FAFC] focus:bg-white border border-[#E1E4E8] focus:border-[#2563EB] rounded text-[11px] font-mono text-[#171A1F] outline-none transition-colors"
+                        className="w-full pl-8 pr-2 py-2 bg-surface-2 focus:bg-surface border border-line focus:border-accent rounded text-[11px] font-mono placeholder:font-sans text-fg outline-none transition-colors"
                       />
                     </div>
                     <button
                       onClick={handleImportUrl}
                       disabled={!airfoilUrl.trim() || isFetchingUrl}
-                      className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 text-white rounded text-[11px] font-semibold transition-colors"
+                      className="w-full py-2 bg-accent hover:bg-accent-hover disabled:opacity-40 text-white rounded text-[11px] font-semibold transition-colors"
                     >
                       {isFetchingUrl ? 'Fetching…' : 'Fetch airfoil'}
                     </button>
                     {urlError && (
-                      <span className="text-[10px] text-red-600 block leading-tight">
+                      <span className="text-[10px] text-danger block leading-tight">
                         {urlError}
                       </span>
                     )}
                   </div>
 
                   <div className="flex items-center justify-between pt-1">
-                    <span className="text-[10px] text-[#A5ACB5]">
+                    <span className="text-[10px] text-fg-4">
                       Everything you draw here is geometry.
                     </span>
                     <button
                       onClick={onClearGeometry}
                       title="Clear all geometry"
-                      className="px-2.5 py-1.5 bg-white hover:bg-red-50 hover:text-[#DC2626] hover:border-red-200 text-[#A5ACB5] border border-[#E1E4E8] rounded transition-colors"
+                      className="px-2.5 py-1.5 bg-surface hover:bg-danger-soft hover:text-danger hover:border-danger-line text-fg-4 border border-line rounded transition-colors"
                     >
                       <RotateCcw className="w-3 h-3" />
                     </button>
@@ -524,7 +524,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       >
                         <span className="block text-[11px] font-semibold">{label}</span>
                         <span
-                          className={`block text-[9px] ${flowType === v ? 'text-[#3B82F6]' : 'text-[#A5ACB5]'}`}
+                          className={`block text-[10px] ${flowType === v ? 'text-accent' : 'text-fg-4'}`}
                         >
                           {hint}
                         </span>
@@ -535,11 +535,11 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   {isInternal
                     ? /* moved out of the live UI - see layout/LeftStagePanel.tsx (Domain section),
                     kept for a future tutorial
-                    <div className="p-2.5 bg-[#F8FAFC] border border-[#E1E4E8] rounded text-[10px] text-[#69717D] leading-relaxed">
+                    <div className="p-2.5 bg-surface-2 border border-line rounded text-[10px] text-fg-2 leading-relaxed">
                       The geometry walls bound the fluid directly - no outer domain is generated.
-                      Tag the open ends as <b className="text-[#171A1F]">inlet</b> /{' '}
-                      <b className="text-[#171A1F]">outlet</b> and the solid sides as{' '}
-                      <b className="text-[#171A1F]">wall</b> in step 3.
+                      Tag the open ends as <b className="text-fg">inlet</b> /{' '}
+                      <b className="text-fg">outlet</b> and the solid sides as{' '}
+                      <b className="text-fg">wall</b> in step 3.
                     </div>
                     */
                       null
@@ -550,12 +550,12 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             {/* Collapsible far-field generator - collapsed by default */}
                             <button
                               onClick={() => setFarfieldOpen((v) => !v)}
-                              className="w-full flex items-center gap-1.5 py-1.5 text-[11px] font-semibold text-[#69717D] hover:text-[#171A1F] transition-colors"
+                              className="w-full flex items-center gap-1.5 py-1.5 text-[11px] font-semibold text-fg-2 hover:text-fg transition-colors"
                             >
                               <ChevronRight
-                                className={`w-3.5 h-3.5 transition-transform ${farOpen ? 'rotate-90 text-[#2563EB]' : ''}`}
+                                className={`w-3.5 h-3.5 transition-transform ${farOpen ? 'rotate-90 text-accent' : ''}`}
                               />
-                              <span className={farOpen ? 'text-[#2563EB]' : ''}>
+                              <span className={farOpen ? 'text-accent' : ''}>
                                 Generate a far-field box automatically
                               </span>
                             </button>
@@ -573,7 +573,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                               >
                                 <button
                                   onClick={onSetSelectedAsDomain}
-                                  className={`w-full py-2 rounded font-bold transition-colors text-white ${domainState === 'broken' ? 'bg-[#DC2626] hover:bg-[#B91C1C]' : 'bg-[#2563EB] hover:bg-[#1D4ED8]'}`}
+                                  className={`w-full py-2 rounded font-bold transition-colors text-white ${domainState === 'broken' ? 'bg-danger hover:bg-danger' : 'bg-accent hover:bg-accent-hover'}`}
                                 >
                                   {domainState === 'ok'
                                     ? 'Redefine domain'
@@ -587,7 +587,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             {farOpen && (
                               <div className="space-y-3">
                                 <div>
-                                  <span className="text-[10px] font-semibold text-[#69717D] block mb-1.5">
+                                  <span className="text-[10px] font-semibold text-fg-2 block mb-1.5">
                                     Far-field shape
                                   </span>
                                   <div className="grid grid-cols-3 gap-2">
@@ -652,7 +652,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                                             />
                                           </svg>
                                           <span
-                                            className={`text-[10px] font-bold ${on ? 'text-[#1D4ED8]' : 'text-[#69717D]'}`}
+                                            className={`text-[10px] font-bold ${on ? 'text-accent-fg' : 'text-fg-2'}`}
                                           >
                                             {label}
                                           </span>
@@ -663,7 +663,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                                 </div>
 
                                 <div>
-                                  <span className="text-[10px] font-semibold text-[#69717D] block mb-1.5">
+                                  <span className="text-[10px] font-semibold text-fg-2 block mb-1.5">
                                     Size preset
                                   </span>
                                   <div className="grid grid-cols-4 gap-1.5">
@@ -681,10 +681,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                                   </div>
                                 </div>
 
-                                <div className="bg-[#F8FAFC] border border-[#E1E4E8] rounded p-2.5 space-y-2">
-                                  <div className="flex justify-between items-center text-[10px] text-[#69717D]">
+                                <div className="bg-surface-2 border border-line rounded p-2.5 space-y-2">
+                                  <div className="flex justify-between items-center text-[10px] text-fg-2">
                                     <span className="font-semibold">Clearance (chords)</span>
-                                    <span className="font-mono text-[#2563EB]">
+                                    <span className="font-mono text-accent">
                                       1c = {(geometryBBox?.chord ?? 1.0).toFixed(2)} m
                                     </span>
                                   </div>
@@ -711,10 +711,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                                         },
                                       ] as const
                                     ).map(({ label, cls, v, set: setter }) => (
-                                      <label
-                                        key={label}
-                                        className={`text-[9px] text-[#69717D] ${cls}`}
-                                      >
+                                      <label key={label} className={`text-[10px] text-fg-2 ${cls}`}>
                                         {label}
                                         <NumberField
                                           value={v}
@@ -724,7 +721,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                                             setter?.(n);
                                             setDomainPreset?.('custom');
                                           }}
-                                          className="w-full mt-0.5 px-1 py-1 bg-white border border-[#E1E4E8] focus:border-[#2563EB] outline-none rounded text-center text-[10px] font-mono font-bold text-[#171A1F]"
+                                          className="w-full mt-0.5 px-1 py-1 bg-surface border border-line focus:border-accent outline-none rounded text-center text-[10px] font-mono font-bold text-fg"
                                         />
                                       </label>
                                     ))}
@@ -732,7 +729,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                                 </div>
 
                                 {!domainValidation.valid && domainKind === 'auto' && (
-                                  <div className="flex items-start gap-1 text-[10px] text-[#DC2626]">
+                                  <div className="flex items-start gap-1 text-[10px] text-danger">
                                     <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
                                     <span>
                                       {domainValidation.reason || 'Geometry is outside the domain.'}
@@ -742,7 +739,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
                                 <button
                                   onClick={onGenerateDomain}
-                                  className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded font-bold transition-colors"
+                                  className="w-full py-2 bg-accent hover:bg-accent-hover text-white rounded font-bold transition-colors"
                                 >
                                   Generate domain
                                 </button>
@@ -760,7 +757,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 'Boundary patches',
                 <div className="space-y-3">
                   <div>
-                    <span className="text-[10px] font-semibold text-[#69717D] block mb-1.5">
+                    <span className="text-[10px] font-semibold text-fg-2 block mb-1.5">
                       Flow direction
                     </span>
                     <div className="grid grid-cols-4 gap-1.5">
@@ -779,14 +776,14 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           className={`py-1.5 rounded border flex flex-col items-center transition-colors ${sel(flowDirection === value)}`}
                         >
                           <span className="text-sm font-bold leading-none">{icon}</span>
-                          <span className="text-[9px] font-semibold font-mono">{label}</span>
+                          <span className="text-[10px] font-semibold font-mono">{label}</span>
                         </button>
                       ))}
                     </div>
                   </div>
 
                   <div>
-                    <span className="text-[10px] font-semibold text-[#69717D] block mb-1.5">
+                    <span className="text-[10px] font-semibold text-fg-2 block mb-1.5">
                       {activeTagTool
                         ? `Tagging: ${activeTagTool.toUpperCase()} - click canvas edges (click the tag again to stop)`
                         : 'Pick a tag, then click canvas edges to apply it'}
@@ -811,7 +808,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           <button
                             key={tag}
                             onClick={() => setActiveTagTool?.(isSel ? null : tag)}
-                            className={`py-1.5 px-2 rounded text-[10px] font-semibold uppercase tracking-wider border transition-colors flex items-center gap-1.5 ${isSel ? `${conf.bg} ${conf.text}` : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F8FAFC]'}`}
+                            className={`py-1.5 px-2 rounded text-[10px] font-semibold uppercase tracking-wider border transition-colors flex items-center gap-1.5 ${isSel ? `${conf.bg} ${conf.text}` : 'bg-surface text-fg-2 border-line hover:bg-surface-2'}`}
                             style={isSel ? { borderColor: conf.hex } : undefined}
                           >
                             <span
@@ -819,7 +816,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                               style={{ backgroundColor: isSel ? conf.hex : '#CBD5E1' }}
                             />
                             <span className="flex-1 text-left">{tag}</span>
-                            <span className="text-[9px] font-mono opacity-70">
+                            <span className="text-[10px] font-mono opacity-70">
                               {boundaryValidation.counts[tag] || 0}
                             </span>
                           </button>
@@ -839,13 +836,13 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       setAngleOfAttackDeg?.(dirToAoa[flowDirection] ?? 0);
                       setTimeout(() => onAutoSuggestTags?.(), 30);
                     }}
-                    className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded font-bold transition-all active:scale-[0.99]"
+                    className="w-full py-2 bg-accent hover:bg-accent-hover text-white rounded font-bold transition-all active:scale-[0.99]"
                   >
                     Auto-tag edges
                   </button>
 
                   {(inletCount === 0 || outletCount === 0) && (
-                    <div className="flex items-start gap-1 text-[10px] text-[#DC2626]">
+                    <div className="flex items-start gap-1 text-[10px] text-danger">
                       <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
                       <span>
                         {inletCount === 0 && outletCount === 0
@@ -873,11 +870,11 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             fine: 'Dense wake and near-body. Slower to solve.',
           };
           const field =
-            'w-full px-2 py-1 bg-[#F5F6F8] border border-[#E1E4E8] rounded font-mono focus:outline-none focus:border-[#2563EB]';
+            'w-full px-2 py-1 bg-app border border-line rounded font-mono focus:outline-none focus:border-accent';
           const meshLock = stageStatus?.mesh;
           if (meshLock?.locked) {
             return (
-              <div className="h-full min-h-0 flex flex-col text-xs text-[#171A1F]">
+              <div className="h-full min-h-0 flex flex-col text-xs text-fg">
                 <div className="flex-1 min-h-0 overflow-y-auto">
                   <StageGate
                     title="Meshing is locked"
@@ -886,10 +883,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     onCta={onSelectStage ? () => onSelectStage('geometry') : undefined}
                   />
                 </div>
-                <div className="shrink-0 px-4 pt-3 mt-3 border-t border-[#E1E4E8] bg-white">
+                <div className="shrink-0 px-4 pt-3 mt-3 border-t border-line bg-surface">
                   <button
                     disabled
-                    className="w-full py-2 bg-[#2563EB] text-white font-medium rounded-sm opacity-40"
+                    className="w-full py-2 bg-accent text-white font-medium rounded-sm opacity-40"
                   >
                     Generate mesh
                   </button>
@@ -898,23 +895,23 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             );
           }
           return (
-            <div className="h-full min-h-0 flex flex-col text-xs text-[#171A1F]">
+            <div className="h-full min-h-0 flex flex-col text-xs text-fg">
               <div className="flex-1 min-h-0 overflow-y-auto space-y-4 px-4 pt-4">
                 {/* Topology */}
                 <div>
-                  <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+                  <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
                     Mesh topology
                   </span>
                   <div className="grid grid-cols-2 gap-1.5">
                     <button
                       onClick={() => setMeshTopology('unstructured')}
-                      className={`py-2 rounded border font-medium transition-colors ${meshTopology === 'unstructured' ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white border-[#E1E4E8] text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}
+                      className={`py-2 rounded border font-medium transition-colors ${meshTopology === 'unstructured' ? 'border-accent bg-accent-soft text-accent-fg' : 'bg-surface border-line text-fg-2 hover:border-line-strong hover:bg-surface-2'}`}
                     >
                       Unstructured
                     </button>
                     <button
                       onClick={() => setMeshTopology('structured')}
-                      className={`py-2 rounded border font-medium transition-colors ${meshTopology === 'structured' ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white border-[#E1E4E8] text-[#69717D] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}
+                      className={`py-2 rounded border font-medium transition-colors ${meshTopology === 'structured' ? 'border-accent bg-accent-soft text-accent-fg' : 'bg-surface border-line text-fg-2 hover:border-line-strong hover:bg-surface-2'}`}
                     >
                       Structured
                     </button>
@@ -945,7 +942,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   <>
                     {/* Resolution */}
                     <div>
-                      <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+                      <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
                         Resolution
                       </span>
                       <div className="grid grid-cols-3 gap-1.5">
@@ -953,20 +950,20 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           <button
                             key={res}
                             onClick={() => set({ meshResolution: res })}
-                            className={`py-1.5 rounded capitalize font-medium border transition-colors ${g.meshResolution === res ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]' : 'bg-white text-[#69717D] border-[#E1E4E8] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'}`}
+                            className={`py-1.5 rounded capitalize font-medium border transition-colors ${g.meshResolution === res ? 'border-accent bg-accent-soft text-accent-fg' : 'bg-surface text-fg-2 border-line hover:border-line-strong hover:bg-surface-2'}`}
                           >
                             {res}
                           </button>
                         ))}
                       </div>
-                      <span className="text-[10px] text-[#69717D] block mt-1">
+                      <span className="text-[10px] text-fg-2 block mt-1">
                         {resolutionHint[g.meshResolution]}
                       </span>
                     </div>
 
                     {/* Element type */}
                     <label className="block">
-                      <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+                      <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
                         Element type
                       </span>
                       <select
@@ -974,7 +971,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                         onChange={(e) =>
                           set({ elementType: e.target.value as typeof g.elementType })
                         }
-                        className="w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-sm focus:outline-none focus:border-[#2563EB]"
+                        className="w-full px-2 py-1.5 bg-app border border-line rounded-sm focus:outline-none focus:border-accent"
                       >
                         <option value="hybrid">Hybrid: prism layers at wall + triangles</option>
                         <option value="tri">Triangles: fully unstructured</option>
@@ -984,13 +981,13 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     </label>
 
                     {/* Boundary layer */}
-                    <div className="border-t border-[#E1E4E8] pt-3">
+                    <div className="border-t border-line pt-3">
                       <label className="flex items-center justify-between cursor-pointer">
                         <div>
-                          <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+                          <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block">
                             Boundary layer
                           </span>
-                          <span className="text-[10px] text-[#69717D] block mt-0.5">
+                          <span className="text-[10px] text-fg-2 block mt-0.5">
                             Prism cells along tagged walls
                           </span>
                         </div>
@@ -998,7 +995,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           type="checkbox"
                           checked={g.usePrismLayers}
                           onChange={(e) => set({ usePrismLayers: e.target.checked })}
-                          className="accent-[#2563EB]"
+                          className="accent-accent"
                         />
                       </label>
                       {g.usePrismLayers && (
@@ -1006,7 +1003,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           <div className="grid grid-cols-3 gap-2 mt-2.5">
                             <label>
                               <Tooltip content="Height of the first cell against the wall, in mm. Sets y⁺ together with the flow speed. Smaller = finer boundary layer.">
-                                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                   First cell (mm)
                                 </span>
                               </Tooltip>
@@ -1020,7 +1017,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             </label>
                             <label>
                               <Tooltip content="Number of prism layers stacked from the wall outward.">
-                                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                   Layers
                                 </span>
                               </Tooltip>
@@ -1036,7 +1033,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             </label>
                             <label>
                               <Tooltip content="Each prism layer is this many times thicker than the one below it (1.1-1.3 typical).">
-                                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                   Growth
                                 </span>
                               </Tooltip>
@@ -1052,10 +1049,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           </div>
 
                           <Tooltip content="y⁺, first-cell height and layer count size the prism stack against the wall (Hybrid element type only). They don't set the overall cell size - that's the Resolution preset. For a plain triangle / quad mesh, near-wall size is Local wall / region size under Advanced. Low y⁺ (~1) resolves the boundary layer; high (~30-100) uses wall functions.">
-                            <div className="mt-2.5 p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2 cursor-help">
+                            <div className="mt-2.5 p-2.5 bg-surface-2 border border-line rounded space-y-2 cursor-help">
                               <div className="flex items-end gap-2">
                                 <label className="flex-1">
-                                  <span className="text-[10px] text-[#69717D] block mb-1">
+                                  <span className="text-[10px] text-fg-2 block mb-1">
                                     Target y⁺
                                   </span>
                                   <input
@@ -1065,19 +1062,19 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                                     value={yplusDraft}
                                     onChange={(e) => commitYplusDraft(e.target.value)}
                                     onBlur={normalizeYplusDraft}
-                                    className={`${field} bg-white border-[#E1E4E8]`}
+                                    className={`${field} bg-surface border-line`}
                                   />
                                 </label>
                                 <div className="flex-1 pb-1">
-                                  <span className="text-[10px] text-[#69717D] block">Gives Δy</span>
-                                  <span className="font-mono font-semibold text-[#171A1F]">
+                                  <span className="text-[10px] text-fg-2 block">Gives Δy</span>
+                                  <span className="font-mono font-semibold text-fg">
                                     {state.yplus.first_layer_height_mm?.toFixed(4)} mm
                                   </span>
                                 </div>
                               </div>
                               <button
                                 onClick={onApplyYPlusToMesh}
-                                className="w-full py-1.5 rounded-sm bg-white border border-[#E1E4E8] text-[#171A1F] hover:bg-[#F5F6F8] font-medium transition-colors"
+                                className="w-full py-1.5 rounded-sm bg-surface border border-line text-fg hover:bg-app font-medium transition-colors"
                               >
                                 Apply y⁺ sizing to first cell &amp; layers
                               </button>
@@ -1088,10 +1085,10 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     </div>
 
                     {/* Advanced (collapsible) */}
-                    <div className="border-t border-[#E1E4E8] pt-3">
+                    <div className="border-t border-line pt-3">
                       <button
                         onClick={() => setMeshAdvancedOpen((v) => !v)}
-                        className="w-full flex items-center justify-between text-[11px] font-semibold text-[#69717D] uppercase tracking-wider"
+                        className="w-full flex items-center justify-between text-[11px] font-semibold text-fg-2 uppercase tracking-wider"
                       >
                         <span>Advanced</span>
                         {meshAdvancedOpen ? (
@@ -1103,13 +1100,13 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       {meshAdvancedOpen && (
                         <div className="space-y-2.5 mt-2.5">
                           <label className="block">
-                            <span className="text-[#69717D] block mb-1">Algorithm</span>
+                            <span className="text-fg-2 block mb-1">Algorithm</span>
                             <select
                               value={g.meshAlgorithm}
                               onChange={(e) =>
                                 set({ meshAlgorithm: e.target.value as typeof g.meshAlgorithm })
                               }
-                              className="w-full px-2 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-sm focus:outline-none focus:border-[#2563EB]"
+                              className="w-full px-2 py-1.5 bg-app border border-line rounded-sm focus:outline-none focus:border-accent"
                             >
                               <option value="frontal_delaunay">
                                 Frontal-Delaunay (recommended)
@@ -1121,7 +1118,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           <div className="grid grid-cols-2 gap-2">
                             <label>
                               <Tooltip content="How fast cells grow moving away from the wall. Low (1.1) = wide gradual transition to the coarse free stream; high (1.5+) = fine band collapses to coarse quickly.">
-                                <span className="text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                                <span className="text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                   Growth rate
                                 </span>
                               </Tooltip>
@@ -1136,7 +1133,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             </label>
                             <label>
                               <Tooltip content="Target number of edge segments around a full circle of curvature - controls how finely curved boundaries (arcs, leading edges) are faceted.">
-                                <span className="text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                                <span className="text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                   Elements / curve
                                 </span>
                               </Tooltip>
@@ -1154,7 +1151,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           <div className="grid grid-cols-2 gap-2">
                             <label>
                               <Tooltip content="Absolute smallest cell edge length allowed anywhere, in metres. Blank = auto.">
-                                <span className="text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                                <span className="text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                   Min size (m)
                                 </span>
                               </Tooltip>
@@ -1169,7 +1166,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                             </label>
                             <label>
                               <Tooltip content="Cell edge length in the free stream / far field, in metres. Larger = coarser away from the body. Blank = auto (from the Resolution preset).">
-                                <span className="text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                                <span className="text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                   Max size (m)
                                 </span>
                               </Tooltip>
@@ -1185,7 +1182,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                           </div>
                           <label className="block">
                             <Tooltip content="Cell edge length in the fine band next to wall-tagged edges, in metres. This is the near-wall cell size for a plain triangle / quad mesh (no prism layers). Blank = auto.">
-                              <span className="text-[#69717D] inline-block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                              <span className="text-fg-2 inline-block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                 Local wall / region size (m)
                               </span>
                             </Tooltip>
@@ -1198,9 +1195,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                               className={field}
                             />
                           </label>
-                          <label className="flex items-center justify-between text-[#69717D]">
+                          <label className="flex items-center justify-between text-fg-2">
                             <Tooltip content="Adds cells where the boundary curves sharply (leading edges, fillets) and where two walls come close together (thin gaps), so those features stay resolved. It also widens the fine near-wall band downstream. Turn off for a tighter fine band that drops to coarse faster.">
-                              <span className="cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                              <span className="cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                 Curvature + proximity refinement
                               </span>
                             </Tooltip>
@@ -1208,12 +1205,12 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                               type="checkbox"
                               checked={g.useProximityRefinement}
                               onChange={(e) => set({ useProximityRefinement: e.target.checked })}
-                              className="accent-[#2563EB]"
+                              className="accent-accent"
                             />
                           </label>
-                          <label className="flex items-center justify-between text-[#69717D]">
+                          <label className="flex items-center justify-between text-fg-2">
                             <Tooltip content="After meshing, runs Laplacian smoothing and Netgen optimisation to improve cell shape - fewer slivers, larger minimum angle, more uniform size transitions. Slightly slower. Leave on unless you want the raw generator output.">
-                              <span className="cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                              <span className="cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                                 Optimize / smooth mesh
                               </span>
                             </Tooltip>
@@ -1221,7 +1218,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                               type="checkbox"
                               checked={g.optimizeMesh}
                               onChange={(e) => set({ optimizeMesh: e.target.checked })}
-                              className="accent-[#2563EB]"
+                              className="accent-accent"
                             />
                           </label>
                         </div>
@@ -1231,12 +1228,12 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 )}
               </div>
 
-              <div className="shrink-0 px-4 pt-3 mt-3 border-t border-[#E1E4E8] bg-white space-y-2">
+              <div className="shrink-0 px-4 pt-3 mt-3 border-t border-line bg-surface space-y-2">
                 {meshTopology === 'structured' ? (
                   <button
                     onClick={onGenerateStructuredMesh}
                     disabled={isMeshing || !blocking}
-                    className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-sm transition-colors disabled:opacity-40"
+                    className="w-full py-2 bg-accent hover:bg-accent-hover text-white font-medium rounded-sm transition-colors disabled:opacity-40"
                   >
                     {isMeshing
                       ? 'Generating…'
@@ -1252,7 +1249,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   <button
                     onClick={onGenerateMesh}
                     disabled={isMeshing}
-                    className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-sm transition-colors disabled:opacity-40"
+                    className="w-full py-2 bg-accent hover:bg-accent-hover text-white font-medium rounded-sm transition-colors disabled:opacity-40"
                   >
                     {isMeshing
                       ? 'Generating…'
@@ -1269,20 +1266,20 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
         })()}
       {/* 02 PHYSICS & FLOW SETUP */}
       {activeStage === 'physics' && (
-        <div className="p-4 space-y-4 text-xs text-[#171A1F]">
-          <div className="p-3 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-3">
+        <div className="p-4 space-y-4 text-xs text-fg">
+          <div className="p-3 bg-surface-2 border border-line rounded space-y-3">
             <div className="flex items-start gap-2">
-              <Wind className="w-4 h-4 text-[#69717D] mt-0.5 shrink-0" />
+              <Wind className="w-4 h-4 text-fg-2 mt-0.5 shrink-0" />
               <div>
-                <span className="font-semibold text-[#171A1F] block">Simulation model</span>
-                <span className="text-[10px] text-[#69717D] block mt-0.5">
+                <span className="font-semibold text-fg block">Simulation model</span>
+                <span className="text-[10px] text-fg-2 block mt-0.5">
                   These reference values drive y⁺ and mesh sizing.
                 </span>
               </div>
             </div>
 
             <div>
-              <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+              <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
                 Compressibility
               </span>
               <div className="grid grid-cols-2 gap-1.5">
@@ -1292,23 +1289,23 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     onClick={() => updatePhysics({ compressibility: mode })}
                     className={`py-2 rounded-sm text-[11px] font-medium border transition-colors ${
                       state.physics.compressibility === mode
-                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        ? 'bg-accent-soft text-accent-fg border-accent-line'
+                        : 'bg-surface text-fg-2 border-line hover:bg-app'
                     }`}
                   >
                     {mode === 'incompressible' ? 'Incompressible' : 'Compressible'}
                   </button>
                 ))}
               </div>
-              <span className="text-[10px] text-[#69717D] block mt-1.5">
+              <span className="text-[10px] text-fg-2 block mt-1.5">
                 {state.physics.compressibility === 'compressible'
                   ? 'Temperature and pressure participate in the flow solution.'
                   : 'Density is treated as constant in the flow solution.'}
               </span>
             </div>
 
-            <div className="pt-2 border-t border-blue-100">
-              <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+            <div className="pt-2 border-t border-accent-line">
+              <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
                 Flow regime
               </span>
               <div className="grid grid-cols-2 gap-1.5">
@@ -1318,8 +1315,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     onClick={() => updatePhysics({ regime })}
                     className={`py-1.5 rounded-sm text-[11px] font-medium border transition-colors capitalize ${
                       state.physics.regime === regime
-                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        ? 'bg-accent-soft text-accent-fg border-accent-line'
+                        : 'bg-surface text-fg-2 border-line hover:bg-app'
                     }`}
                   >
                     {regime}
@@ -1329,8 +1326,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 bg-white border border-[#E1E4E8] rounded space-y-3">
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+          <div className="p-3 bg-surface border border-line rounded space-y-3">
+            <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block">
               Reference inlet state
             </span>
             <div className="grid grid-cols-2 gap-2">
@@ -1351,7 +1348,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 },
               ].map((field) => (
                 <label key={field.key} className="block">
-                  <span className="text-[#69717D] block mb-1">{field.label}</span>
+                  <span className="text-fg-2 block mb-1">{field.label}</span>
                   <div className="relative">
                     <input
                       type="number"
@@ -1360,9 +1357,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                       onChange={(e) =>
                         updatePhysics({ [field.key]: parseFloat(e.target.value) || 0 })
                       }
-                      className="w-full px-2 py-1.5 pr-9 bg-[#F8F9FA] border border-[#E1E4E8] rounded font-mono focus:outline-none focus:border-[#2563EB]"
+                      className="w-full px-2 py-1.5 pr-9 bg-surface-2 border border-line rounded font-mono focus:outline-none focus:border-accent"
                     />
-                    <span className="absolute right-2 top-1.5 text-[10px] text-[#A5ACB5]">
+                    <span className="absolute right-2 top-1.5 text-[10px] text-fg-4">
                       {field.unit}
                     </span>
                   </div>
@@ -1370,7 +1367,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               ))}
             </div>
             <label className="block">
-              <span className="text-[#69717D] flex items-center gap-1 mb-1">
+              <span className="text-fg-2 flex items-center gap-1 mb-1">
                 <Thermometer className="w-3 h-3" />
                 Temperature (T∞)
               </span>
@@ -1382,36 +1379,36 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   onChange={(e) =>
                     updatePhysics({ inletTemperature: parseFloat(e.target.value) || 288.15 })
                   }
-                  className="w-full px-2 py-1.5 pr-9 bg-[#F8F9FA] border border-[#E1E4E8] rounded font-mono focus:outline-none focus:border-[#2563EB]"
+                  className="w-full px-2 py-1.5 pr-9 bg-surface-2 border border-line rounded font-mono focus:outline-none focus:border-accent"
                 />
-                <span className="absolute right-2 top-1.5 text-[10px] text-[#A5ACB5]">K</span>
+                <span className="absolute right-2 top-1.5 text-[10px] text-fg-4">K</span>
               </div>
             </label>
           </div>
 
-          <div className="p-3 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-3">
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+          <div className="p-3 bg-surface-2 border border-line rounded space-y-3">
+            <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block">
               Fluid properties
             </span>
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
-                <span className="text-[#69717D] block mb-1">Density (ρ)</span>
+                <span className="text-fg-2 block mb-1">Density (ρ)</span>
                 <NumberField
                   value={state.physics.density}
                   min={0}
                   fallback={1.225}
                   onChange={(n) => updatePhysics({ density: n })}
-                  className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded font-mono"
+                  className="w-full px-2 py-1.5 bg-surface border border-line rounded font-mono"
                 />
               </label>
               <label className="block">
-                <span className="text-[#69717D] block mb-1">Kinematic ν</span>
+                <span className="text-fg-2 block mb-1">Kinematic ν</span>
                 <NumberField
                   value={state.physics.kinematicViscosity}
                   min={0}
                   fallback={1.5e-5}
                   onChange={(n) => updatePhysics({ kinematicViscosity: n })}
-                  className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded font-mono"
+                  className="w-full px-2 py-1.5 bg-surface border border-line rounded font-mono"
                 />
               </label>
             </div>
@@ -1419,7 +1416,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
           {state.physics.regime === 'turbulent' && (
             <div className="space-y-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block">
                 Turbulence model
               </span>
               <select
@@ -1427,7 +1424,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 onChange={(e) =>
                   updatePhysics({ turbulenceModel: e.target.value as TurbulenceModel })
                 }
-                className="w-full px-2.5 py-1.5 bg-[#F5F6F8] border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                className="w-full px-2.5 py-1.5 bg-app border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
                 <option value="kOmegaSST">k-ω SST (Menter)</option>
                 <option value="kEpsilon">Standard k-ε</option>
@@ -1442,9 +1439,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
       {/* 04 y+ CALCULATOR */}
       {activeStage === 'yplus' && (
-        <div className="p-4 space-y-4 text-xs text-[#171A1F]">
+        <div className="p-4 space-y-4 text-xs text-fg">
           <div>
-            <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-2">
+            <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-2">
               Target y⁺ Objective
             </span>
             <div className="grid grid-cols-4 gap-1">
@@ -1454,8 +1451,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   onClick={() => updateYPlus({ target_yplus: val })}
                   className={`py-1 rounded text-xs font-mono font-medium border transition-colors ${
                     state.yplus.target_yplus === val
-                      ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                      : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                      ? 'bg-accent-soft text-accent-fg border-accent-line'
+                      : 'bg-surface text-fg-2 border-line hover:bg-app'
                   }`}
                 >
                   {val}
@@ -1463,7 +1460,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               ))}
             </div>
             <label className="flex items-center gap-2 mt-2">
-              <span className="text-[10px] text-[#69717D] whitespace-nowrap">Custom y⁺</span>
+              <span className="text-[10px] text-fg-2 whitespace-nowrap">Custom y⁺</span>
               <input
                 type="number"
                 min="0.1"
@@ -1471,27 +1468,27 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                 value={yplusDraft}
                 onChange={(e) => commitYplusDraft(e.target.value)}
                 onBlur={normalizeYplusDraft}
-                className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded font-mono focus:outline-none focus:border-[#2563EB]"
+                className="w-full px-2 py-1 bg-surface border border-line rounded font-mono focus:outline-none focus:border-accent"
               />
             </label>
-            <span className="text-[10px] text-[#69717D] block mt-1">
+            <span className="text-[10px] text-fg-2 block mt-1">
               y⁺ ≈ 1 resolves the viscous sublayer; y⁺ 30-100 uses wall functions.
             </span>
           </div>
 
-          <div className="border-t border-[#E1E4E8] pt-3 space-y-2">
+          <div className="border-t border-line pt-3 space-y-2">
             <div className="grid grid-cols-2 gap-2 text-[11px]">
               <div>
-                <span className="text-[#A5ACB5] block text-[10px] uppercase">Inputs</span>
-                <div className="font-mono text-[#69717D] space-y-0.5 mt-1">
+                <span className="text-fg-4 block text-[10px] uppercase">Inputs</span>
+                <div className="font-mono text-fg-2 space-y-0.5 mt-1">
                   <div>U∞: {state.boundaries.inletVelocity} m/s</div>
                   <div>L: {state.geometry.chord || 1.0} m</div>
                   <div>ρ: {state.physics.density}</div>
                 </div>
               </div>
               <div>
-                <span className="text-[#A5ACB5] block text-[10px] uppercase">Results</span>
-                <div className="font-mono text-[#171A1F] space-y-0.5 mt-1">
+                <span className="text-fg-4 block text-[10px] uppercase">Results</span>
+                <div className="font-mono text-fg space-y-0.5 mt-1">
                   <div>Re: {state.yplus.reynolds_number.toExponential(2)}</div>
                   <div>Cf: {state.yplus.skin_friction_coefficient.toFixed(4)}</div>
                   <div>τw: {state.yplus.wall_shear_stress.toFixed(2)} Pa</div>
@@ -1500,21 +1497,21 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             </div>
           </div>
 
-          <div className="p-3 bg-[#F5F6F8] border border-[#E1E4E8] rounded text-center space-y-1">
-            <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
+          <div className="p-3 bg-app border border-line rounded text-center space-y-1">
+            <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
               First Cell Height (Δy)
             </span>
-            <div className="text-xl font-bold font-mono text-[#171A1F]">
+            <div className="text-xl font-bold font-mono text-fg">
               {state.yplus.first_layer_height_mm.toFixed(4)} mm
             </div>
-            <div className="text-[10px] text-[#69717D] font-mono">
+            <div className="text-[10px] text-fg-2 font-mono">
               Boundary layer thickness: {state.yplus.boundary_layer_thickness_mm.toFixed(1)} mm
             </div>
           </div>
 
           <button
             onClick={onApplyYPlusToMesh}
-            className="w-full py-2 bg-[#16A34A] hover:bg-[#15803D] text-white font-medium rounded-sm flex items-center justify-center gap-1.5 transition-colors"
+            className="w-full py-2 bg-success hover:bg-success text-white font-medium rounded-sm flex items-center justify-center gap-1.5 transition-colors"
           >
             <Zap className="w-3.5 h-3.5 fill-current" />
             <span>Apply Sizing to Gmsh</span>
@@ -1558,15 +1555,15 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
 
       {activeStage === 'results' && !stageStatus?.results?.locked && (
         <div className="flex-1 min-h-0 flex flex-col justify-between">
-          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 text-xs text-[#171A1F]">
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 text-xs text-fg">
             <div>
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1.5">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
                 Scalar Field Variable
               </span>
               <select
                 value={state.postprocess.activeField}
                 onChange={(e) => updatePostProcess({ activeField: e.target.value as any })}
-                className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                className="w-full px-2.5 py-1.5 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
                 <option value="U_mag">Velocity Magnitude (|U|)</option>
                 <option value="p">Static Pressure (p)</option>
@@ -1576,8 +1573,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
               </select>
             </div>
 
-            <div className="border-t border-[#E1E4E8] pt-3 space-y-1.5">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block mb-1">
+            <div className="border-t border-line pt-3 space-y-1.5">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-1">
                 Scientific Colormap
               </span>
               <div className="grid grid-cols-3 gap-1">
@@ -1587,8 +1584,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                     onClick={() => updatePostProcess({ colormap: map })}
                     className={`py-1 rounded capitalize text-xs font-medium border transition-colors ${
                       state.postprocess.colormap === map
-                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        ? 'bg-accent-soft text-accent-fg border-accent-line'
+                        : 'bg-surface text-fg-2 border-line hover:bg-app'
                     }`}
                   >
                     {map}
@@ -1598,20 +1595,20 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
             </div>
 
             {/* Line Plot Probe */}
-            <div className="border-t border-[#E1E4E8] pt-3 space-y-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+            <div className="border-t border-line pt-3 space-y-2">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block">
                 Line Plot Probe
               </span>
               <button
                 type="button"
                 onClick={onCreatePlot}
-                className="w-full py-2 px-3 rounded bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                className="w-full py-2 px-3 rounded bg-accent hover:bg-accent-hover text-white font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Create Plot</span>
               </button>
               {/* moved out of the live UI - see layout/LeftStagePanel.tsx (Line Plot Probe), kept for a future tutorial
-              <p className="text-[10px] text-[#69717D] leading-relaxed">
+              <p className="text-[10px] text-fg-2 leading-relaxed">
                 Sample flow variables along a 2D line probe and visualize XY convergence or field
                 profiles.
               </p>
@@ -1620,7 +1617,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           </div>
 
           {/* Pinned ParaView Footer */}
-          <div className="p-3 border-t border-[#E1E4E8] bg-[#FAFBFC] shrink-0">
+          <div className="p-3 border-t border-line bg-surface-2 shrink-0">
             <button
               type="button"
               onClick={async () => {
@@ -1637,7 +1634,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
                   alert(`Failed to launch ParaView: ${res.detail}`);
                 }
               }}
-              className="w-full py-2 px-3 rounded border border-[#E1E4E8] bg-white text-[#171A1F] hover:bg-[#F5F6F8] font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className="w-full py-2 px-3 rounded border border-line bg-surface text-fg hover:bg-app font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
             >
               <span>Open in ParaView</span>
             </button>

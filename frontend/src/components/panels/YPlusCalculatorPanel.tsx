@@ -14,12 +14,12 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
   onApplyToMesh,
 }) => {
   return (
-    <div className="space-y-4 p-4 text-xs text-slate-700 select-none">
+    <div className="space-y-4 p-4 text-xs text-fg select-none">
       {/* Target Y+ Preset Selector */}
       <div className="space-y-1.5">
-        <label className="font-semibold text-slate-800 flex items-center justify-between">
+        <label className="font-semibold text-fg flex items-center justify-between">
           <span className="flex items-center gap-1.5">
-            <Calculator className="w-3.5 h-3.5 text-blue-600" />
+            <Calculator className="w-3.5 h-3.5 text-accent" />
             <span>Target Y+ (y⁺) Objective</span>
           </span>
         </label>
@@ -34,8 +34,8 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
               onClick={() => onChange({ target_yplus: item.val })}
               className={`py-1.5 px-1 rounded-sm text-[11px] font-medium border text-center transition-colors ${
                 yplus.target_yplus === item.val
-                  ? 'bg-blue-600 text-white border-blue-600 '
-                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  ? 'bg-accent-soft text-accent-fg border-accent-line '
+                  : 'bg-surface text-fg-2 border-line hover:bg-surface-2'
               }`}
             >
               {item.label}
@@ -45,14 +45,14 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
       </div>
 
       {/* Input Parameters */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded space-y-3">
-        <span className="font-semibold text-slate-700 block text-[11px] uppercase tracking-wider">
+      <div className="p-3 bg-surface-2 border border-line rounded space-y-3">
+        <span className="font-semibold text-fg block text-[11px] uppercase tracking-wider">
           Flow Condition Inputs
         </span>
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <span className="text-slate-500 block mb-0.5">Free-stream U_inf</span>
+            <span className="text-fg-2 block mb-0.5">Free-stream U_inf</span>
             <div className="relative">
               <input
                 type="number"
@@ -60,14 +60,14 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
                 min="0.1"
                 value={yplus.velocity}
                 onChange={(e) => onChange({ velocity: parseFloat(e.target.value) || 20.0 })}
-                className="w-full px-2 py-1 bg-white border border-slate-200 rounded font-mono"
+                className="w-full px-2 py-1 bg-surface border border-line rounded font-mono"
               />
-              <span className="absolute right-2 top-1 text-[10px] text-slate-400">m/s</span>
+              <span className="absolute right-2 top-1 text-[10px] text-fg-4">m/s</span>
             </div>
           </div>
 
           <div>
-            <span className="text-slate-500 block mb-0.5">Ref Length (L)</span>
+            <span className="text-fg-2 block mb-0.5">Ref Length (L)</span>
             <div className="relative">
               <input
                 type="number"
@@ -75,16 +75,16 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
                 min="0.01"
                 value={yplus.length}
                 onChange={(e) => onChange({ length: parseFloat(e.target.value) || 1.0 })}
-                className="w-full px-2 py-1 bg-white border border-slate-200 rounded font-mono"
+                className="w-full px-2 py-1 bg-surface border border-line rounded font-mono"
               />
-              <span className="absolute right-2 top-1 text-[10px] text-slate-400">m</span>
+              <span className="absolute right-2 top-1 text-[10px] text-fg-4">m</span>
             </div>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <span className="text-slate-500 block mb-0.5">Custom y⁺ Value</span>
+            <span className="text-fg-2 block mb-0.5">Custom y⁺ Value</span>
             <input
               type="number"
               step="0.5"
@@ -92,12 +92,12 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
               max="500"
               value={yplus.target_yplus}
               onChange={(e) => onChange({ target_yplus: parseFloat(e.target.value) || 1.0 })}
-              className="w-full px-2 py-1 bg-white border border-slate-200 rounded font-mono text-blue-600 font-semibold"
+              className="w-full px-2 py-1 bg-surface border border-line rounded font-mono text-accent font-semibold"
             />
           </div>
 
           <div>
-            <span className="text-slate-500 block mb-0.5">Expansion Ratio</span>
+            <span className="text-fg-2 block mb-0.5">Expansion Ratio</span>
             <input
               type="number"
               step="0.05"
@@ -105,61 +105,61 @@ export const YPlusCalculatorPanel: React.FC<YPlusCalculatorPanelProps> = ({
               max="1.5"
               value={yplus.expansion_ratio}
               onChange={(e) => onChange({ expansion_ratio: parseFloat(e.target.value) || 1.2 })}
-              className="w-full px-2 py-1 bg-white border border-slate-200 rounded font-mono"
+              className="w-full px-2 py-1 bg-surface border border-line rounded font-mono"
             />
           </div>
         </div>
       </div>
 
       {/* Calculated Boundary Layer &      {/* Results */}
-      <div className="p-3.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2.5">
+      <div className="p-3.5 bg-surface-2 border border-line rounded space-y-2.5">
         <div className="flex items-center justify-between">
-          <span className="font-semibold text-[#171A1F] text-[11px] uppercase tracking-wider flex items-center gap-1">
-            <Calculator className="w-3.5 h-3.5 text-[#69717D]" />
+          <span className="font-semibold text-fg text-[11px] uppercase tracking-wider flex items-center gap-1">
+            <Calculator className="w-3.5 h-3.5 text-fg-2" />
             <span>Boundary Layer Results</span>
           </span>
-          <span className="font-mono text-[10px] px-1.5 py-0.5 bg-white border border-[#E1E4E8] text-[#171A1F] rounded font-semibold">
+          <span className="font-mono text-[10px] px-1.5 py-0.5 bg-surface border border-line text-fg rounded font-semibold">
             Re = {yplus.reynolds_number.toExponential(2)}
           </span>
         </div>
 
         {/* Highlight First Layer Height */}
-        <div className="p-2.5 bg-white border border-[#E1E4E8] rounded flex items-center justify-between">
+        <div className="p-2.5 bg-surface border border-line rounded flex items-center justify-between">
           <div>
-            <span className="text-[11px] text-[#69717D] block">First Layer Height (Δy)</span>
-            <span className="text-sm font-mono font-bold text-[#171A1F]">
+            <span className="text-[11px] text-fg-2 block">First Layer Height (Δy)</span>
+            <span className="text-sm font-mono font-bold text-fg">
               {yplus.first_layer_height_mm.toFixed(4)} mm
             </span>
           </div>
           <div className="text-right">
-            <span className="text-[10px] font-mono text-[#8A929E]">
+            <span className="text-[10px] font-mono text-fg-3">
               {yplus.first_layer_height_m.toExponential(3)} m
             </span>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 text-[11px]">
-          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
-            <span className="text-[#69717D] block">BL Thickness (δ)</span>
-            <span className="font-mono font-semibold text-[#171A1F]">
+          <div className="p-2 bg-surface border border-line rounded">
+            <span className="text-fg-2 block">BL Thickness (δ)</span>
+            <span className="font-mono font-semibold text-fg">
               {yplus.boundary_layer_thickness_mm.toFixed(2)} mm
             </span>
           </div>
-          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
-            <span className="text-[#69717D] block">Prism Layers</span>
-            <span className="font-mono font-semibold text-[#171A1F]">
+          <div className="p-2 bg-surface border border-line rounded">
+            <span className="text-fg-2 block">Prism Layers</span>
+            <span className="font-mono font-semibold text-fg">
               {yplus.recommended_layers} layers
             </span>
           </div>
-          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
-            <span className="text-[#69717D] block">Friction Velocity (u_τ)</span>
-            <span className="font-mono font-semibold text-[#171A1F]">
+          <div className="p-2 bg-surface border border-line rounded">
+            <span className="text-fg-2 block">Friction Velocity (u_τ)</span>
+            <span className="font-mono font-semibold text-fg">
               {yplus.friction_velocity.toFixed(3)} m/s
             </span>
           </div>
-          <div className="p-2 bg-white border border-[#E1E4E8] rounded">
-            <span className="text-[#69717D] block">Skin Friction (Cf)</span>
-            <span className="font-mono font-semibold text-[#171A1F]">
+          <div className="p-2 bg-surface border border-line rounded">
+            <span className="text-fg-2 block">Skin Friction (Cf)</span>
+            <span className="font-mono font-semibold text-fg">
               {yplus.skin_friction_coefficient.toExponential(2)}
             </span>
           </div>

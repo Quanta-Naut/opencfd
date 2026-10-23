@@ -23,10 +23,7 @@ export const NearWallSection: React.FC<SectionProps & { model: TurbulenceModel }
     caseSetup.growthRate,
   );
 
-  const rec =
-    physics.wallModel === 'wall_functions'
-      ? 50
-      : Math.max(model.yPlus.low || 0.5, 0.8);
+  const rec = physics.wallModel === 'wall_functions' ? 50 : Math.max(model.yPlus.low || 0.5, 0.8);
   const offRec = Math.abs(caseSetup.targetYPlus - rec) / rec > 0.5;
 
   return (
@@ -37,10 +34,7 @@ export const NearWallSection: React.FC<SectionProps & { model: TurbulenceModel }
       hint="The first cell height at the walls, from a flat-plate skin-friction estimate. Feeds the mesh."
     >
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Field
-          label="Target y+"
-          hint={offRec ? `${model.label} wants ≈ ${rec}` : model.yPlus.note}
-        >
+        <Field label="Target y+" hint={offRec ? `${model.label} wants ≈ ${rec}` : model.yPlus.note}>
           <NumberInput
             value={caseSetup.targetYPlus}
             step={caseSetup.targetYPlus < 5 ? 0.1 : 5}
@@ -61,8 +55,8 @@ export const NearWallSection: React.FC<SectionProps & { model: TurbulenceModel }
             onClick={() => setCaseSetup({ linkFirstCellToMesh: !caseSetup.linkFirstCellToMesh })}
             className={`w-full py-2 rounded-sm border text-xs font-medium transition-colors ${
               caseSetup.linkFirstCellToMesh
-                ? 'bg-blue-50 border-[#2563EB] text-[#1D4ED8]'
-                : 'bg-white border-[#DDE2E8] text-[#69717D]'
+                ? 'bg-accent-soft border-accent text-accent-fg'
+                : 'bg-surface border-line text-fg-2'
             }`}
           >
             {caseSetup.linkFirstCellToMesh ? 'First cell driven by y+' : 'Mesh sets first cell'}
@@ -76,8 +70,9 @@ export const NearWallSection: React.FC<SectionProps & { model: TurbulenceModel }
         <Stat label="Prism layers" value={String(wr.layerCount)} />
         <Stat label="Layer stack" value={`${fmt(wr.totalLayerThickness * 1000, 3)} mm`} />
       </div>
-      <p className="text-[10px] text-[#8A929E]">
-        Cf {wr.skinFriction.toExponential(2)} · τw {fmt(wr.wallShearStress, 3)} Pa · uτ {fmt(wr.frictionVelocity, 3)} m/s
+      <p className="text-[10px] text-fg-3">
+        Cf {wr.skinFriction.toExponential(2)} · τw {fmt(wr.wallShearStress, 3)} Pa · uτ{' '}
+        {fmt(wr.frictionVelocity, 3)} m/s
       </p>
     </SectionCard>
   );

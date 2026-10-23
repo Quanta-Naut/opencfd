@@ -75,7 +75,9 @@ export const StructuredMeshPanel: React.FC<{
   // Automatic = our topology generators. Manual = ICEM Hexa style: initialize
   // one block, then split / delete / associate / O-grid it on the canvas.
   const [blockMode, setBlockMode] = useState<'auto' | 'manual'>('auto');
-  useEffect(() => { onBlockModeChange?.(blockMode); }, [blockMode, onBlockModeChange]);
+  useEffect(() => {
+    onBlockModeChange?.(blockMode);
+  }, [blockMode, onBlockModeChange]);
   const kindRef = useRef(recommended);
   useEffect(() => {
     // follow the recommendation until the user has picked, and until blocks exist
@@ -118,7 +120,7 @@ export const StructuredMeshPanel: React.FC<{
 
   // ── Step 1: Blocking ──
   const modeToggle = (
-    <div className="grid grid-cols-2 gap-1 p-0.5 bg-[#F5F6F8] rounded border border-[#E1E4E8]">
+    <div className="grid grid-cols-2 gap-1 p-0.5 bg-app rounded border border-line">
       {(
         [
           ['auto', 'Automatic'],
@@ -130,8 +132,8 @@ export const StructuredMeshPanel: React.FC<{
           onClick={() => setBlockMode(m)}
           className={`py-1 rounded text-[11px] font-medium transition-colors ${
             blockMode === m
-              ? 'bg-white text-[#171A1F] font-semibold border border-[#E1E4E8]'
-              : 'text-[#69717D] hover:text-[#171A1F]'
+              ? 'bg-surface text-fg font-semibold border border-line'
+              : 'text-fg-2 hover:text-fg'
           }`}
         >
           {label}
@@ -145,13 +147,13 @@ export const StructuredMeshPanel: React.FC<{
       <div className="grid grid-cols-2 gap-1.5">
         <button
           onClick={() => onInitializeBlocking?.()}
-          className="py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-sm transition-colors"
+          className="py-2 bg-accent hover:bg-accent-hover text-white font-medium rounded-sm transition-colors"
         >
           Initialize block
         </button>
         <button
           onClick={() => onUpdateBlocking?.(emptyBlocking())}
-          className="py-2 rounded-sm border border-[#E1E4E8] bg-white hover:border-[#CBD5E1] text-[#171A1F] font-medium transition-colors"
+          className="py-2 rounded-sm border border-line bg-surface hover:border-line-strong text-fg font-medium transition-colors"
         >
           Start empty
         </button>
@@ -166,7 +168,7 @@ export const StructuredMeshPanel: React.FC<{
         manualPanel
       ) : (
         <>
-          <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
+          <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
             Topology
           </span>
           <div className="grid grid-cols-2 gap-1.5">
@@ -183,26 +185,26 @@ export const StructuredMeshPanel: React.FC<{
                 onClick={() => pick(k)}
                 className={`p-2 rounded border text-left transition-colors ${
                   kind === k
-                    ? 'border-[#2563EB] bg-blue-50'
-                    : 'bg-white border-[#E1E4E8] hover:border-[#CBD5E1] hover:bg-[#F8FAFC]'
+                    ? 'border-accent bg-accent-soft'
+                    : 'bg-surface border-line hover:border-line-strong hover:bg-surface-2'
                 }`}
               >
                 <span
-                  className={`text-[11px] font-semibold block ${kind === k ? 'text-[#1D4ED8]' : 'text-[#171A1F]'}`}
+                  className={`text-[11px] font-semibold block ${kind === k ? 'text-accent-fg' : 'text-fg'}`}
                 >
                   {label}
                   {recommended === k && (
-                    <span className="ml-1 text-[9px] font-medium text-[#059669]">rec.</span>
+                    <span className="ml-1 text-[10px] font-medium text-success">rec.</span>
                   )}
                 </span>
-                <span className="text-[9px] text-[#69717D] block leading-tight mt-0.5">{hint}</span>
+                <span className="text-[10px] text-fg-2 block leading-tight mt-0.5">{hint}</span>
               </button>
             ))}
           </div>
 
           <button
             onClick={() => onBuildBlocks?.(kind)}
-            className="w-full py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-medium rounded-sm transition-colors"
+            className="w-full py-2 bg-accent hover:bg-accent-hover text-white font-medium rounded-sm transition-colors"
           >
             {hasBlocks ? 'Rebuild blocks' : 'Generate blocks'}
           </button>
@@ -211,18 +213,18 @@ export const StructuredMeshPanel: React.FC<{
 
       {hasBlocks && blocking && (
         <>
-          <div className="border-t border-[#E1E4E8] pt-2.5 space-y-1.5">
-            <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
+          <div className="border-t border-line pt-2.5 space-y-1.5">
+            <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
               Blocks ({blocking.blocks.length})
             </span>
             {blocking.blocks.map((blk, i) => (
               <div key={blk.id} className="flex items-center gap-1.5 text-[10px]">
-                <span className="text-[#69717D] w-12 shrink-0">Block {i + 1}</span>
+                <span className="text-fg-2 w-12 shrink-0">Block {i + 1}</span>
                 <button
                   onClick={() =>
                     onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'x')))
                   }
-                  className="flex-1 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
+                  className="flex-1 py-1 rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors"
                 >
                   Split &#8596;
                 </button>
@@ -230,7 +232,7 @@ export const StructuredMeshPanel: React.FC<{
                   onClick={() =>
                     onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'y')))
                   }
-                  className="flex-1 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
+                  className="flex-1 py-1 rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors"
                 >
                   Split &#8597;
                 </button>
@@ -239,7 +241,7 @@ export const StructuredMeshPanel: React.FC<{
                     onUpdateBlocking?.(propagateNodeCounts(deleteBlock(blocking, blk.id)))
                   }
                   disabled={blocking.blocks.length <= 1}
-                  className="px-2 py-1 rounded border border-[#E1E4E8] bg-white text-[#DC2626] hover:border-[#DC2626] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="px-2 py-1 rounded border border-line bg-surface text-danger hover:border-danger disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
                   Del
                 </button>
@@ -248,20 +250,20 @@ export const StructuredMeshPanel: React.FC<{
           </div>
 
           {ogridBodies && ogridBodies.length > 0 && (
-            <div className="border-t border-[#E1E4E8] pt-2.5 space-y-1.5">
-              <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
+            <div className="border-t border-line pt-2.5 space-y-1.5">
+              <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
                 Bodies
               </span>
               {ogridBodies.map((b) => (
                 <div key={b.index} className="flex items-center gap-1.5 text-[10px]">
-                  <span className="flex-1 text-[#171A1F] truncate">{b.name}</span>
+                  <span className="flex-1 text-fg truncate">{b.name}</span>
                   {b.wrapped ? (
-                    <span className="px-2 py-1 text-[#059669] font-medium">Wrapped</span>
+                    <span className="px-2 py-1 text-success font-medium">Wrapped</span>
                   ) : (
                     <button
                       onClick={() => onWrapBody?.(b.index)}
                       disabled={!b.blockId}
-                      className="px-2 py-1 rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors disabled:opacity-30"
+                      className="px-2 py-1 rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors disabled:opacity-30"
                     >
                       Wrap O-grid
                     </button>
@@ -269,7 +271,7 @@ export const StructuredMeshPanel: React.FC<{
                 </div>
               ))}
               {ogridBodies.some((b) => !b.blockId && !b.wrapped) && (
-                <p className="text-[9px] text-[#69717D] leading-relaxed">
+                <p className="text-[10px] text-fg-2 leading-relaxed">
                   Body must sit clear of the domain edges to wrap.
                 </p>
               )}
@@ -279,16 +281,14 @@ export const StructuredMeshPanel: React.FC<{
       )}
 
       {(kind === 'ogrid' || ogridBodies?.some((b) => b.wrapped)) && (
-        <div className="border-t border-[#E1E4E8] pt-2.5 space-y-2">
-          <span className="text-[10px] font-semibold text-[#69717D] uppercase tracking-wider block">
+        <div className="border-t border-line pt-2.5 space-y-2">
+          <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
             O-grid ring
           </span>
           <div>
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-[#69717D]">Ring thickness</span>
-              <span className="text-[10px] font-mono text-[#171A1F]">
-                {sliderDraft.toFixed(2)} x body
-              </span>
+              <span className="text-[10px] text-fg-2">Ring thickness</span>
+              <span className="text-[10px] font-mono text-fg">{sliderDraft.toFixed(2)} x body</span>
             </div>
             <input
               type="range"
@@ -315,12 +315,12 @@ export const StructuredMeshPanel: React.FC<{
                 const v = parseFloat((e.target as HTMLInputElement).value);
                 onUpdateOgridParams?.({ offsetFactor: v });
               }}
-              className="w-full accent-[#2563EB] cursor-pointer"
+              className="w-full accent-accent cursor-pointer"
             />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <label>
-              <span className="text-[10px] text-[#69717D] block mb-1">Radial nodes</span>
+              <span className="text-[10px] text-fg-2 block mb-1">Radial nodes</span>
               <NumberField
                 value={ogridParams?.radialNodes ?? 26}
                 integer
@@ -333,7 +333,7 @@ export const StructuredMeshPanel: React.FC<{
             </label>
             <label>
               <Tooltip content="Higher = finer first cell at the wall (like y+ clustering).">
-                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                   Wall clustering
                 </span>
               </Tooltip>
@@ -353,9 +353,7 @@ export const StructuredMeshPanel: React.FC<{
   );
 
   // ── Step 2: Mesh sizing ──
-  let step2: React.ReactNode = (
-    <p className="text-[10px] text-[#69717D]">Generate the blocks first.</p>
-  );
+  let step2: React.ReactNode = <p className="text-[10px] text-fg-2">Generate the blocks first.</p>;
   if (hasBlocks && blocking) {
     const groupOf = edgeDirectionGroups(blocking);
     const groups: Record<string, string[]> = {};
@@ -522,7 +520,7 @@ export const StructuredMeshPanel: React.FC<{
         <div className="flex items-end gap-2">
           <label className="flex-1">
             <Tooltip content="Target cell edge length. Every direction's node count is set from this and its block-edge length, so a short edge gets few cells and the mesh reads uniform. Adjust a direction below to override.">
-              <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+              <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                 Target cell size
               </span>
             </Tooltip>
@@ -537,16 +535,16 @@ export const StructuredMeshPanel: React.FC<{
             onClick={() =>
               onUpdateBlocking?.(applyTargetCellSize(bkNow, currentCellSize(bkNow) * 0.5))
             }
-            className="px-2 py-1.5 text-[10px] rounded border border-[#E1E4E8] bg-white hover:border-[#2563EB] hover:text-[#1D4ED8] transition-colors"
+            className="px-2 py-1.5 text-[10px] rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors"
           >
             Finer &times;2
           </button>
         </div>
 
         {setStructuredSmooth && (
-          <label className="flex items-center justify-between text-[10px] text-[#69717D]">
+          <label className="flex items-center justify-between text-[10px] text-fg-2">
             <Tooltip content="After meshing, relax the interior grid with an elliptic (Winslow) pass so grid lines flow across block seams. Kept only if it does not make the worst cell worse.">
-              <span className="cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+              <span className="cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                 Elliptic smoothing
               </span>
             </Tooltip>
@@ -554,20 +552,18 @@ export const StructuredMeshPanel: React.FC<{
               type="checkbox"
               checked={structuredSmooth !== false}
               onChange={(ev) => setStructuredSmooth(ev.target.checked)}
-              className="accent-[#2563EB]"
+              className="accent-accent"
             />
           </label>
         )}
 
-        <div className="p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2">
-          <span className="text-[11px] font-semibold text-[#171A1F] block">
-            Wall resolution (y+)
-          </span>
+        <div className="p-2.5 bg-surface-2 border border-line rounded space-y-2">
+          <span className="text-[11px] font-semibold text-fg block">Wall resolution (y+)</span>
 
           <div className="grid grid-cols-3 gap-2">
             <label>
               <Tooltip content="Target y+ for the first cell at the wall.">
-                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                   Target y+
                 </span>
               </Tooltip>
@@ -577,26 +573,26 @@ export const StructuredMeshPanel: React.FC<{
                 step="1"
                 fallback={30}
                 onChange={(n) => updateYPlus({ target_yplus: n })}
-                className={`${field} bg-white border-blue-200`}
+                className={`${field} bg-surface border-accent-line`}
               />
             </label>
             <div>
               <Tooltip content="First cell height for the current target y+ (live).">
-                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                   First cell
                 </span>
               </Tooltip>
-              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-[#171A1F]">
+              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-fg">
                 {liveFirstCellMm != null ? `${liveFirstCellMm.toFixed(4)} mm` : '-'}
               </div>
             </div>
             <div>
               <Tooltip content="Wall-tagged block edges found in the current blocking.">
-                <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                   Wall edges
                 </span>
               </Tooltip>
-              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-[#171A1F]">
+              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-fg">
                 {wallCount}
               </div>
             </div>
@@ -605,12 +601,12 @@ export const StructuredMeshPanel: React.FC<{
           <button
             onClick={applyYPlusClustering}
             disabled={wallCount === 0}
-            className="w-full py-1.5 px-2 rounded-sm bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-medium transition-colors"
+            className="w-full py-1.5 px-2 rounded-sm border border-line bg-surface hover:bg-surface-3 disabled:opacity-40 disabled:cursor-not-allowed text-fg text-[11px] font-medium transition-colors"
           >
             Cluster wall-normal edges to y+
           </button>
           {wallCount === 0 && (
-            <p className="text-[10px] text-[#69717D] leading-relaxed">
+            <p className="text-[10px] text-fg-2 leading-relaxed">
               Tag a block edge as wall first (Geometry - Boundary patches).
             </p>
           )}
@@ -620,23 +616,21 @@ export const StructuredMeshPanel: React.FC<{
           const e = edgeById(ids[0]);
           const color = DIRECTION_COLORS[i % DIRECTION_COLORS.length];
           return (
-            <div key={gid} className="p-2.5 bg-[#F8F9FA] border border-[#E1E4E8] rounded space-y-2">
+            <div key={gid} className="p-2.5 bg-surface-2 border border-line rounded space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-[#171A1F] flex items-center gap-1.5">
+                <span className="text-[11px] font-semibold text-fg flex items-center gap-1.5">
                   <span
                     className="w-2.5 h-2.5 rounded-full shrink-0"
                     style={{ background: color }}
                   />
                   Direction {String.fromCharCode(65 + i)}
                 </span>
-                <span className="text-[10px] text-[#69717D] lowercase">
-                  along {patchLabel(ids)}
-                </span>
+                <span className="text-[10px] text-fg-2 lowercase">along {patchLabel(ids)}</span>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label>
                   <Tooltip content="Grid nodes along this direction (cells = nodes minus one).">
-                    <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                    <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                       Nodes
                     </span>
                   </Tooltip>
@@ -652,7 +646,7 @@ export const StructuredMeshPanel: React.FC<{
                 </label>
                 <label>
                   <Tooltip content="Last cell / first cell along the edge. 1 = uniform. Above 1 clusters cells toward the start (wall).">
-                    <span className="text-[10px] text-[#69717D] block mb-1 cursor-help decoration-dotted underline decoration-[#C4C9D0] underline-offset-2">
+                    <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
                       Grading ratio
                     </span>
                   </Tooltip>
@@ -667,11 +661,11 @@ export const StructuredMeshPanel: React.FC<{
                 </label>
               </div>
               <label className="block">
-                <span className="text-[10px] text-[#69717D] block mb-1">Distribution</span>
+                <span className="text-[10px] text-fg-2 block mb-1">Distribution</span>
                 <select
                   value={e.law}
                   onChange={(ev) => applyToGroup(ids, { law: ev.target.value as EdgeLaw })}
-                  className="w-full px-2 py-1.5 bg-white border border-[#E1E4E8] rounded-sm text-[11px] focus:outline-none focus:border-[#2563EB]"
+                  className="w-full px-2 py-1.5 bg-surface border border-line rounded-sm text-[11px] focus:outline-none focus:border-accent"
                 >
                   <option value="uniform">Uniform</option>
                   <option value="geometric">Geometric (cluster one end)</option>
@@ -689,24 +683,24 @@ export const StructuredMeshPanel: React.FC<{
     const open = openStep === n;
     const locked = n === 2 && !hasBlocks;
     return (
-      <div className="border-t border-[#E1E4E8] first:border-t-0">
+      <div className="border-t border-line first:border-t-0">
         <button
           onClick={() => !locked && setOpenStep(n)}
           disabled={locked}
           className={`w-full flex items-center gap-2 py-2.5 text-left ${locked ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           <span
-            className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold shrink-0 border ${open ? 'bg-blue-50 text-[#2563EB] border-[#2563EB]' : 'bg-[#F1F3F5] text-[#A5ACB5] border-transparent'}`}
+            className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold shrink-0 border ${open ? 'bg-accent-soft text-accent border-accent' : 'bg-surface-3 text-fg-4 border-transparent'}`}
           >
             {n}
           </span>
           <span
-            className={`flex-1 text-[11px] font-semibold uppercase tracking-wider ${open ? 'text-[#2563EB]' : 'text-[#69717D]'}`}
+            className={`flex-1 text-[11px] font-semibold uppercase tracking-wider ${open ? 'text-accent' : 'text-fg-2'}`}
           >
             {label}
           </span>
           <ChevronDown
-            className={`w-3.5 h-3.5 text-[#A5ACB5] transition-transform ${open ? 'rotate-180' : ''}`}
+            className={`w-3.5 h-3.5 text-fg-4 transition-transform ${open ? 'rotate-180' : ''}`}
           />
         </button>
         {open && <div className="pb-3">{body}</div>}

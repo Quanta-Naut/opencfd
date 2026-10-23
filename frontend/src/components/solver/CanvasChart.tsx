@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { cssVar, useResolvedTheme } from '../../utils/theme';
 
 export interface ChartSeries {
   key: string;
@@ -79,9 +80,10 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
   const hoverRef = useRef<{ x: number; y: number } | null>(null);
   const rafRef = useRef(0);
 
+  const theme = useResolvedTheme();
   useEffect(() => {
     dirtyRef.current = true;
-  }, [data, series, yScale, xFormat]);
+  }, [data, series, yScale, xFormat, theme]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -121,11 +123,21 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       canvas.style.height = `${cssH}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, cssW, cssH);
+      const tk = {
+        dim: cssVar('--fg-4'),
+        grid: cssVar('--line-soft'),
+        label: cssVar('--fg-2'),
+        cross: cssVar('--line-strong'),
+        tipBg: cssVar('--surface'),
+        tipLine: cssVar('--line'),
+        tipText: cssVar('--fg'),
+        tipSub: cssVar('--fg-2'),
+      };
 
       const plotW = cssW - PAD.l - PAD.r;
       const plotH = cssH - PAD.t - PAD.b;
       if (plotW < 10 || plotH < 10 || rows.length < 2) {
-        ctx.fillStyle = '#A5ACB5';
+        ctx.fillStyle = tk.dim;
         ctx.font = '11px ui-monospace, monospace';
         ctx.textAlign = 'center';
         ctx.fillText('waiting for data…', cssW / 2, cssH / 2);
@@ -204,8 +216,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
 
       // Grid + Y ticks
       ctx.font = '10px ui-monospace, monospace';
-      ctx.fillStyle = '#A5ACB5';
-      ctx.strokeStyle = '#F0F2F5';
+      ctx.fillStyle = tk.dim;
+      ctx.strokeStyle = tk.grid;
       ctx.lineWidth = 1;
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
@@ -276,7 +288,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       for (const s of ser) {
         ctx.fillStyle = s.color;
         ctx.fillRect(lx, ly - 3, 10, 3);
-        ctx.fillStyle = '#69717D';
+        ctx.fillStyle = tk.label;
         ctx.fillText(s.name, lx + 14, ly);
         lx += 14 + ctx.measureText(s.name).width + 12;
       }
@@ -296,7 +308,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
           }
         }
         const cx = sx(best[xk]);
-        ctx.strokeStyle = '#C4C9D0';
+        ctx.strokeStyle = tk.cross;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
         ctx.moveTo(cx, PAD.t);
@@ -312,20 +324,20 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         let bx = cx + 8;
         if (bx + boxW > cssW - PAD.r) bx = cx - 8 - boxW;
         const by = PAD.t + 4;
-        ctx.fillStyle = 'rgba(255,255,255,0.96)';
-        ctx.strokeStyle = '#E1E4E8';
+        ctx.fillStyle = tk.tipBg;
+        ctx.strokeStyle = tk.tipLine;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.rect(bx, by, boxW, boxH);
         ctx.fill();
         ctx.stroke();
-        ctx.fillStyle = '#171A1F';
+        ctx.fillStyle = tk.tipText;
         ctx.textAlign = 'left';
         ctx.fillText(`${xk} ${xf ? xf(best[xk]) : Math.round(best[xk])}`, bx + 6, by + 8);
         items.forEach((it, i) => {
           ctx.fillStyle = it.s.color;
           ctx.fillRect(bx + 6, by + 18 + i * 13, 6, 6);
-          ctx.fillStyle = '#3A4149';
+          ctx.fillStyle = tk.tipSub;
           ctx.fillText(
             `${it.s.name} ${ys === 'log' ? it.v.toExponential(2) : yf(it.v)}`,
             bx + 16,

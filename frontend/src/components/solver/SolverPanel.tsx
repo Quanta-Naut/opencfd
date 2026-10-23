@@ -17,9 +17,9 @@ const ORDER_OPTS: Array<[SpatialOrder, string]> = [
 ];
 
 const num =
-  'w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded font-mono text-[11px] text-[#171A1F] focus:outline-none focus:border-[#2563EB]';
+  'w-full px-2.5 py-1.5 bg-surface border border-line rounded font-mono text-[11px] text-fg focus:outline-none focus:border-accent';
 const sel =
-  'w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm text-[11px] text-[#171A1F] focus:outline-none focus:border-[#2563EB]';
+  'w-full px-2.5 py-1.5 bg-surface border border-line rounded-sm text-[11px] text-fg focus:outline-none focus:border-accent';
 
 /** Numeric input with a local editing buffer. Controlled numeric values cannot
  * represent an empty string, so parsing directly in onChange makes backspace
@@ -63,13 +63,13 @@ const NumericInput: React.FC<{
 };
 
 const Head: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="text-[10px] font-semibold uppercase tracking-wider text-[#69717D] pt-3 mt-1 border-t border-[#E1E4E8] first:border-t-0 first:pt-0 first:mt-0">
+  <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-2 pt-3 mt-1 border-t border-line first:border-t-0 first:pt-0 first:mt-0">
     {children}
   </div>
 );
 
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <label className="grid grid-cols-[1fr_130px] items-center gap-2 text-[11px] text-[#69717D]">
+  <label className="grid grid-cols-[1fr_130px] items-center gap-2 text-[11px] text-fg-2">
     <span>{label}</span>
     {children}
   </label>
@@ -136,7 +136,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
   };
 
   return (
-    <div className="h-full min-h-0 flex flex-col text-xs text-[#171A1F]">
+    <div className="h-full min-h-0 flex flex-col text-xs text-fg">
       <div className="flex-1 min-h-0 overflow-y-auto px-4 pt-3 pb-4 space-y-2">
         <Head>Run type</Head>
         <div className="grid grid-cols-2 gap-1.5">
@@ -146,8 +146,8 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
               onClick={() => chooseRegime(t)}
               className={`py-2 rounded border text-[11px] font-medium transition-colors ${
                 (t === 'transient') === transient
-                  ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]'
-                  : 'border-[#E1E4E8] text-[#69717D] bg-white'
+                  ? 'border-accent bg-accent-soft text-accent-fg'
+                  : 'border-line text-fg-2 bg-surface'
               }`}
             >
               {t === 'steady' ? 'Steady state' : 'Transient'}
@@ -155,7 +155,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
           ))}
         </div>
         {/* moved out of the live UI - see solver/SolverPanel.tsx, kept for a future tutorial
-        <p className="text-[10px] text-[#69717D] leading-relaxed">
+        <p className="text-[10px] text-fg-2 leading-relaxed">
           {transient
             ? 'Marches in time. Set how long to run and the time step.'
             : 'Iterates to a converged solution - no time axis.'}
@@ -219,7 +219,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
           {/* OpenFOAM 13's foamRun picks the pressure-velocity algorithm itself
               from the time scheme + corrector count - there is nothing to choose.
               Show what it will run so the panel still explains itself. */}
-          <span className="text-[11px] text-[#69717D]">
+          <span className="text-[11px] text-fg-2">
             {!transient
               ? 'SIMPLE - steady, auto'
               : c.methods.nOuterCorrectors > 1
@@ -296,15 +296,15 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
               onClick={() => applyPreset(p)}
               className={`py-1.5 rounded border text-[10px] font-medium capitalize transition-colors ${
                 c.controls.preset === p
-                  ? 'border-[#2563EB] bg-blue-50 text-[#1D4ED8]'
-                  : 'border-[#E1E4E8] text-[#69717D] bg-white'
+                  ? 'border-accent bg-accent-soft text-accent-fg'
+                  : 'border-line text-fg-2 bg-surface'
               }`}
             >
               {p}
             </button>
           ))}
         </div>
-        <p className="text-[9px] text-[#8B95A1]">
+        <p className="text-[10px] text-fg-3">
           Under-relaxation {c.controls.preset === 'custom' ? '(custom)' : ''}
         </p>
         {(['p', 'U', 'k', 'omega'] as const).map((f) => (
@@ -326,11 +326,11 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
         </Row>
 
         <Head>Report definitions</Head>
-        <label className="flex items-center justify-between text-[11px] text-[#69717D]">
+        <label className="flex items-center justify-between text-[11px] text-fg-2">
           <span>Force coefficients (Cd, Cl, Cm)</span>
           <input
             type="checkbox"
-            className="accent-[#2563EB]"
+            className="accent-accent"
             checked={c.monitors.forces.enabled}
             onChange={(e) => setForces({ enabled: e.target.checked })}
           />
@@ -367,7 +367,7 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
                 placeholder="auto"
               />
             </Row>
-            <p className="text-[9px] text-[#8B95A1]">
+            <p className="text-[10px] text-fg-3">
               Lift / drag directions follow the {state.geometry.angleOfAttackDeg}° angle of attack.
             </p>
           </>
@@ -407,13 +407,13 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
         </Row>
       </div>
 
-      <div className="shrink-0 px-4 pt-3 pb-3 border-t border-[#E1E4E8] bg-white space-y-2">
+      <div className="shrink-0 px-4 pt-3 pb-3 border-t border-line bg-surface space-y-2">
         <button
           onClick={running ? onStop : onRun}
           className={`w-full py-2 font-medium rounded-sm flex items-center justify-center gap-1.5 transition-colors ${
             running
-              ? 'bg-[#DC2626] hover:bg-[#B91C1C] text-white'
-              : 'bg-[#2563EB] hover:bg-[#1D4ED8] text-white'
+              ? 'bg-danger hover:bg-danger text-white'
+              : 'bg-accent hover:bg-accent-hover text-white'
           }`}
         >
           {running ? (

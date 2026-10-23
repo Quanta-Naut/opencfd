@@ -53,13 +53,16 @@ const SolverMonitorRailComponent: React.FC<SolverMonitorRailProps> = ({
   onOpenChange,
 }) => {
   const [width, setWidth] = useRafState<number>(
-    Number(typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_monitor_w')) >= MIN_W
+    Number(typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_monitor_w')) >=
+      MIN_W
       ? Number(localStorage.getItem('opencfd_monitor_w'))
       : DEFAULT_W,
   );
   const [split, setSplit] = useRafState<number>(
     (() => {
-      const s = Number(typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_monitor_split'));
+      const s = Number(
+        typeof localStorage !== 'undefined' && localStorage.getItem('opencfd_monitor_split'),
+      );
       return s > 0.15 && s < 0.85 ? s : 0.5;
     })(),
   );
@@ -77,7 +80,10 @@ const SolverMonitorRailComponent: React.FC<SolverMonitorRailProps> = ({
       if (dragRef.current) {
         const maxW = Math.max(MIN_W, window.innerWidth - 360);
         setWidth(
-          Math.min(maxW, Math.max(MIN_W, dragRef.current.startW + (dragRef.current.startX - e.clientX))),
+          Math.min(
+            maxW,
+            Math.max(MIN_W, dragRef.current.startW + (dragRef.current.startX - e.clientX)),
+          ),
         );
       } else if (vDragRef.current && bodyRef.current) {
         const r = bodyRef.current.getBoundingClientRect();
@@ -87,11 +93,19 @@ const SolverMonitorRailComponent: React.FC<SolverMonitorRailProps> = ({
     const onUp = () => {
       if (dragRef.current) {
         dragRef.current = null;
-        try { localStorage.setItem('opencfd_monitor_w', String(Math.round(wRef.current))); } catch { /* ignore */ }
+        try {
+          localStorage.setItem('opencfd_monitor_w', String(Math.round(wRef.current)));
+        } catch {
+          /* ignore */
+        }
       }
       if (vDragRef.current) {
         vDragRef.current = false;
-        try { localStorage.setItem('opencfd_monitor_split', sRef.current.toFixed(3)); } catch { /* ignore */ }
+        try {
+          localStorage.setItem('opencfd_monitor_split', sRef.current.toFixed(3));
+        } catch {
+          /* ignore */
+        }
       }
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
@@ -148,13 +162,13 @@ const SolverMonitorRailComponent: React.FC<SolverMonitorRailProps> = ({
 
   const statusChip =
     executionStatus === 'running' ? (
-      <span className="text-[#2563EB]">● running</span>
+      <span className="text-accent">● running</span>
     ) : executionStatus === 'completed' ? (
-      <span className="text-[#16A34A]">converged</span>
+      <span className="text-success">converged</span>
     ) : executionStatus === 'error' ? (
-      <span className="text-[#DC2626]">failed</span>
+      <span className="text-danger">failed</span>
     ) : (
-      <span className="text-[#9AA3AF]">idle</span>
+      <span className="text-fg-3">idle</span>
     );
 
   if (!open) {
@@ -162,55 +176,65 @@ const SolverMonitorRailComponent: React.FC<SolverMonitorRailProps> = ({
       <button
         onClick={() => onOpenChange(true)}
         title="Open solver monitor"
-        className="h-full w-9 shrink-0 border-l border-[#E1E4E8] bg-white hover:bg-[#F5F6F8] flex flex-col items-center justify-center gap-2 text-[#69717D]"
+        className="h-full w-9 shrink-0 border-l border-line bg-surface hover:bg-app flex flex-col items-center justify-center gap-2 text-fg-2"
       >
-        <Activity className={`w-4 h-4 ${executionStatus === 'running' ? 'text-[#2563EB]' : ''}`} />
+        <Activity className={`w-4 h-4 ${executionStatus === 'running' ? 'text-accent' : ''}`} />
         <span className="[writing-mode:vertical-rl] rotate-180 text-[10px] font-semibold uppercase tracking-wider">
           Monitor
         </span>
-        {executionStatus === 'running' && <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] animate-pulse" />}
+        {executionStatus === 'running' && (
+          <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+        )}
       </button>
     );
   }
 
   return (
     <div
-      className="relative h-full shrink-0 border-l border-[#E1E4E8] bg-white flex flex-col select-none"
+      className="relative h-full shrink-0 border-l border-line bg-surface flex flex-col select-none"
       style={{ width }}
     >
       <div
         onMouseDown={startDrag}
         title="Drag to resize"
-        className="absolute left-0 top-0 bottom-0 -ml-1 w-2 cursor-col-resize z-10 hover:bg-[#2563EB]/30 transition-colors"
+        className="absolute left-0 top-0 bottom-0 -ml-1 w-2 cursor-col-resize z-10 hover:bg-accent/30 transition-colors"
       />
 
-      <div className="h-9 px-3 flex items-center justify-between border-b border-[#E1E4E8] bg-[#F5F6F8]">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-[#69717D]">Solver monitor</span>
+      <div className="h-9 px-3 flex items-center justify-between border-b border-line bg-app">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-fg-2">
+          Solver monitor
+        </span>
         <button
           onClick={() => onOpenChange(false)}
           title="Collapse"
-          className="p-1 rounded text-[#69717D] hover:bg-[#E1E4E8]"
+          className="p-1 rounded text-fg-2 hover:bg-line"
         >
           <ChevronRight className="w-4 h-4" />
         </button>
       </div>
 
-      <div className="px-3 py-2 flex items-center gap-4 text-[11px] font-mono border-b border-[#EDEFF3] text-[#69717D]">
+      <div className="px-3 py-2 flex items-center gap-4 text-[11px] font-mono border-b border-line-soft text-fg-2">
         {statusChip}
-        <span>Cd <strong className="text-[#171A1F]">{fmt(cd)}</strong></span>
-        <span>Cl <strong className="text-[#171A1F]">{fmt(cl)}</strong></span>
-        <span className="ml-auto">iter <strong className="text-[#171A1F]">{lastIter}</strong></span>
+        <span>
+          Cd <strong className="text-fg">{fmt(cd)}</strong>
+        </span>
+        <span>
+          Cl <strong className="text-fg">{fmt(cl)}</strong>
+        </span>
+        <span className="ml-auto">
+          iter <strong className="text-fg">{lastIter}</strong>
+        </span>
       </div>
 
       <div ref={bodyRef} className="flex-1 min-h-0 flex flex-col">
         {/* Residuals (top) */}
         <div className="min-h-0 flex flex-col" style={{ flexGrow: split, flexBasis: 0 }}>
-          <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[#8A929E]">
+          <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-3">
             Residual convergence
           </div>
           <div className="flex-1 min-h-0 px-1 pb-1">
             {resData.length < 2 ? (
-              <div className="w-full h-full flex items-center justify-center text-center text-[#A5ACB5] text-[11px] font-mono px-4">
+              <div className="w-full h-full flex items-center justify-center text-center text-fg-4 text-[12px] px-4">
                 Plots in real time once the solver is running.
               </div>
             ) : (
@@ -222,26 +246,33 @@ const SolverMonitorRailComponent: React.FC<SolverMonitorRailProps> = ({
         <div
           onMouseDown={startVDrag}
           title="Drag to resize"
-          className="h-1.5 shrink-0 cursor-row-resize bg-[#EDEFF3] hover:bg-[#2563EB]/40 transition-colors"
+          className="h-1.5 shrink-0 cursor-row-resize bg-surface-3 hover:bg-accent/40 transition-colors"
         />
 
         {/* Forces (bottom) */}
         <div className="min-h-0 flex flex-col" style={{ flexGrow: 1 - split, flexBasis: 0 }}>
           <div className="px-3 pt-2 pb-1 flex items-center justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-[#8A929E]">Force coefficients</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-fg-3">
+              Force coefficients
+            </span>
             {forceData.length >= 2 && (
-              <span className="text-[10px] font-mono text-[#69717D]">
-                L/D <strong className="text-[#2563EB]">{cd && cl ? (cl / cd).toFixed(2) : '-'}</strong>
+              <span className="text-[10px] font-mono text-fg-2">
+                L/D <strong className="text-accent">{cd && cl ? (cl / cd).toFixed(2) : '-'}</strong>
               </span>
             )}
           </div>
           <div className="flex-1 min-h-0 px-1 pb-1">
             {forceData.length < 2 ? (
-              <div className="w-full h-full flex items-center justify-center text-center text-[#A5ACB5] text-[11px] font-mono px-4">
+              <div className="w-full h-full flex items-center justify-center text-center text-fg-4 text-[12px] px-4">
                 Cd / Cl appear once the solver reports force coefficients.
               </div>
             ) : (
-              <CanvasChart data={forceData} xKey="iteration" series={FORCE_SERIES} yScale="linear" />
+              <CanvasChart
+                data={forceData}
+                xKey="iteration"
+                series={FORCE_SERIES}
+                yScale="linear"
+              />
             )}
           </div>
         </div>

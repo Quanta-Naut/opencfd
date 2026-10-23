@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { TopHeader } from './components/layout/TopHeader';
-import { WorkflowStrip, StageId } from './components/layout/WorkflowStrip';
+import { AppBar } from './components/layout/AppBar';
+import type { StageId } from './components/layout/stages';
 import { LeftStagePanel } from './components/layout/LeftStagePanel';
 import { CadWorkbench2D } from './components/cad/CadWorkbench2D';
 import { TransientPlaybackControls } from './components/viewport/TransientPlaybackControls';
@@ -28,9 +28,12 @@ import {
   Wand2,
   Ruler,
   FileDown,
+  SunMoon,
+  PanelLeft,
+  Monitor,
 } from 'lucide-react';
+import { setThemePreference, toggleTheme } from './utils/theme';
 import { CaseFilesModal } from './components/solver/CaseFilesModal';
-import { StatusBar } from './components/layout/StatusBar';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
 import { wallResolution } from './caseSetup/flowCalc';
 import { defaultPatchBC } from './caseSetup/bcCatalog';
@@ -1220,6 +1223,7 @@ export function App({
   const [caseFilesOpen, setCaseFilesOpen] = useState(false); // OpenFOAM dicts modal
   const [paletteOpen, setPaletteOpen] = useState(false); // ⌘K command palette
   const [shortcutsOpen, setShortcutsOpen] = useState(false); // ? shortcut sheet
+  const [leftPanelHidden, setLeftPanelHidden] = useState(false); // mod+B gives the canvas the full width
   const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   useEffect(() => {
@@ -1446,11 +1450,46 @@ export function App({
   const commands = useMemo<Command[]>(
     () => [
       // Navigate
-      { id: 'go-geometry', group: 'Navigate', title: 'Go to Geometry', icon: <PenTool className="w-4 h-4" />, shortcut: ['1'], run: () => setActiveStage('geometry') },
-      { id: 'go-case-setup', group: 'Navigate', title: 'Go to Case Setup', icon: <SlidersHorizontal className="w-4 h-4" />, shortcut: ['2'], run: () => setActiveStage('caseSetup') },
-      { id: 'go-mesh', group: 'Navigate', title: 'Go to Mesh', icon: <Grid3x3 className="w-4 h-4" />, shortcut: ['3'], run: () => setActiveStage('mesh') },
-      { id: 'go-solver', group: 'Navigate', title: 'Go to Solver', icon: <Play className="w-4 h-4" />, shortcut: ['4'], run: () => setActiveStage('solver') },
-      { id: 'go-results', group: 'Navigate', title: 'Go to Results', icon: <BarChart3 className="w-4 h-4" />, shortcut: ['5'], run: () => setActiveStage('results') },
+      {
+        id: 'go-geometry',
+        group: 'Navigate',
+        title: 'Go to Geometry',
+        icon: <PenTool className="w-4 h-4" />,
+        shortcut: ['1'],
+        run: () => setActiveStage('geometry'),
+      },
+      {
+        id: 'go-case-setup',
+        group: 'Navigate',
+        title: 'Go to Case Setup',
+        icon: <SlidersHorizontal className="w-4 h-4" />,
+        shortcut: ['2'],
+        run: () => setActiveStage('caseSetup'),
+      },
+      {
+        id: 'go-mesh',
+        group: 'Navigate',
+        title: 'Go to Mesh',
+        icon: <Grid3x3 className="w-4 h-4" />,
+        shortcut: ['3'],
+        run: () => setActiveStage('mesh'),
+      },
+      {
+        id: 'go-solver',
+        group: 'Navigate',
+        title: 'Go to Solver',
+        icon: <Play className="w-4 h-4" />,
+        shortcut: ['4'],
+        run: () => setActiveStage('solver'),
+      },
+      {
+        id: 'go-results',
+        group: 'Navigate',
+        title: 'Go to Results',
+        icon: <BarChart3 className="w-4 h-4" />,
+        shortcut: ['5'],
+        run: () => setActiveStage('results'),
+      },
 
       // Mesh
       {
@@ -1465,9 +1504,30 @@ export function App({
           : 'A mesh is already being generated',
         run: handleGenerateMesh,
       },
-      { id: 'mesh-blocks-h', group: 'Mesh', title: 'Build Structured Blocks · H-grid', keywords: 'blocking hexa structured', icon: <Layers className="w-4 h-4" />, run: () => handleBuildBlocks('hgrid') },
-      { id: 'mesh-blocks-o', group: 'Mesh', title: 'Build Structured Blocks · O-grid', keywords: 'blocking ring body', icon: <Layers className="w-4 h-4" />, run: () => handleBuildBlocks('ogrid') },
-      { id: 'mesh-blocks-c', group: 'Mesh', title: 'Build Structured Blocks · C-grid', keywords: 'blocking airfoil wake', icon: <Layers className="w-4 h-4" />, run: () => handleBuildBlocks('cgrid') },
+      {
+        id: 'mesh-blocks-h',
+        group: 'Mesh',
+        title: 'Build Structured Blocks · H-grid',
+        keywords: 'blocking hexa structured',
+        icon: <Layers className="w-4 h-4" />,
+        run: () => handleBuildBlocks('hgrid'),
+      },
+      {
+        id: 'mesh-blocks-o',
+        group: 'Mesh',
+        title: 'Build Structured Blocks · O-grid',
+        keywords: 'blocking ring body',
+        icon: <Layers className="w-4 h-4" />,
+        run: () => handleBuildBlocks('ogrid'),
+      },
+      {
+        id: 'mesh-blocks-c',
+        group: 'Mesh',
+        title: 'Build Structured Blocks · C-grid',
+        keywords: 'blocking airfoil wake',
+        icon: <Layers className="w-4 h-4" />,
+        run: () => handleBuildBlocks('cgrid'),
+      },
       {
         id: 'mesh-structured-generate',
         group: 'Mesh',
@@ -1478,12 +1538,33 @@ export function App({
         disabledReason: 'Build the block topology first',
         run: handleGenerateStructuredMesh,
       },
-      { id: 'mesh-apply-yplus', group: 'Mesh', title: 'Apply y⁺ Sizing to Mesh', keywords: 'first layer prism boundary layer', icon: <Ruler className="w-4 h-4" />, run: handleApplyYPlusToMesh },
-      { id: 'mesh-blockmeshdict', group: 'Mesh', title: 'Download blockMeshDict', keywords: 'export native openfoam', icon: <FileDown className="w-4 h-4" />, run: () => requestDownloadBlockMeshDictRef.current?.() },
+      {
+        id: 'mesh-apply-yplus',
+        group: 'Mesh',
+        title: 'Apply y⁺ Sizing to Mesh',
+        keywords: 'first layer prism boundary layer',
+        icon: <Ruler className="w-4 h-4" />,
+        run: handleApplyYPlusToMesh,
+      },
+      {
+        id: 'mesh-blockmeshdict',
+        group: 'Mesh',
+        title: 'Download blockMeshDict',
+        keywords: 'export native openfoam',
+        icon: <FileDown className="w-4 h-4" />,
+        run: () => requestDownloadBlockMeshDictRef.current?.(),
+      },
 
       // Solver
       solverRunning
-        ? { id: 'solver-stop', group: 'Solver', title: 'Stop Solver', icon: <Square className="w-4 h-4" />, shortcut: [MOD_LABEL, '↵'], run: handleStopSolver }
+        ? {
+            id: 'solver-stop',
+            group: 'Solver',
+            title: 'Stop Solver',
+            icon: <Square className="w-4 h-4" />,
+            shortcut: [MOD_LABEL, '↵'],
+            run: handleStopSolver,
+          }
         : {
             id: 'solver-run',
             group: 'Solver',
@@ -1494,16 +1575,86 @@ export function App({
             disabledReason: !meshReady ? 'Generate a mesh first' : 'A run is already in progress',
             run: handleRunSolver,
           },
-      { id: 'solver-reload', group: 'Solver', title: 'Reload Results', keywords: 'refresh refetch field', icon: <RefreshCw className="w-4 h-4" />, run: () => { clearResultsCache(); void loadResults(true); } },
+      {
+        id: 'solver-reload',
+        group: 'Solver',
+        title: 'Reload Results',
+        keywords: 'refresh refetch field',
+        icon: <RefreshCw className="w-4 h-4" />,
+        run: () => {
+          clearResultsCache();
+          void loadResults(true);
+        },
+      },
 
       // Results
-      { id: 'results-new-plot', group: 'Results', title: 'New Plot', keywords: 'chart line probe compare', icon: <Plus className="w-4 h-4" />, run: () => setCreatePlotModalOpen(true) },
-      { id: 'results-view-latest', group: 'Results', title: 'View Latest Run', keywords: 'open field viewport', icon: <BarChart3 className="w-4 h-4" />, run: selectLatestFinishedRun },
+      {
+        id: 'results-new-plot',
+        group: 'Results',
+        title: 'New Plot',
+        keywords: 'chart line probe compare',
+        icon: <Plus className="w-4 h-4" />,
+        run: () => setCreatePlotModalOpen(true),
+      },
+      {
+        id: 'results-view-latest',
+        group: 'Results',
+        title: 'View Latest Run',
+        keywords: 'open field viewport',
+        icon: <BarChart3 className="w-4 h-4" />,
+        run: selectLatestFinishedRun,
+      },
 
       // Project
-      { id: 'project-case-files', group: 'Project', title: 'Open OpenFOAM Case Files', keywords: 'dicts browse system constant', icon: <FileCode className="w-4 h-4" />, run: () => setCaseFilesOpen(true) },
-      { id: 'project-preferences', group: 'Project', title: 'Open Preferences', keywords: 'settings options', icon: <Settings className="w-4 h-4" />, run: () => setPreferencesOpen(true) },
-      { id: 'project-home', group: 'Project', title: 'Back to Projects', keywords: 'close home exit', icon: <LayoutGrid className="w-4 h-4" />, run: handleExitHome },
+      {
+        id: 'project-case-files',
+        group: 'Project',
+        title: 'Open OpenFOAM Case Files',
+        keywords: 'dicts browse system constant',
+        icon: <FileCode className="w-4 h-4" />,
+        run: () => setCaseFilesOpen(true),
+      },
+      {
+        id: 'project-preferences',
+        group: 'Project',
+        title: 'Open Preferences',
+        keywords: 'settings options',
+        icon: <Settings className="w-4 h-4" />,
+        run: () => setPreferencesOpen(true),
+      },
+      {
+        id: 'view-toggle-left-panel',
+        group: 'View',
+        title: 'Toggle Stage Panel',
+        keywords: 'sidebar left hide show collapse focus',
+        icon: <PanelLeft className="w-4 h-4" />,
+        shortcut: [MOD_LABEL, 'B'],
+        run: () => setLeftPanelHidden((h) => !h),
+      },
+      {
+        id: 'view-theme-toggle',
+        group: 'View',
+        title: 'Toggle Light / Dark Theme',
+        keywords: 'appearance dark mode light mode colour',
+        icon: <SunMoon className="w-4 h-4" />,
+        run: toggleTheme,
+      },
+      {
+        id: 'view-theme-system',
+        group: 'View',
+        title: 'Use System Theme',
+        keywords: 'appearance auto os',
+        icon: <Monitor className="w-4 h-4" />,
+        run: () => setThemePreference('system'),
+      },
+      {
+        id: 'project-home',
+        group: 'Project',
+        title: 'Back to Projects',
+        keywords: 'close home exit',
+        icon: <LayoutGrid className="w-4 h-4" />,
+        run: handleExitHome,
+      },
     ],
     [
       meshGate,
@@ -1541,11 +1692,36 @@ export function App({
         setShortcutsOpen((o) => !o);
       },
     },
-    { combo: '1', handler: () => { if (!modalOpen) setActiveStage('geometry'); } },
-    { combo: '2', handler: () => { if (!modalOpen) setActiveStage('caseSetup'); } },
-    { combo: '3', handler: () => { if (!modalOpen) setActiveStage('mesh'); } },
-    { combo: '4', handler: () => { if (!modalOpen) setActiveStage('solver'); } },
-    { combo: '5', handler: () => { if (!modalOpen) setActiveStage('results'); } },
+    {
+      combo: '1',
+      handler: () => {
+        if (!modalOpen) setActiveStage('geometry');
+      },
+    },
+    {
+      combo: '2',
+      handler: () => {
+        if (!modalOpen) setActiveStage('caseSetup');
+      },
+    },
+    {
+      combo: '3',
+      handler: () => {
+        if (!modalOpen) setActiveStage('mesh');
+      },
+    },
+    {
+      combo: '4',
+      handler: () => {
+        if (!modalOpen) setActiveStage('solver');
+      },
+    },
+    {
+      combo: '5',
+      handler: () => {
+        if (!modalOpen) setActiveStage('results');
+      },
+    },
     {
       combo: 'mod+enter',
       handler: (e) => {
@@ -1555,35 +1731,38 @@ export function App({
         else if (meshReady && !solverBusy) handleRunSolver();
       },
     },
+    {
+      combo: 'mod+b',
+      handler: (e) => {
+        e.preventDefault();
+        setLeftPanelHidden((h) => !h);
+      },
+    },
     { combo: 'escape', handler: () => setShortcutsOpen(false) },
   ]);
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#F5F6F8] overflow-hidden font-sans text-[#171A1F]">
-      {/* 1. TOP BAR (52px) */}
-      <TopHeader
+    <div className="flex flex-col h-screen w-screen bg-app overflow-hidden font-sans text-fg">
+      {/* Top bar: project, workflow stages, global actions (44px) */}
+      <AppBar
         projectName={projectName}
         onProjectNameChange={handleRenameProject}
         onExitHome={handleExitHome}
+        activeStage={activeStage}
+        onSelectStage={setActiveStage}
+        stageStatus={stageStatus}
+        onOpenCaseFiles={() => setCaseFilesOpen(true)}
+        caseFilesCount={Object.keys(caseFiles).length}
         onOpenCommandPalette={() => setPaletteOpen(true)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
         preferencesOpen={preferencesOpen}
         onPreferencesOpenChange={setPreferencesOpen}
       />
 
-      {/* 2. WORKFLOW NAVIGATION STRIP (36px) */}
-      <WorkflowStrip
-        activeStage={activeStage}
-        onSelectStage={setActiveStage}
-        stageStatus={stageStatus}
-        onOpenCaseFiles={() => setCaseFilesOpen(true)}
-        caseFilesCount={Object.keys(caseFiles).length}
-      />
-
-      {/* 3. THREE-COLUMN HERO WORKSPACE */}
+      {/* Workspace: stage panel, viewport, right rails */}
       <div className="flex-1 flex min-h-0 relative">
         {activeStage === 'caseSetup' && (
-          <div className="absolute inset-0 z-30 bg-[#F5F6F8] overflow-hidden flex">
+          <div className="absolute inset-0 z-30 bg-app overflow-hidden flex">
             <CaseSetupPanel
               state={state}
               setState={setState}
@@ -1595,155 +1774,160 @@ export function App({
         )}
         {/* Workbench stays mounted under the Case Setup overlay so CAD state is
  never lost when switching stages. */}
-        {/* Left Column: Stage Controls (280px) */}
-        <LeftStagePanel
-          activeStage={activeStage}
-          onSelectStage={setActiveStage}
-          stageStatus={stageStatus}
-          state={state}
-          updateGeometry={(p) =>
-            setState((prev) => ({ ...prev, geometry: { ...prev.geometry, ...p } }))
-          }
-          updatePhysics={(p) =>
-            setState((prev) => ({
-              ...prev,
-              physics: { ...prev.physics, ...p },
-              boundaries: {
-                ...prev.boundaries,
-                ...(p.inletVelocity !== undefined ? { inletVelocity: p.inletVelocity } : {}),
-              },
-            }))
-          }
-          updateBoundaries={(p) =>
-            setState((prev) => ({ ...prev, boundaries: { ...prev.boundaries, ...p } }))
-          }
-          updateYPlus={(p) => setState((prev) => ({ ...prev, yplus: { ...prev.yplus, ...p } }))}
-          updateSolver={(p) => setState((prev) => ({ ...prev, solver: { ...prev.solver, ...p } }))}
-          updatePostProcess={(p) =>
-            setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...p } }))
-          }
-          onGenerateMesh={handleGenerateMesh}
-          blocking={blocking}
-          onBuildBlocks={handleBuildBlocks}
-          onInitializeBlocking={handleInitializeBlocking}
-          onUpdateBlocking={handleUpdateBlocking}
-          onGenerateStructuredMesh={handleGenerateStructuredMesh}
-          ogridBodies={ogridBodies}
-          onWrapBody={handleWrapBody}
-          ogridParams={ogridParams}
-          onUpdateOgridParams={handleUpdateOgridParams}
-          structuredHint={structuredHint}
-          structuredSmooth={structuredSmooth}
-          setStructuredSmooth={setStructuredSmooth}
-          meshTopology={meshTopology}
-          onMeshTopologyChange={changeMeshTopology}
-          width={sidebarW}
-          onWidthChange={(w) => {
-            setSidebarW(w);
-            try {
-              localStorage.setItem('opencfd_sidebar_w', String(Math.round(w)));
-            } catch {
-              /* ignore */
+        {/* Left Column: Stage Controls (280px). Hidden with display:none rather
+            than unmounted so section open/closed state survives mod+B. */}
+        <div className={leftPanelHidden ? 'hidden' : 'contents'}>
+          <LeftStagePanel
+            activeStage={activeStage}
+            onSelectStage={setActiveStage}
+            stageStatus={stageStatus}
+            state={state}
+            updateGeometry={(p) =>
+              setState((prev) => ({ ...prev, geometry: { ...prev.geometry, ...p } }))
             }
-          }}
-          onApplyYPlusToMesh={handleApplyYPlusToMesh}
-          onDirectionColors={setDirectionColors}
-          onBlockModeChange={setBlockMode}
-          meshData={meshData}
-          meshError={meshError}
-          meshStale={meshStale}
-          onRunSolver={handleRunSolver}
-          onStopSolver={handleStopSolver}
-          projectId={projectId}
-          onReloadResults={() => {
-            clearResultsCache();
-            void loadResults(true);
-          }}
-          resultsLoading={resultsLoading}
-          fieldSource={fieldData?.source}
-          fieldTime={fieldData?.time}
-          onSetSolution={handleSetSolution}
-          onSetTimeFormulation={(t) =>
-            setState((prev) => ({ ...prev, physics: { ...prev.physics, timeFormulation: t } }))
-          }
-          solverPatchNames={patchRoles.map((p) => p.name)}
-          solverWallPatches={patchRoles.filter((p) => p.role === 'wall').map((p) => p.name)}
-          solverConvergence={solverConvergence}
-          isMeshing={isMeshing}
-          onSelectBoundary={setSelectedBoundary}
-          selectedBoundary={selectedBoundary}
-          onUploadAirfoilFile={async (file) => {
-            setActiveStage('geometry');
-            try {
-              const res = await uploadAndParseAirfoil(file);
+            updatePhysics={(p) =>
+              setState((prev) => ({
+                ...prev,
+                physics: { ...prev.physics, ...p },
+                boundaries: {
+                  ...prev.boundaries,
+                  ...(p.inletVelocity !== undefined ? { inletVelocity: p.inletVelocity } : {}),
+                },
+              }))
+            }
+            updateBoundaries={(p) =>
+              setState((prev) => ({ ...prev, boundaries: { ...prev.boundaries, ...p } }))
+            }
+            updateYPlus={(p) => setState((prev) => ({ ...prev, yplus: { ...prev.yplus, ...p } }))}
+            updateSolver={(p) =>
+              setState((prev) => ({ ...prev, solver: { ...prev.solver, ...p } }))
+            }
+            updatePostProcess={(p) =>
+              setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...p } }))
+            }
+            onGenerateMesh={handleGenerateMesh}
+            blocking={blocking}
+            onBuildBlocks={handleBuildBlocks}
+            onInitializeBlocking={handleInitializeBlocking}
+            onUpdateBlocking={handleUpdateBlocking}
+            onGenerateStructuredMesh={handleGenerateStructuredMesh}
+            ogridBodies={ogridBodies}
+            onWrapBody={handleWrapBody}
+            ogridParams={ogridParams}
+            onUpdateOgridParams={handleUpdateOgridParams}
+            structuredHint={structuredHint}
+            structuredSmooth={structuredSmooth}
+            setStructuredSmooth={setStructuredSmooth}
+            meshTopology={meshTopology}
+            onMeshTopologyChange={changeMeshTopology}
+            width={sidebarW}
+            onWidthChange={(w) => {
+              setSidebarW(w);
+              try {
+                localStorage.setItem('opencfd_sidebar_w', String(Math.round(w)));
+              } catch {
+                /* ignore */
+              }
+            }}
+            onApplyYPlusToMesh={handleApplyYPlusToMesh}
+            onDirectionColors={setDirectionColors}
+            onBlockModeChange={setBlockMode}
+            meshData={meshData}
+            meshError={meshError}
+            meshStale={meshStale}
+            onRunSolver={handleRunSolver}
+            onStopSolver={handleStopSolver}
+            projectId={projectId}
+            onReloadResults={() => {
+              clearResultsCache();
+              void loadResults(true);
+            }}
+            resultsLoading={resultsLoading}
+            fieldSource={fieldData?.source}
+            fieldTime={fieldData?.time}
+            onSetSolution={handleSetSolution}
+            onSetTimeFormulation={(t) =>
+              setState((prev) => ({ ...prev, physics: { ...prev.physics, timeFormulation: t } }))
+            }
+            solverPatchNames={patchRoles.map((p) => p.name)}
+            solverWallPatches={patchRoles.filter((p) => p.role === 'wall').map((p) => p.name)}
+            solverConvergence={solverConvergence}
+            isMeshing={isMeshing}
+            onSelectBoundary={setSelectedBoundary}
+            selectedBoundary={selectedBoundary}
+            onUploadAirfoilFile={async (file) => {
+              setActiveStage('geometry');
+              try {
+                const res = await uploadAndParseAirfoil(file);
+                const pts: Point2D[] = res.points.map(([x, y]: number[]) => ({ x, y }));
+                setState((prev) => ({
+                  ...prev,
+                  geometry: { ...prev.geometry, name: res.name || file.name },
+                }));
+                setPendingImportFile({ type: 'parsed', name: res.name || file.name, points: pts });
+              } catch {
+                setPendingImportFile({ type: 'airfoil', file });
+              }
+            }}
+            onUploadAirfoilUrl={async (url) => {
+              setActiveStage('geometry');
+              const res = await fetchAndParseAirfoilFromUrl(url);
               const pts: Point2D[] = res.points.map(([x, y]: number[]) => ({ x, y }));
               setState((prev) => ({
                 ...prev,
-                geometry: { ...prev.geometry, name: res.name || file.name },
+                geometry: { ...prev.geometry, name: res.name || 'Airfoil' },
               }));
-              setPendingImportFile({ type: 'parsed', name: res.name || file.name, points: pts });
-            } catch {
-              setPendingImportFile({ type: 'airfoil', file });
-            }
-          }}
-          onUploadAirfoilUrl={async (url) => {
-            setActiveStage('geometry');
-            const res = await fetchAndParseAirfoilFromUrl(url);
-            const pts: Point2D[] = res.points.map(([x, y]: number[]) => ({ x, y }));
-            setState((prev) => ({
-              ...prev,
-              geometry: { ...prev.geometry, name: res.name || 'Airfoil' },
-            }));
-            setPendingImportFile({ type: 'parsed', name: res.name || 'Airfoil', points: pts });
-          }}
-          onUploadDxfFile={(file) => {
-            setPendingImportFile({ type: 'dxf', file });
-            setActiveStage('geometry');
-          }}
-          // ── 6-Step Workflow Sidebar Props ──
-          cadWorkflowStep={cadWorkflowStep}
-          setCadWorkflowStep={setCadWorkflowStep}
-          flowType={flowType}
-          setFlowType={handleFlowTypeChange}
-          domainShape={domainShape}
-          setDomainShape={setDomainShape}
-          domainPreset={domainPreset}
-          setDomainPreset={setDomainPreset}
-          upstreamChordFactor={upstreamChordFactor}
-          setUpstreamChordFactor={setUpstreamChordFactor}
-          downstreamChordFactor={downstreamChordFactor}
-          setDownstreamChordFactor={setDownstreamChordFactor}
-          lateralHeightFactor={lateralHeightFactor}
-          setLateralHeightFactor={setLateralHeightFactor}
-          geometryBBox={geometryBBox}
-          angleOfAttackDeg={angleOfAttackDeg}
-          setAngleOfAttackDeg={setAngleOfAttackDeg}
-          freestreamVelocity={freestreamVelocity}
-          setFreestreamVelocity={setFreestreamVelocity}
-          activeTagTool={activeTagTool}
-          setActiveTagTool={setActiveTagTool}
-          edgeTagMap={edgeTagMap}
-          onGenerateDomain={() => requestGenerateDomainRef.current?.()}
-          onSetSelectedAsDomain={() => requestSetSelectedAsDomainRef.current?.()}
-          onSetSelectedAsGeometry={() => requestSetSelectedAsGeometryRef.current?.()}
-          onSelectAllGeometry={() => requestSelectAllGeometryRef.current?.()}
-          onClearGeometry={() => requestClearGeometryRef.current?.()}
-          onAutoSuggestTags={() => requestAutoSuggestTagsRef.current?.()}
-          onMeshHandoff={() => requestMeshHandoffRef.current?.()}
-          onDownloadBlockMeshDict={() => requestDownloadBlockMeshDictRef.current?.()}
-          domainValidation={domainValidation}
-          domainKind={domainKind}
-          domainState={domainState}
-          boundaryValidation={boundaryValidation}
-          boundaryEdgesCount={boundaryEdges.length}
-          geometryEntitiesCount={geometryEntitiesCount}
-          onCreatePlot={() => setCreatePlotModalOpen(true)}
-        />
+              setPendingImportFile({ type: 'parsed', name: res.name || 'Airfoil', points: pts });
+            }}
+            onUploadDxfFile={(file) => {
+              setPendingImportFile({ type: 'dxf', file });
+              setActiveStage('geometry');
+            }}
+            // ── 6-Step Workflow Sidebar Props ──
+            cadWorkflowStep={cadWorkflowStep}
+            setCadWorkflowStep={setCadWorkflowStep}
+            flowType={flowType}
+            setFlowType={handleFlowTypeChange}
+            domainShape={domainShape}
+            setDomainShape={setDomainShape}
+            domainPreset={domainPreset}
+            setDomainPreset={setDomainPreset}
+            upstreamChordFactor={upstreamChordFactor}
+            setUpstreamChordFactor={setUpstreamChordFactor}
+            downstreamChordFactor={downstreamChordFactor}
+            setDownstreamChordFactor={setDownstreamChordFactor}
+            lateralHeightFactor={lateralHeightFactor}
+            setLateralHeightFactor={setLateralHeightFactor}
+            geometryBBox={geometryBBox}
+            angleOfAttackDeg={angleOfAttackDeg}
+            setAngleOfAttackDeg={setAngleOfAttackDeg}
+            freestreamVelocity={freestreamVelocity}
+            setFreestreamVelocity={setFreestreamVelocity}
+            activeTagTool={activeTagTool}
+            setActiveTagTool={setActiveTagTool}
+            edgeTagMap={edgeTagMap}
+            onGenerateDomain={() => requestGenerateDomainRef.current?.()}
+            onSetSelectedAsDomain={() => requestSetSelectedAsDomainRef.current?.()}
+            onSetSelectedAsGeometry={() => requestSetSelectedAsGeometryRef.current?.()}
+            onSelectAllGeometry={() => requestSelectAllGeometryRef.current?.()}
+            onClearGeometry={() => requestClearGeometryRef.current?.()}
+            onAutoSuggestTags={() => requestAutoSuggestTagsRef.current?.()}
+            onMeshHandoff={() => requestMeshHandoffRef.current?.()}
+            onDownloadBlockMeshDict={() => requestDownloadBlockMeshDictRef.current?.()}
+            domainValidation={domainValidation}
+            domainKind={domainKind}
+            domainState={domainState}
+            boundaryValidation={boundaryValidation}
+            boundaryEdgesCount={boundaryEdges.length}
+            geometryEntitiesCount={geometryEntitiesCount}
+            onCreatePlot={() => setCreatePlotModalOpen(true)}
+          />
+        </div>
 
         {/* Center Canvas + Floating Bottom Console Area */}
-        <div className="flex-1 min-w-0 h-full relative overflow-hidden bg-white">
+        <div className="flex-1 min-w-0 h-full relative overflow-hidden bg-surface">
           {/* Center: one shared CAD canvas; fills entire workspace without getting squished */}
-          <main className="absolute inset-0 w-full h-full bg-white overflow-hidden">
+          <main className="absolute inset-0 w-full h-full bg-surface overflow-hidden">
             <div className="w-full h-full">
               <CadWorkbench2D
                 displayOnly={activeStage !== 'geometry'}
@@ -1826,8 +2010,8 @@ export function App({
                 plotPickPreviewP1={pickingPointsState?.p1 ?? null}
               />
               {pickingPointsState && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-[#1E293B] text-white px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
-                  <Crosshair className="w-4 h-4 text-[#38BDF8] animate-pulse" />
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
+                  <Crosshair className="w-4 h-4 text-accent animate-pulse" />
                   <span>
                     {pickingPointsState.step === 1
                       ? 'Click Point 1 on the geometry canvas'
@@ -1839,7 +2023,7 @@ export function App({
                       setPickingPointsState(null);
                       setCreatePlotModalOpen(true);
                     }}
-                    className="px-2.5 py-0.5 rounded-sm bg-white/20 hover:bg-white/30 text-white font-semibold text-[11px] transition-colors cursor-pointer"
+                    className="px-2.5 py-0.5 rounded-sm bg-surface/20 hover:bg-surface/30 text-white font-semibold text-[11px] transition-colors cursor-pointer"
                   >
                     Cancel
                   </button>
@@ -1896,7 +2080,6 @@ export function App({
       </div>
 
       {/* 5. BOTTOM STATUS BAR (24px) */}
-      <StatusBar />
 
       <CaseFilesModal
         open={caseFilesOpen}
@@ -1933,11 +2116,7 @@ export function App({
       />
 
       {paletteOpen && (
-        <CommandPalette
-          open
-          onClose={() => setPaletteOpen(false)}
-          commands={commands}
-        />
+        <CommandPalette open onClose={() => setPaletteOpen(false)} commands={commands} />
       )}
 
       {shortcutsOpen && <ShortcutsDialog open onClose={() => setShortcutsOpen(false)} />}

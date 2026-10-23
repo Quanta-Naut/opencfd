@@ -3,7 +3,12 @@ import { createPortal } from 'react-dom';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
 export type ToastKind = 'success' | 'error' | 'info';
-interface ToastRow { id: number; msg: string; kind: ToastKind; expiring: boolean }
+interface ToastRow {
+  id: number;
+  msg: string;
+  kind: ToastKind;
+  expiring: boolean;
+}
 
 let rows: ToastRow[] = [];
 let nextId = 1;
@@ -38,9 +43,9 @@ function dismiss(id: number) {
 }
 
 const ICON = {
-  success: <CheckCircle2 className="w-4 h-4 text-[#16A34A]" />,
-  error: <AlertCircle className="w-4 h-4 text-[#DC2626]" />,
-  info: <Info className="w-4 h-4 text-[#2563EB]" />,
+  success: <CheckCircle2 className="w-4 h-4 text-success" />,
+  error: <AlertCircle className="w-4 h-4 text-danger" />,
+  info: <Info className="w-4 h-4 text-accent" />,
 };
 const BAR = { success: '#16A34A', error: '#DC2626', info: '#2563EB' };
 
@@ -53,14 +58,14 @@ const ToastItem: React.FC<ToastRow> = ({ id, msg, kind, expiring }) => {
   return (
     <div
       data-enter={entered && !expiring}
-      className="toast-item pointer-events-auto flex items-start gap-3 w-[360px] max-w-[86vw] rounded bg-white border border-[#E4E7EC] pl-3.5 pr-3 py-3 overflow-hidden"
+      className="toast-item pointer-events-auto flex items-start gap-3 w-[360px] max-w-[86vw] rounded bg-surface border border-line pl-3.5 pr-3 py-3 overflow-hidden"
       style={{ borderLeft: `3px solid ${BAR[kind]}` }}
     >
       <span className="mt-0.5 shrink-0">{ICON[kind]}</span>
-      <span className="flex-1 text-[13px] leading-snug text-[#374151]">{msg}</span>
+      <span className="flex-1 text-[13px] leading-snug text-fg">{msg}</span>
       <button
         onClick={() => dismiss(id)}
-        className="shrink-0 -mr-1 -mt-0.5 p-1 text-[#A5ACB5] hover:text-[#171A1F] rounded transition-colors"
+        className="shrink-0 -mr-1 -mt-0.5 p-1 text-fg-4 hover:text-fg rounded transition-colors"
       >
         <X className="w-4 h-4" />
       </button>
@@ -72,7 +77,9 @@ export const ToastHost: React.FC = () => {
   const [, force] = useReducer((x) => x + 1, 0);
   useEffect(() => {
     listeners.add(force);
-    return () => { listeners.delete(force); };
+    return () => {
+      listeners.delete(force);
+    };
   }, []);
   if (typeof document === 'undefined') return null;
   return createPortal(

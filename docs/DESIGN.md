@@ -1,125 +1,108 @@
-# OpenCFD Visual Design Direction
+# OpenCFD Visual Design
 
 ## Philosophy
 
-This is engineering software, not a consumer app. The reference point is
-ANSYS Workbench / SolidWorks / CATIA / Fusion 360 - precise, dense, flat,
-built for someone staring at it for eight hours a day - not Apple's
-consumer software language (no soft shadows, no glassy blur, no "premium"
-airiness). Depth comes from borders and contrast, never elevation effects.
-Every decision below should be checked against: "does this make the tool
-feel more precise, or does it make it feel decorative?" - if it's the
-second one, cut it.
+This is engineering software, not a consumer app. The references are
+Plasticity (a CAD tool built around the viewport, with chrome that gets out
+of the way) and the newer crop of open-source creative tools such as
+PhotoCraft: dark-capable, flat, dense, keyboard-first. Someone will stare at
+this for eight hours a day.
 
-## The core problem today
+Check every decision against one question: does this make the tool feel more
+precise, or more decorative? If it is the second, cut it.
 
-1. **The accent color is used as decoration, not signal.** `#2563EB` blue
-   appears in roughly 200 places across the frontend - active tabs, every
-   badge, hover states, borders, icons. When everything is the accent
-   color, nothing is. It should mark exactly one thing: the primary action
-   or true current selection.
-2. **Shadows and blur exist in a few places and should be zero.** Current
-   usage: `shadow-xs`/`shadow-sm`/`shadow-md`/`shadow-2xl` in
-   `CreatePlotModal.tsx`, `PlotViewDialog.tsx`, `PlotThumbnail.tsx`,
-   `ResultsRightRail.tsx`, `LeftStagePanel.tsx`, and `App.tsx`; `backdrop-blur`
-   in 8 files. All of it goes. Replace with a border and, if a floating
-   element genuinely needs to read as "on top" (a modal, a dropdown), a
-   solid background plus a 1px border is enough - no blur, no glow.
-3. **Corner radius is a bit soft for this context.** `rounded-lg` (8px) and
-   `rounded-md` (6px) are the two most common radius classes in the app
-   (dominant in `LeftStagePanel.tsx`, `CadWorkbench2D.tsx`,
-   `HomeScreen.tsx`, and most panel components). Tighten this across the
-   board - see the radius scale below.
+Four rules carry most of the weight:
 
-## What's already right - keep it
+1. **The viewport is the product.** Chrome is thin and quiet; tools float over
+   the canvas instead of eating rows above it.
+2. **One accent, used as signal.** Blue marks the single primary action on a
+   screen. Everything else is neutral.
+3. **Depth from lines and surface steps, never shadows.** No `shadow-*`, no
+   `backdrop-blur-*`, anywhere.
+4. **Everything is reachable from the keyboard.** Every command lives in the
+   command palette (`Ctrl/⌘ K`); frequent ones have a hotkey shown in the
+   tooltip.
 
-- The neutral gray scale is good and should stay exactly as-is:
-  `#171A1F` (primary text), `#69717D` (secondary text), `#8A929E` /
-  `#A5ACB5` / `#C4C9D0` (tertiary/disabled text), `#E1E4E8` (default
-  border), `#EDEFF3` / `#F5F6F8` (subtle backgrounds), `#CBD5E1` (mesh/
-  wireframe lines). This is a legitimate, already-consistent grayscale
-  system - the fix is what gets layered on top of it, not the grays
-  themselves.
-- Typography stack is fine: Inter for UI text, JetBrains Mono for
-  numeric/technical readouts (residuals, coordinates, cell counts). Keep
-  both. Do not switch to a "premium" display font.
+## Tokens and themes
 
-## Rules to apply everywhere
+All colour comes from semantic roles in `frontend/src/styles/tokens.css`,
+mapped into Tailwind by the `@theme` block in `frontend/src/index.css`. A
+component never contains a raw hex for UI chrome; it uses `bg-surface`,
+`text-fg-2`, `border-line` and so on. Data colours (colormaps, plot series,
+mesh block tints) are the exception: they are data, not chrome.
 
-### Color
-- One accent color, used ONLY for: the single primary button on a given
-  screen, and the current true selection (an active tab, a selected run/
-  plot/tool). Everything else - secondary buttons, hover states, badges,
-  counters, decorative borders - uses the neutral gray scale above.
-- Status colors (green for success/running, red for error/delete, amber
-  for warning) stay as-is - those carry real meaning and aren't the
-  problem. Just stop reaching for blue as a default "this is interactive"
-  signal.
-- Backgrounds: white for primary content/canvas, `#F5F6F8` for chrome
-  (toolbars, panel headers, the collapsed rail strip) - already mostly
-  correct, just be consistent about which is which.
+| Role | Use |
+| --- | --- |
+| `app` | Outer chrome: app bar, panel backgrounds behind cards |
+| `surface`, `surface-2`, `surface-3` | Panels and cards; rows and inputs; hover and the selected tab |
+| `viewport` | The canvas, one step apart from the panels around it |
+| `line-soft`, `line`, `line-strong` | Dividers; default borders; emphasised borders |
+| `fg`, `fg-2` ... `fg-5` | Primary text down to disabled/placeholder |
+| `accent`, `accent-hover` | The primary button only |
+| `accent-soft`, `accent-fg`, `accent-line` | The selected state (tool, segment, run, tab number) |
+| `danger`, `success`, `warning` (+ `-soft`, `-line`) | Status with real meaning |
+| `inverse`, `on-inverse` | The logo tile and toasts |
+| `scrim` | Behind modals; a flat tint, no blur |
 
-### Depth (no shadows, borders only)
-- Remove every `shadow-*` and `backdrop-blur-*` class in the frontend.
-- A panel, card, or row is delimited by a 1px `#E1E4E8` border, full stop.
-- A modal/dialog is a solid white panel with a 1px border, sitting over a
-  semi-transparent dark scrim (`bg-black/40` or similar, no blur) - not a
-  frosted/blurred backdrop.
-- "Active" or "selected" state is shown by a border color change (to the
-  accent) and/or a subtle background tint (`#EFF6FF`-style), never by
-  adding a shadow.
+Themes: `data-theme` on `<html>` is always the resolved theme (`light` or
+`dark`). The user's preference is System (default), Light or Dark, stored in
+`localStorage` under `opencfd_theme` and applied by an inline script in
+`index.html` before first paint, so there is no flash. `utils/theme.ts` owns
+it: `useResolvedTheme()` for components, `setThemePreference()` and
+`toggleTheme()` for the app bar toggle, Preferences and the command palette.
 
-### Radius
-- Tighten the scale app-wide. Suggested new scale to standardize on:
-  - Buttons, inputs, small chips/badges: `2px` (`rounded-sm`)
-  - Panels, cards, modals: `4px` (`rounded`)
-  - Nothing in the app should use `rounded-lg` (8px), `rounded-xl`, or
-    `rounded-2xl` - those read as consumer-app softness. Audit every
-    `rounded-lg`/`rounded-md` occurrence (heaviest in `LeftStagePanel.tsx`,
-    `CadWorkbench2D.tsx`, `HomeScreen.tsx`) and step it down.
-  - Fully round (`rounded-full`) stays only for genuine dots/avatars
-    (status indicators), not for buttons or pills.
+Canvas code cannot use CSS classes. The CAD workbench reads its colours from
+`canvasPalette(theme)` in `components/cad/workbenchCore/canvasPalette.ts`;
+chart canvases call `cssVar('--fg-3')` at draw time and redraw when the theme
+changes.
 
-### Density and spacing
-- This is a tool for people who want information density, not breathing
-  room. Do not add generous whitespace as part of this pass - if
-  anything, keep the current compact padding (`px-2 py-1`-scale controls)
-  as the standard, and resist any temptation to "open things up."
-- Keep alignment tight and grid-like: labels and values in forms should
-  line up in consistent columns, not float with ad-hoc margins.
+## Shell
 
-### Icons
-- Keep the current line-icon style (lucide-react, already in use
-  throughout) - thin stroke, no filled/duotone icons. This is already
-  correct, just noting it so it doesn't drift when other things change.
+- **App bar (44px, one row).** Projects button, logo, editable project name,
+  the five workflow stages as tabs (number, label, lock when gated, hotkeys
+  `1`-`5`), then global actions: OpenFOAM dicts, the command search, a real
+  backend health dot, theme toggle, shortcuts, preferences. It replaces the
+  old header, stage strip and status bar.
+- **Left stage panel (280px).** Stage controls. `Ctrl/⌘ B` hides it.
+- **Viewport.** In Geometry, a vertical tool rail floats at the top left
+  (undo/redo, select, draw, modify, delete) with icon-only buttons and
+  right-side tooltips that show the hotkey. Fillet and Offset open a small
+  flyout holding their one parameter. Drafting aids (grid, grid snap, object
+  snap, ortho, angle, construction) and zoom sit in a compact strip at the top
+  centre. Readouts (cursor, scale, mesh summary) float at the bottom corners.
+- **Console.** A drawer along the bottom of the viewport.
 
-### Motion
-- Keep transitions short and functional (`transition-colors`, ~150ms,
-  already the convention in most buttons) - color/border changes only, no
-  scale/bounce/fade-in-from-elevation effects. A hover or active state
-  should feel instant, not "designed."
+## Components
 
-## Suggested approach for implementing this "one by one"
+- **Selected state** is `bg-accent-soft text-accent-fg`, plus
+  `border-accent-line` when the control has a border. Never a solid accent
+  fill: that is reserved for the primary button.
+- **Segmented controls** (Laminar/Turbulent, Steady/Transient, colormaps) use
+  the selected state above on one segment, neutral on the rest.
+- **Primary button**: `bg-accent text-white hover:bg-accent-hover`, at most
+  one per screen. Secondary actions are bordered neutral buttons.
+- **Tooltips** use `components/ui/Tooltip` (pass `side="right"` on a vertical
+  rail) and show shortcuts with `components/ui/Kbd`.
+- **Modals** are a solid `surface` panel with a 1px `line` border over
+  `bg-scrim`.
 
-Rather than hand-tuning each component's hex codes, consider pulling the
-handful of values above into CSS custom properties (e.g. a new
-`frontend/src/styles/tokens.css`, or constants at the top of
-`frontend/src/index.css`) - `--color-border`, `--color-text-secondary`,
-`--color-accent`, `--radius-sm`, `--radius-md` - so a future palette or
-radius tweak is a one-line change instead of a repo-wide find/replace.
-This isn't required to get the visual result, but it's the difference
-between doing this once and doing it every time something drifts.
+## Type
 
-Suggested order, roughly easiest/highest-impact first:
-1. Remove all `shadow-*` and `backdrop-blur-*` usage (small, mechanical,
-   immediately makes things feel flatter).
-2. Audit `#2563EB` usage file by file and reclassify each instance as
-   "genuinely the primary action/selection" (keep) or "just marking
-   something as interactive" (convert to the neutral gray scale, with a
-   border-color or background-tint change on hover/active instead).
-3. Step down `rounded-lg`/`rounded-md` to the tighter scale above,
-   starting with `LeftStagePanel.tsx` and `CadWorkbench2D.tsx` since they
-   have the most occurrences.
-4. Re-check modals (`CreatePlotModal.tsx`, `PlotViewDialog.tsx`) last,
-   since they currently combine all three problems (shadow, blur, and the
-   softest radius in the app) - fixing 1-3 first makes this one fast.
+- Inter (UI) and JetBrains Mono (numbers), both bundled through
+  `@fontsource-variable`, so the app looks the same offline and on every OS.
+- Mono is for numbers and code only: coordinates, residuals, cell counts,
+  file contents, numeric inputs. Prose (empty states, option labels,
+  placeholders) is sans.
+- Nothing below 10px. Section labels are 11px uppercase with tracking; body
+  text is 12-13px.
+
+## Radius, density, motion
+
+- Radius: `rounded-sm` (2px) for buttons, inputs and chips; `rounded` (4px)
+  for panels, cards, modals and floating bars. No `rounded-lg` or larger.
+  `rounded-full` only for status dots.
+- Dense by default: compact controls, labels and values aligned in columns.
+  Do not "open things up".
+- Motion is short and functional: colour transitions around 150ms, tooltips
+  fade and slide a few pixels. No scale or bounce.
+- Icons: lucide-react line icons, no filled or duotone variants.

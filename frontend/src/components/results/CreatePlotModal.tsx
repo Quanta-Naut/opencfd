@@ -189,40 +189,40 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/25 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !loading) onClose();
       }}
     >
       <div
-        className="w-full max-w-lg rounded bg-white border border-[#E4E7EC] flex flex-col overflow-hidden"
+        className="w-full max-w-lg rounded bg-surface border border-line flex flex-col overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Create New Plot"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#EDEFF3] bg-[#FAFBFC]">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-line-soft bg-surface-2">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded bg-[#F5F6F8] border border-[#E1E4E8] text-[#171A1F] flex items-center justify-center">
+            <div className="w-8 h-8 rounded bg-app border border-line text-fg flex items-center justify-center">
               <LineChart className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-[#171A1F]">New Plot</h2>
+              <h2 className="text-sm font-bold text-fg">New Plot</h2>
             </div>
           </div>
           <button
             onClick={onClose}
             disabled={loading}
-            className="p-1 rounded text-[#69717D] hover:bg-[#EEF1F5] transition-colors disabled:opacity-50"
+            className="p-1 rounded text-fg-2 hover:bg-surface-3 transition-colors disabled:opacity-50"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Target Run info */}
-        <div className="px-5 py-2 bg-[#F8F9FA] border-b border-[#E1E4E8] flex items-center justify-between text-xs">
-          <span className="text-[#69717D] font-medium">Run:</span>
-          <span className="font-mono text-[#171A1F] font-semibold">
+        <div className="px-5 py-2 bg-surface-2 border-b border-line flex items-center justify-between text-xs">
+          <span className="text-fg-2 font-medium">Run:</span>
+          <span className="font-mono text-fg font-semibold">
             {targetRunLabel || targetRunId
               ? `${targetRunLabel || targetRunId}`
               : 'No active run found'}
@@ -231,14 +231,14 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
         {/* Plot kind */}
         <div className="px-5 pt-4">
-          <div className="grid grid-cols-2 gap-1 p-0.5 bg-[#F5F6F8] rounded border border-[#E1E4E8]">
+          <div className="grid grid-cols-2 gap-1 p-0.5 bg-app rounded border border-line">
             <button
               type="button"
               onClick={() => setKind('line')}
               className={`flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-colors ${
                 kind === 'line'
-                  ? 'bg-white text-[#171A1F] font-semibold border border-[#E1E4E8]'
-                  : 'text-[#69717D] hover:text-[#171A1F]'
+                  ? 'bg-surface text-fg font-semibold border border-line'
+                  : 'text-fg-2 hover:text-fg'
               }`}
             >
               <LineChart className="w-3.5 h-3.5" />
@@ -249,8 +249,8 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               onClick={() => setKind('monitor')}
               className={`flex items-center justify-center gap-1.5 py-1.5 rounded text-xs font-medium transition-colors ${
                 kind === 'monitor'
-                  ? 'bg-white text-[#171A1F] font-semibold border border-[#E1E4E8]'
-                  : 'text-[#69717D] hover:text-[#171A1F]'
+                  ? 'bg-surface text-fg font-semibold border border-line'
+                  : 'text-fg-2 hover:text-fg'
               }`}
             >
               <Activity className="w-3.5 h-3.5" />
@@ -261,17 +261,17 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
         {/* Error notification */}
         {error && (
-          <div className="px-5 py-2.5 bg-red-50 border-b border-red-200 flex items-start gap-2 text-xs text-red-700">
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+          <div className="px-5 py-2.5 bg-danger-soft border-b border-danger-line flex items-start gap-2 text-xs text-danger">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-danger" />
             <span>{error}</span>
           </div>
         )}
 
         {/* Form */}
-        <form onSubmit={handleConfirm} className="p-5 space-y-4 text-xs text-[#171A1F]">
+        <form onSubmit={handleConfirm} className="p-5 space-y-4 text-xs text-fg">
           {/* Plot Name */}
           <div>
-            <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+            <label className="block text-[11px] font-semibold text-fg-2 uppercase tracking-wider mb-1">
               Plot Name
             </label>
             <input
@@ -279,18 +279,18 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Centerline Velocity"
-              className="w-full px-3 py-1.5 bg-white border border-[#E1E4E8] rounded-sm text-xs text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+              className="w-full px-3 py-1.5 bg-surface border border-line rounded-sm text-xs text-fg focus:outline-none focus:border-accent"
             />
           </div>
 
           {kind === 'monitor' ? (
-            <div className="border border-[#E1E4E8] rounded p-3 bg-[#F9FAFB] space-y-3">
+            <div className="border border-line rounded p-3 bg-surface-2 space-y-3">
               <div>
-                <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1.5">
+                <label className="block text-[11px] font-semibold text-fg-2 uppercase tracking-wider mb-1.5">
                   Quantities to plot
                 </label>
                 {availableMonitorFields.length === 0 ? (
-                  <p className="text-[#69717D]">
+                  <p className="text-fg-2">
                     This run has no residual history yet - run the solver first.
                   </p>
                 ) : (
@@ -302,8 +302,8 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
                           key={f.id}
                           className={`flex items-center gap-1.5 px-2 py-1.5 rounded border cursor-pointer transition-colors ${
                             checked
-                              ? 'border-[#2563EB] bg-[#EFF6FF]'
-                              : 'border-[#E1E4E8] bg-white hover:bg-[#F5F6F8]'
+                              ? 'border-accent bg-accent-soft'
+                              : 'border-line bg-surface hover:bg-app'
                           }`}
                         >
                           <input
@@ -315,7 +315,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
                               )
                             }
                           />
-                          <span className="font-medium text-[#171A1F]">{f.label}</span>
+                          <span className="font-medium text-fg">{f.label}</span>
                         </label>
                       );
                     })}
@@ -324,7 +324,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                <label className="block text-[11px] font-semibold text-fg-2 uppercase tracking-wider mb-1">
                   X axis
                 </label>
                 <div className="grid grid-cols-2 gap-1">
@@ -336,8 +336,8 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
                       onClick={() => setMonitorX(x)}
                       className={`py-1 rounded capitalize text-[11px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                         monitorX === x
-                          ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                          : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                          ? 'bg-accent-soft text-accent-fg border-accent-line'
+                          : 'bg-surface text-fg-2 border-line hover:bg-app'
                       }`}
                     >
                       {x}
@@ -351,13 +351,13 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               {/* X axis, Y variable & Colormap */}
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                  <label className="block text-[11px] font-semibold text-fg-2 uppercase tracking-wider mb-1">
                     X axis
                   </label>
                   <select
                     value={xAxis}
                     onChange={(e) => setXAxis(e.target.value as 'distance' | FlowVariable)}
-                    className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                    className="w-full px-2.5 py-1.5 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
                   >
                     <option value="distance">Distance along line</option>
                     {FLOW_VARIABLES.map((v) => (
@@ -369,13 +369,13 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                  <label className="block text-[11px] font-semibold text-fg-2 uppercase tracking-wider mb-1">
                     Y axis
                   </label>
                   <select
                     value={variable}
                     onChange={(e) => setVariable(e.target.value as FlowVariable)}
-                    className="w-full px-2.5 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                    className="w-full px-2.5 py-1.5 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
                   >
                     {FLOW_VARIABLES.map((v) => (
                       <option key={v.id} value={v.id}>
@@ -386,7 +386,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-[11px] font-semibold text-[#69717D] uppercase tracking-wider mb-1">
+                  <label className="block text-[11px] font-semibold text-fg-2 uppercase tracking-wider mb-1">
                     Colormap
                   </label>
                   <div className="grid grid-cols-3 gap-1">
@@ -397,8 +397,8 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
                         onClick={() => setColormap(map)}
                         className={`py-1 rounded capitalize text-[11px] font-medium border transition-colors ${
                           colormap === map
-                            ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                            : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                            ? 'bg-accent-soft text-accent-fg border-accent-line'
+                            : 'bg-surface text-fg-2 border-line hover:bg-app'
                         }`}
                       >
                         {map}
@@ -409,15 +409,15 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
               </div>
 
               {/* Line Definition: Points & Pick Mode */}
-              <div className="border border-[#E1E4E8] rounded p-3 bg-[#F9FAFB] space-y-3">
+              <div className="border border-line rounded p-3 bg-surface-2 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-[#171A1F] uppercase tracking-wider">
+                  <span className="text-[11px] font-bold text-fg uppercase tracking-wider">
                     Line Coordinates (meters)
                   </span>
                   <button
                     type="button"
                     onClick={onStartPickPoints}
-                    className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2563EB] hover:text-[#1D4ED8] bg-white border border-[#2563EB]/40 px-2 py-1 rounded hover:bg-[#F0F5FF] transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-accent hover:text-accent-fg bg-surface border border-accent/40 px-2 py-1 rounded hover:bg-accent-soft transition-colors cursor-pointer"
                   >
                     <Crosshair className="w-3.5 h-3.5" />
                     <span>Pick on Viewport</span>
@@ -426,60 +426,60 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
                 <div className="grid grid-cols-2 gap-3">
                   {/* Point 1 */}
-                  <div className="bg-white p-2.5 rounded border border-[#E5E7EB]">
-                    <div className="text-[11px] font-semibold text-[#2563EB] mb-1.5 flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-[#2563EB]" />
+                  <div className="bg-surface p-2.5 rounded border border-line">
+                    <div className="text-[11px] font-semibold text-accent mb-1.5 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-accent" />
                       Point 1 (Start)
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <span className="text-[10px] text-[#8A929E] block mb-0.5">X (m)</span>
+                        <span className="text-[10px] text-fg-3 block mb-0.5">X (m)</span>
                         <input
                           type="number"
                           step="any"
                           value={p1x}
                           onChange={(e) => setP1x(e.target.value)}
-                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                          className="w-full px-2 py-1 bg-surface border border-line rounded text-xs font-mono focus:outline-none focus:border-accent"
                         />
                       </div>
                       <div>
-                        <span className="text-[10px] text-[#8A929E] block mb-0.5">Y (m)</span>
+                        <span className="text-[10px] text-fg-3 block mb-0.5">Y (m)</span>
                         <input
                           type="number"
                           step="any"
                           value={p1y}
                           onChange={(e) => setP1y(e.target.value)}
-                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                          className="w-full px-2 py-1 bg-surface border border-line rounded text-xs font-mono focus:outline-none focus:border-accent"
                         />
                       </div>
                     </div>
                   </div>
 
                   {/* Point 2 */}
-                  <div className="bg-white p-2.5 rounded border border-[#E5E7EB]">
-                    <div className="text-[11px] font-semibold text-[#16A34A] mb-1.5 flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-[#16A34A]" />
+                  <div className="bg-surface p-2.5 rounded border border-line">
+                    <div className="text-[11px] font-semibold text-success mb-1.5 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-success" />
                       Point 2 (End)
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <span className="text-[10px] text-[#8A929E] block mb-0.5">X (m)</span>
+                        <span className="text-[10px] text-fg-3 block mb-0.5">X (m)</span>
                         <input
                           type="number"
                           step="any"
                           value={p2x}
                           onChange={(e) => setP2x(e.target.value)}
-                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                          className="w-full px-2 py-1 bg-surface border border-line rounded text-xs font-mono focus:outline-none focus:border-accent"
                         />
                       </div>
                       <div>
-                        <span className="text-[10px] text-[#8A929E] block mb-0.5">Y (m)</span>
+                        <span className="text-[10px] text-fg-3 block mb-0.5">Y (m)</span>
                         <input
                           type="number"
                           step="any"
                           value={p2y}
                           onChange={(e) => setP2y(e.target.value)}
-                          className="w-full px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono focus:outline-none focus:border-[#2563EB]"
+                          className="w-full px-2 py-1 bg-surface border border-line rounded text-xs font-mono focus:outline-none focus:border-accent"
                         />
                       </div>
                     </div>
@@ -488,7 +488,7 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
 
                 {/* Samples */}
                 <div className="flex items-center justify-between pt-1">
-                  <span className="text-[11px] font-medium text-[#69717D]">Number of Samples:</span>
+                  <span className="text-[11px] font-medium text-fg-2">Number of Samples:</span>
                   <div className="flex items-center gap-2">
                     <input
                       type="number"
@@ -498,9 +498,9 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
                       onChange={(e) =>
                         setSamples(Math.max(2, Math.min(2000, parseInt(e.target.value) || 2)))
                       }
-                      className="w-20 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs font-mono text-center focus:outline-none focus:border-[#2563EB]"
+                      className="w-20 px-2 py-1 bg-surface border border-line rounded text-xs font-mono text-center focus:outline-none focus:border-accent"
                     />
-                    <span className="text-[10px] text-[#8A929E]">(2-2000)</span>
+                    <span className="text-[10px] text-fg-3">(2-2000)</span>
                   </div>
                 </div>
               </div>
@@ -508,19 +508,19 @@ export const CreatePlotModal: React.FC<CreatePlotModalProps> = ({
           )}
 
           {/* Buttons */}
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#EDEFF3]">
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-line-soft">
             <button
               type="button"
               onClick={onClose}
               disabled={loading}
-              className="px-3.5 py-1.5 text-xs font-medium text-[#69717D] hover:bg-[#F5F6F8] rounded-sm transition-colors"
+              className="px-3.5 py-1.5 text-xs font-medium text-fg-2 hover:bg-app rounded-sm transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={loading || !targetRunId}
-              className="px-4 py-1.5 text-xs font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-semibold text-white bg-accent hover:bg-accent-hover rounded-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               {loading ? (
                 <>

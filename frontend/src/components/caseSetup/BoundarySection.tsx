@@ -28,7 +28,7 @@ const Cell: React.FC<{ label: string; children: React.ReactNode; w?: string }> =
   w = 'w-28',
 }) => (
   <label className={`flex flex-col gap-0.5 ${w}`}>
-    <span className="text-[10px] font-semibold text-[#69717D] truncate">{label}</span>
+    <span className="text-[10px] font-semibold text-fg-2 truncate">{label}</span>
     {children}
   </label>
 );
@@ -48,12 +48,12 @@ export const BoundarySection: React.FC<
 
   if (patches.length === 0) {
     return (
-      <section className="bg-white border border-[#E1E4E8] rounded p-5 xl:col-span-2">
+      <section className="bg-surface border border-line rounded p-5 xl:col-span-2">
         <div className="flex items-center gap-2 mb-2">
-          <SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />
-          <h2 className="text-[13px] font-bold text-[#171A1F]">Boundary conditions</h2>
+          <SlidersHorizontal className="w-4 h-4 text-accent" />
+          <h2 className="text-[13px] font-bold text-fg">Boundary conditions</h2>
         </div>
-        <p className="text-[11px] text-[#69717D]">
+        <p className="text-[11px] text-fg-2">
           Tag the domain edges in Geometry ▸ Boundary patches. Each patch then gets a row here.
         </p>
       </section>
@@ -61,13 +61,13 @@ export const BoundarySection: React.FC<
   }
 
   return (
-    <section className="bg-white border border-[#E1E4E8] rounded p-5 xl:col-span-2 space-y-3">
+    <section className="bg-surface border border-line rounded p-5 xl:col-span-2 space-y-3">
       <div className="flex items-center gap-2">
-        <SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />
+        <SlidersHorizontal className="w-4 h-4 text-accent" />
         <div>
-          <h2 className="text-[13px] font-bold text-[#171A1F]">Boundary conditions</h2>
+          <h2 className="text-[13px] font-bold text-fg">Boundary conditions</h2>
           {/* moved out of the live UI - see caseSetup/BoundarySection.tsx, kept for a future tutorial
-          <p className="text-[11px] text-[#69717D] mt-0.5">
+          <p className="text-[11px] text-fg-2 mt-0.5">
             Auto-filled from each patch tag, the reference conditions and the turbulence model.
           </p>
           */}
@@ -87,7 +87,7 @@ export const BoundarySection: React.FC<
           ))}
       </div>
 
-      <p className="text-[10px] text-[#8A929E]">
+      <p className="text-[10px] text-fg-3">
         Writes <span className="font-mono">0/</span>: {fields.join(', ')}, nut
         {patches.some((p) => p.role === 'symmetry' || p.role === 'periodic' || p.role === 'axis') &&
           ' · symmetry / periodic / axis patches are written automatically'}
@@ -107,11 +107,11 @@ const PatchRow: React.FC<{
   const isWall = bc.kind === 'noSlipWall' || bc.kind === 'movingWall' || bc.kind === 'rotatingWall';
 
   return (
-    <div className="border border-[#E1E4E8] rounded p-3 space-y-2">
-      <span className="flex items-center gap-2 text-[11px] font-semibold text-[#171A1F]">
+    <div className="border border-line rounded p-3 space-y-2">
+      <span className="flex items-center gap-2 text-[11px] font-semibold text-fg">
         <span className="w-2 h-2 rounded-sm shrink-0" style={{ background: ROLE_COLOR[role] }} />
         {name}
-        <span className="ml-auto text-[10px] font-normal uppercase tracking-wide text-[#A5ACB5]">
+        <span className="ml-auto text-[10px] font-normal uppercase tracking-wide text-fg-4">
           {role}
         </span>
       </span>

@@ -117,7 +117,8 @@ export const ViewportHero: React.FC<ViewportHeroProps> = ({
           const point = toScreen(entity.pts[i].x, entity.pts[i].y);
           ctx.lineTo(point.x, point.y);
         }
-        if (entity.isClosed || entity.type === 'circle' || entity.type === 'rectangle') ctx.closePath();
+        if (entity.isClosed || entity.type === 'circle' || entity.type === 'rectangle')
+          ctx.closePath();
         ctx.stroke();
       }
       ctx.restore();
@@ -211,7 +212,18 @@ export const ViewportHero: React.FC<ViewportHeroProps> = ({
     ctx.moveTo(orig.x, orig.y);
     ctx.lineTo(orig.x, orig.y - 24);
     ctx.stroke();
-  }, [meshData, cadEntities, fieldData, activeField, colormap, showMeshWireframe, showStreamlines, renderMode, zoom, pan]);
+  }, [
+    meshData,
+    cadEntities,
+    fieldData,
+    activeField,
+    colormap,
+    showMeshWireframe,
+    showStreamlines,
+    renderMode,
+    zoom,
+    pan,
+  ]);
 
   // Handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -236,13 +248,13 @@ export const ViewportHero: React.FC<ViewportHeroProps> = ({
   };
 
   return (
-    <div className="relative w-full h-full bg-white select-none overflow-hidden flex flex-col">
+    <div className="relative w-full h-full bg-surface select-none overflow-hidden flex flex-col">
       {/* View mode */}
-      <div className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-white border border-[#E1E4E8] rounded-sm px-1.5 py-1 text-xs">
+      <div className="absolute top-3 left-3 z-20 flex items-center gap-1 bg-surface border border-line rounded-sm px-1.5 py-1 text-xs">
         <button
           onClick={() => setRenderMode('cad')}
           className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-            renderMode === 'cad' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F]'
+            renderMode === 'cad' ? 'bg-app text-fg font-semibold' : 'text-fg-2 hover:text-fg'
           }`}
         >
           {renderMode === 'cad' ? '◉' : '○'} CAD
@@ -251,7 +263,9 @@ export const ViewportHero: React.FC<ViewportHeroProps> = ({
           onClick={() => meshData && setRenderMode('mesh')}
           disabled={!meshData}
           className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors ${
-            renderMode === 'mesh' ? 'bg-[#F5F6F8] text-[#171A1F] font-semibold' : 'text-[#69717D] hover:text-[#171A1F] disabled:opacity-40 disabled:cursor-not-allowed'
+            renderMode === 'mesh'
+              ? 'bg-app text-fg font-semibold'
+              : 'text-fg-2 hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed'
           }`}
         >
           {renderMode === 'mesh' ? '◉' : '○'} Mesh
@@ -271,34 +285,34 @@ export const ViewportHero: React.FC<ViewportHeroProps> = ({
 
       {/* 4. BOTTOM-RIGHT FLOATING SCALAR COLORMAP BAR (VIRIDIS DEFAULT) */}
       {fieldValues.length > 0 && renderMode === 'mesh' && (
-        <div className="absolute bottom-3 right-3 z-20 bg-white border border-[#E1E4E8] rounded p-2.5 w-48 text-xs select-none">
+        <div className="absolute bottom-3 right-3 z-20 bg-surface border border-line rounded p-2.5 w-48 text-xs select-none">
           <div className="flex justify-between items-center mb-1">
             <select
               value={activeField}
               onChange={(e) => onChangeField(e.target.value)}
-              className="font-semibold text-[#171A1F] bg-transparent border-none focus:outline-none cursor-pointer text-xs"
+              className="font-semibold text-fg bg-transparent border-none focus:outline-none cursor-pointer text-xs"
             >
               <option value="U_mag">|U| (Velocity)</option>
               <option value="p">p (Pressure)</option>
               <option value="k">k (Turb. Kinetic)</option>
               <option value="omega">ω (Dissipation)</option>
             </select>
-            <span className="text-[#A5ACB5] font-mono text-[10px]">[{fieldUnits[activeField]}]</span>
+            <span className="text-fg-4 font-mono text-[10px]">[{fieldUnits[activeField]}]</span>
           </div>
 
           <div
-            className="h-2.5 rounded-xs border border-[#D1D5DB]"
+            className="h-2.5 rounded-xs border border-line-strong"
             style={{
               background:
                 colormap === 'viridis'
                   ? 'linear-gradient(to right, #440154, #31688e, #35b779, #fde725)'
                   : colormap === 'coolwarm'
-                  ? 'linear-gradient(to right, rgb(59,76,192), rgb(240,240,240), rgb(180,4,38))'
-                  : 'linear-gradient(to right, #30123b, #4185f4, #22da78, #f5a623, #d92120, #7a0403)',
+                    ? 'linear-gradient(to right, rgb(59,76,192), rgb(240,240,240), rgb(180,4,38))'
+                    : 'linear-gradient(to right, #30123b, #4185f4, #22da78, #f5a623, #d92120, #7a0403)',
             }}
           />
 
-          <div className="flex justify-between text-[10px] font-mono text-[#69717D] mt-1">
+          <div className="flex justify-between text-[10px] font-mono text-fg-2 mt-1">
             <span>{currentRange[0].toFixed(1)}</span>
             <span>{((currentRange[0] + currentRange[1]) / 2).toFixed(1)}</span>
             <span>{currentRange[1].toFixed(1)}</span>

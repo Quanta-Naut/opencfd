@@ -71,8 +71,8 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
 
   if (!preview || !hasContent) {
     return (
-      <div className="relative h-44 flex items-center justify-center bg-gradient-to-b from-[#F7F8FA] to-[#EEF0F3] text-[#B7BEC8]">
-        <div className="absolute inset-0 opacity-[0.5] [background-image:radial-gradient(circle,#D3D8DF_1px,transparent_1px)] [background-size:14px_14px]" />
+      <div className="relative h-44 flex items-center justify-center bg-gradient-to-b from-surface-2 to-surface-3 text-fg-4">
+        <div className="absolute inset-0 opacity-[0.5] [background-image:radial-gradient(circle,var(--line-strong)_1px,transparent_1px)] [background-size:14px_14px]" />
         <div className="relative text-center">
           <Pencil className="w-6 h-6 mx-auto mb-1.5" strokeWidth={1.5} />
           <span className="text-[10px] font-medium tracking-wide uppercase">Empty sketch</span>
@@ -123,8 +123,8 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
   const ah = 2.6 * k; // arrowhead half-height
 
   return (
-    <div className="relative h-44 bg-gradient-to-b from-[#F8FAFC] to-[#EDF1F6]">
-      <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(circle,#D5DBE3_1px,transparent_1px)] [background-size:13px_13px]" />
+    <div className="relative h-44 bg-gradient-to-b from-surface-2 to-surface-3">
+      <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(circle,var(--line-strong)_1px,transparent_1px)] [background-size:13px_13px]" />
       <svg
         viewBox={`${vx} ${vy} ${vw} ${vh}`}
         preserveAspectRatio="xMidYMid meet"
@@ -137,9 +137,8 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
             y={flipY(domRect[3])}
             width={domRect[2] - domRect[0]}
             height={domRect[3] - domRect[1]}
-            fill="#FFFFFF"
+            style={{ fill: 'var(--surface)', stroke: 'var(--fg-4)' }}
             fillOpacity={0.45}
-            stroke="#AEB8C6"
             strokeWidth={1.1 * k}
             strokeDasharray={`${4 * k} ${3 * k}`}
           />
@@ -153,8 +152,7 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
             return (
               <g
                 key={i}
-                stroke="#93A0B1"
-                fill="#93A0B1"
+                style={{ stroke: 'var(--fg-4)', fill: 'var(--fg-4)' }}
                 strokeWidth={1.2 * k}
                 strokeLinecap="round"
               >
@@ -169,8 +167,9 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
 
         {/* geometry */}
         {entities.map((s, i) => {
-          const stroke = '#2563EB';
-          const fill = 'rgba(37,99,235,0.14)';
+          // Theme colours via CSS (SVG presentation attributes can't use var()).
+          const stroke = 'var(--accent)';
+          const fill = 'color-mix(in srgb, var(--accent) 14%, transparent)';
           if (s.kind === 'circle') {
             return (
               <circle
@@ -178,8 +177,7 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
                 cx={s.c[0]}
                 cy={flipY(s.c[1])}
                 r={s.r}
-                fill={fill}
-                stroke={stroke}
+                style={{ fill, stroke }}
                 strokeWidth={1.7 * k}
               />
             );
@@ -190,7 +188,7 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
                 key={i}
                 d={arcD(s)}
                 fill="none"
-                stroke={stroke}
+                style={{ stroke }}
                 strokeWidth={1.7 * k}
                 strokeLinecap="round"
               />
@@ -200,8 +198,7 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
             <path
               key={i}
               d={pathD(s.pts, s.closed)}
-              fill={s.closed ? fill : 'none'}
-              stroke={stroke}
+              style={{ fill: s.closed ? fill : 'none', stroke }}
               strokeWidth={1.7 * k}
               strokeLinejoin="round"
               strokeLinecap="round"
@@ -211,7 +208,7 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
       </svg>
 
       {meshed && (
-        <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-sm bg-white px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#0F766E] border border-[#CBEFE8]">
+        <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-sm bg-surface px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success border border-success-line">
           <Layers className="w-2.5 h-2.5" />
           Meshed
         </span>
@@ -254,14 +251,14 @@ const ProjectCardView: React.FC<{
   const shapeCount = s.preview?.entities?.length ?? s.entityCount ?? 0;
 
   return (
-    <div className="group relative bg-white border border-[#E4E7EC] rounded overflow-hidden hover:border-[#B9CCF3] hover:-translate-y-0.5 transition-all duration-150">
+    <div className="group relative bg-surface border border-line rounded overflow-hidden hover:border-accent-line hover:-translate-y-0.5 transition-all duration-150">
       <button
         onClick={onOpen}
         className="block w-full text-left disabled:cursor-default"
         disabled={editing || disabled}
       >
         <GeometryThumb preview={s.preview ?? null} meshed={s.hasMesh} />
-        <div className="p-3.5 border-t border-[#F0F1F4]">
+        <div className="p-3.5 border-t border-line-soft">
           <div className="flex items-start justify-between gap-3">
             {editing ? (
               <input
@@ -274,12 +271,12 @@ const ProjectCardView: React.FC<{
                   if (e.key === 'Enter') commit();
                   if (e.key === 'Escape') setEditing(false);
                 }}
-                className="w-full text-sm font-semibold text-[#171A1F] bg-transparent border-b-2 border-[#2563EB] outline-none"
+                className="w-full text-sm font-semibold text-fg bg-transparent border-b-2 border-accent outline-none"
               />
             ) : (
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-[#171A1F] truncate">{project.name}</div>
-                <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[#8A929E]">
+                <div className="text-sm font-semibold text-fg truncate">{project.name}</div>
+                <div className="mt-1 flex items-center gap-1.5 text-[10px] text-fg-3">
                   {flow === 'internal' ? (
                     <span className="inline-flex items-center gap-1">
                       <Layers className="w-3 h-3" />
@@ -293,7 +290,7 @@ const ProjectCardView: React.FC<{
                   )}
                   {shapeCount > 0 && (
                     <>
-                      <span className="text-[#D0D5DD]">·</span>
+                      <span className="text-fg-5">·</span>
                       <span>
                         {shapeCount} {shapeCount === 1 ? 'shape' : 'shapes'}
                       </span>
@@ -302,7 +299,7 @@ const ProjectCardView: React.FC<{
                 </div>
               </div>
             )}
-            <div className="flex items-center gap-1 text-[10px] text-[#8A929E] whitespace-nowrap pt-0.5">
+            <div className="flex items-center gap-1 text-[10px] text-fg-3 whitespace-nowrap pt-0.5">
               <Clock className="w-3 h-3" />
               <span>{relativeTime(project.modified)}</span>
             </div>
@@ -315,7 +312,7 @@ const ProjectCardView: React.FC<{
           <button
             onClick={() => setEditing(true)}
             title="Rename"
-            className="p-1.5 bg-white border border-[#E4E7EC] rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8]"
+            className="p-1.5 bg-surface border border-line rounded text-fg-2 hover:text-fg hover:bg-app"
           >
             <Pencil className="w-3.5 h-3.5" />
           </button>
@@ -331,7 +328,7 @@ const ProjectCardView: React.FC<{
             }}
             title="Duplicate"
             disabled={duplicating}
-            className="p-1.5 bg-white border border-[#E4E7EC] rounded text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-50"
+            className="p-1.5 bg-surface border border-line rounded text-fg-2 hover:text-fg hover:bg-app disabled:opacity-50"
           >
             {duplicating ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -342,7 +339,7 @@ const ProjectCardView: React.FC<{
           <button
             onClick={() => setConfirmDelete(true)}
             title="Delete"
-            className="p-1.5 bg-white border border-[#E4E7EC] rounded text-[#69717D] hover:text-[#DC2626] hover:bg-[#F5F6F8]"
+            className="p-1.5 bg-surface border border-line rounded text-fg-2 hover:text-danger hover:bg-app"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -350,17 +347,13 @@ const ProjectCardView: React.FC<{
       )}
 
       {confirmDelete && (
-        <div className="absolute inset-0 bg-white flex flex-col items-center justify-center gap-3 p-4 text-center">
-          <div className="text-xs text-[#171A1F] font-medium">
-            Delete &ldquo;{project.name}&rdquo;?
-          </div>
-          <div className="text-[11px] text-[#69717D]">
-            This removes the project folder from disk.
-          </div>
+        <div className="absolute inset-0 bg-surface flex flex-col items-center justify-center gap-3 p-4 text-center">
+          <div className="text-xs text-fg font-medium">Delete &ldquo;{project.name}&rdquo;?</div>
+          <div className="text-[11px] text-fg-2">This removes the project folder from disk.</div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => setConfirmDelete(false)}
-              className="px-3 py-1.5 text-xs rounded-sm border border-[#E1E4E8] text-[#69717D] hover:bg-[#F5F6F8]"
+              className="px-3 py-1.5 text-xs rounded-sm border border-line text-fg-2 hover:bg-app"
             >
               <X className="w-3.5 h-3.5 inline -mt-0.5 mr-1" />
               Cancel
@@ -370,7 +363,7 @@ const ProjectCardView: React.FC<{
                 setConfirmDelete(false);
                 onDelete();
               }}
-              className="px-3 py-1.5 text-xs rounded-sm bg-[#DC2626] text-white hover:bg-[#B91C1C]"
+              className="px-3 py-1.5 text-xs rounded-sm bg-danger text-white hover:bg-danger"
             >
               <Check className="w-3.5 h-3.5 inline -mt-0.5 mr-1" />
               Delete
@@ -400,13 +393,13 @@ const NewProjectDialog: React.FC<{
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[#0B0D10]/45 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onCancel();
       }}
     >
       <div
-        className="w-full max-w-lg rounded bg-white border border-[#E4E7EC] overflow-hidden"
+        className="w-full max-w-lg rounded bg-surface border border-line overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-project-title"
@@ -417,21 +410,21 @@ const NewProjectDialog: React.FC<{
       >
         <div className="flex items-start justify-between px-6 pt-6 pb-4">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded bg-[#F5F6F8] border border-[#E1E4E8] text-[#171A1F] flex items-center justify-center">
+            <div className="w-9 h-9 rounded bg-app border border-line text-fg flex items-center justify-center">
               <Rocket className="w-4.5 h-4.5" />
             </div>
             <div>
-              <h2 id="new-project-title" className="text-base font-bold text-[#171A1F]">
+              <h2 id="new-project-title" className="text-base font-bold text-fg">
                 New simulation
               </h2>
-              <p className="text-xs text-[#69717D] mt-0.5">
-                Give it a name — you set up the geometry and flow inside.
+              <p className="text-xs text-fg-2 mt-0.5">
+                Give it a name - you set up the geometry and flow inside.
               </p>
             </div>
           </div>
           <button
             onClick={onCancel}
-            className="p-1.5 rounded text-[#69717D] hover:bg-[#F5F6F8]"
+            className="p-1.5 rounded text-fg-2 hover:bg-app"
             aria-label="Cancel"
           >
             <X className="w-4 h-4" />
@@ -442,7 +435,7 @@ const NewProjectDialog: React.FC<{
           <div>
             <label
               htmlFor="np-name"
-              className="block text-[11px] font-semibold uppercase tracking-wide text-[#8A929E] mb-1.5"
+              className="block text-[11px] font-semibold uppercase tracking-wide text-fg-3 mb-1.5"
             >
               Project name
             </label>
@@ -451,23 +444,23 @@ const NewProjectDialog: React.FC<{
               ref={nameRef}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Two-stage rocket — nose cone study"
-              className="w-full px-3 py-2.5 rounded border border-[#E1E4E8] text-sm outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 transition"
+              placeholder="e.g. Two-stage rocket - nose cone study"
+              className="w-full px-3 py-2.5 rounded border border-line text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/15 transition"
             />
           </div>
         </div>
 
-        <div className="flex justify-end gap-2 px-6 py-4 bg-[#FAFBFC] border-t border-[#EDEFF3]">
+        <div className="flex justify-end gap-2 px-6 py-4 bg-surface-2 border-t border-line-soft">
           <button
             onClick={onCancel}
-            className="px-4 py-2 rounded border border-[#E1E4E8] text-xs font-semibold text-[#69717D] hover:bg-white"
+            className="px-4 py-2 rounded border border-line text-xs font-semibold text-fg-2 hover:bg-surface"
           >
             Cancel
           </button>
           <button
             onClick={submit}
             disabled={busy}
-            className="px-4 py-2 rounded bg-[#2563EB] text-white text-xs font-semibold hover:bg-[#1D4ED8] disabled:opacity-50 inline-flex items-center gap-1.5"
+            className="px-4 py-2 rounded bg-accent text-white text-xs font-semibold hover:bg-accent-hover disabled:opacity-50 inline-flex items-center gap-1.5"
           >
             {busy ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -568,11 +561,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
   const rest = filtered.slice(3);
 
   return (
-    <div className="h-screen w-screen overflow-y-auto bg-[#F4F5F7] text-[#171A1F] font-sans">
+    <div className="h-screen w-screen overflow-y-auto bg-surface-2 text-fg font-sans">
       <div className="max-w-6xl mx-auto px-6 sm:px-8 py-10">
         {/* Header */}
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-[#171A1F] rounded flex items-center justify-center text-white shrink-0">
+          <div className="w-10 h-10 bg-inverse rounded flex items-center justify-center text-on-inverse shrink-0">
             <svg
               className="w-5 h-5"
               viewBox="0 0 24 24"
@@ -588,13 +581,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tight">OpenCFD Studio</h1>
-            <p className="text-xs text-[#69717D]">
-              Simulate airflow over rockets, fins, airfoils — any 2D shape you can sketch.
+            <p className="text-xs text-fg-2">
+              Simulate airflow over rockets, fins, airfoils - any 2D shape you can sketch.
             </p>
           </div>
           <button
             onClick={() => setCreating(true)}
-            className="ml-auto inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-[#2563EB] rounded px-4 py-2.5 hover:bg-[#1D4ED8] transition-colors"
+            className="ml-auto inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-accent rounded px-4 py-2.5 hover:bg-accent-hover transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
             New project
@@ -603,25 +596,25 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
 
         {!empty && (
           <div className="mt-6 relative max-w-sm">
-            <Search className="w-3.5 h-3.5 text-[#8A929E] absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-3.5 h-3.5 text-fg-3 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search projects"
-              className="w-full pl-9 pr-3 py-2 text-xs rounded border border-[#E1E4E8] bg-white outline-none focus:border-[#2563EB] focus:ring-2 focus:ring-[#2563EB]/15 transition"
+              className="w-full pl-9 pr-3 py-2 text-xs rounded border border-line bg-surface outline-none focus:border-accent focus:ring-2 focus:ring-accent/15 transition"
             />
           </div>
         )}
 
         {(error || openError) && (
-          <div className="mt-6 flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+          <div className="mt-6 flex items-start gap-2 p-3 bg-danger-soft border border-danger-line rounded text-xs text-danger">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <span>{openError || error}</span>
           </div>
         )}
 
         {legacySession && projects.length === 0 && !loading && (
-          <div className="mt-6 flex items-center justify-between gap-3 p-3 bg-blue-50 border border-blue-200 rounded text-xs text-[#1D4ED8]">
+          <div className="mt-6 flex items-center justify-between gap-3 p-3 bg-accent-soft border border-accent-line rounded text-xs text-accent-fg">
             <span className="flex items-center gap-2">
               <Upload className="w-4 h-4 shrink-0" />
               Found a session from a previous version. Import it as a project?
@@ -629,7 +622,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
             <button
               onClick={handleImportLegacy}
               disabled={busy}
-              className="shrink-0 px-3 py-1.5 rounded-sm bg-white border border-blue-200 font-medium hover:bg-blue-50 disabled:opacity-50"
+              className="shrink-0 px-3 py-1.5 rounded-sm bg-surface border border-accent-line font-medium hover:bg-accent-soft disabled:opacity-50"
             >
               Import
             </button>
@@ -637,30 +630,30 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
         )}
 
         {loading ? (
-          <div className="mt-16 flex items-center gap-2 text-xs text-[#69717D] justify-center">
+          <div className="mt-16 flex items-center gap-2 text-xs text-fg-2 justify-center">
             <Loader2 className="w-4 h-4 animate-spin" />
             Loading projects…
           </div>
         ) : empty ? (
-          <div className="mt-10 rounded border border-dashed border-[#D5DBE3] bg-white/60 p-10 text-center">
-            <div className="w-12 h-12 mx-auto rounded bg-[#F5F6F8] border border-[#E1E4E8] text-[#171A1F] flex items-center justify-center">
+          <div className="mt-10 rounded border border-dashed border-line-strong bg-surface/60 p-10 text-center">
+            <div className="w-12 h-12 mx-auto rounded bg-app border border-line text-fg flex items-center justify-center">
               <Rocket className="w-6 h-6" />
             </div>
-            <h2 className="mt-4 text-sm font-bold text-[#171A1F]">Start your first simulation</h2>
-            <p className="mt-1.5 text-xs text-[#69717D] max-w-sm mx-auto leading-relaxed">
-              Sketch a cross-section, generate a mesh, and watch the flow solve — right on your
+            <h2 className="mt-4 text-sm font-bold text-fg">Start your first simulation</h2>
+            <p className="mt-1.5 text-xs text-fg-2 max-w-sm mx-auto leading-relaxed">
+              Sketch a cross-section, generate a mesh, and watch the flow solve - right on your
               machine. Great for checking a rocket profile before you build it.
             </p>
             <button
               onClick={() => setCreating(true)}
-              className="mt-5 inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-[#2563EB] rounded px-4 py-2.5 hover:bg-[#1D4ED8]"
+              className="mt-5 inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-accent rounded px-4 py-2.5 hover:bg-accent-hover"
             >
               <Plus className="w-3.5 h-3.5" />
               New project
             </button>
           </div>
         ) : filtered.length === 0 ? (
-          <div className="mt-10 text-center text-xs text-[#69717D]">
+          <div className="mt-10 text-center text-xs text-fg-2">
             No projects match &ldquo;{search}&rdquo;.
           </div>
         ) : (
@@ -668,7 +661,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
             {recent.length > 0 && (
               <>
                 <div className="mt-8 flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8A929E]">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-3">
                     Recent
                   </span>
                 </div>
@@ -707,7 +700,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
             {rest.length > 0 && (
               <>
                 <div className="mt-8 flex items-center justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-[#8A929E]">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-fg-3">
                     All projects
                   </span>
                 </div>

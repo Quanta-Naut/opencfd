@@ -1,6 +1,6 @@
 import React from 'react';
 
-export const card = 'bg-[var(--cs-surface,#fff)] border border-[#E1E4E8] rounded p-5';
+export const card = 'bg-surface border border-line rounded p-5';
 
 export const SectionCard: React.FC<{
   title: string;
@@ -13,11 +13,11 @@ export const SectionCard: React.FC<{
   <section className={`${card} space-y-4 ${span2 ? 'xl:col-span-2' : 'self-start'}`}>
     <div className="flex items-start justify-between gap-3">
       <div className="flex items-center gap-2">
-        {icon && <span className="text-[#2563EB] shrink-0">{icon}</span>}
+        {icon && <span className="text-accent shrink-0">{icon}</span>}
         <div>
-          <h2 className="text-[13px] font-bold text-[#171A1F]">{title}</h2>
+          <h2 className="text-[13px] font-bold text-fg">{title}</h2>
           {/* moved out of the live UI - see caseSetup/ui.tsx SectionCard, kept for a future tutorial
-          {hint && <p className="text-[11px] text-[#69717D] mt-1 max-w-md">{hint}</p>}
+          {hint && <p className="text-[11px] text-fg-2 mt-1 max-w-md">{hint}</p>}
           */}
         </div>
       </div>
@@ -33,14 +33,16 @@ export const Field: React.FC<{
   children: React.ReactNode;
 }> = ({ label, hint, children }) => (
   <label className="block">
-    <span className="text-[11px] font-semibold text-[#69717D] block mb-1.5">{label}</span>
+    <span className="text-[11px] font-semibold text-fg-2 block mb-1.5">{label}</span>
     {children}
-    {hint && <span className="text-[10px] text-[#8A929E] block mt-1">{hint}</span>}
+    {hint && <span className="text-[10px] text-fg-3 block mt-1">{hint}</span>}
   </label>
 );
 
-const inputBase =
-  'w-full px-2.5 py-2 bg-white border border-[#DDE2E8] rounded-sm font-mono text-xs text-[#171A1F] focus:outline-none focus:border-[#2563EB] disabled:opacity-50 disabled:bg-[#F5F6F8]';
+const fieldBase =
+  'w-full px-2.5 py-2 bg-surface border border-line rounded-sm text-xs text-fg focus:outline-none focus:border-accent disabled:opacity-50 disabled:bg-app';
+// Numbers in mono so digits line up; option labels are prose and stay sans.
+const inputBase = `${fieldBase} font-mono`;
 
 export const NumberInput: React.FC<{
   value: number;
@@ -76,14 +78,14 @@ export const NumberInput: React.FC<{
         onChange(n);
         setDraft(String(n));
       }}
-      className={`${inputBase} ${unit ? 'rounded-r-none' : ''} ${readOnly ? 'text-[#69717D]' : ''}`}
+      className={`${inputBase} ${unit ? 'rounded-r-none' : ''} ${readOnly ? 'text-fg-2' : ''}`}
     />
   );
   if (!unit) return input;
   return (
     <div className="flex">
       {input}
-      <span className="px-2 flex items-center text-[10px] text-[#69717D] bg-[#F5F6F8] border border-l-0 border-[#DDE2E8] rounded-r-md font-mono">
+      <span className="px-2 flex items-center text-[10px] text-fg-2 bg-app border border-l-0 border-line rounded-r-md font-mono">
         {unit}
       </span>
     </div>
@@ -100,7 +102,7 @@ export const Select: React.FC<{
     value={value}
     onChange={(e) => onChange(e.target.value)}
     disabled={disabled}
-    className={inputBase}
+    className={fieldBase}
   >
     {children}
   </select>
@@ -125,8 +127,8 @@ export const Segmented = <T extends string>({
         onClick={() => onChange(v)}
         className={`py-2 rounded-sm border text-xs font-medium transition-colors ${
           value === v
-            ? 'bg-[#2563EB] border-[#2563EB] text-white'
-            : 'border-[#DDE2E8] text-[#69717D] bg-white hover:bg-[#F5F6F8]'
+            ? 'bg-accent-soft border-accent-line text-accent-fg'
+            : 'border-line text-fg-2 bg-surface hover:bg-surface-2 hover:text-fg'
         }`}
       >
         {label}
@@ -140,11 +142,11 @@ export const Stat: React.FC<{
   value: string;
   tone?: 'default' | 'warn' | 'good';
 }> = ({ label, value, tone = 'default' }) => (
-  <div className="bg-[#F8FAFC] border border-[#E8EDF1] rounded px-3 py-2">
-    <span className="text-[10px] uppercase tracking-wide text-[#8B95A1] block">{label}</span>
+  <div className="bg-surface-2 border border-line-soft rounded px-3 py-2">
+    <span className="text-[10px] uppercase tracking-wide text-fg-3 block">{label}</span>
     <span
       className={`text-[13px] font-mono font-semibold block mt-0.5 ${
-        tone === 'warn' ? 'text-[#B4622D]' : tone === 'good' ? 'text-[#059669]' : 'text-[#171A1F]'
+        tone === 'warn' ? 'text-warning' : tone === 'good' ? 'text-success' : 'text-fg'
       }`}
     >
       {value}

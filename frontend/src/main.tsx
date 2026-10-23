@@ -1,8 +1,11 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import Root from './Root'
-import { ErrorBoundary } from './components/ErrorBoundary'
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import './index.css';
+import Root from './Root';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { initTheme } from './utils/theme';
+
+initTheme();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -10,4 +13,4 @@ createRoot(document.getElementById('root')!).render(
       <Root />
     </ErrorBoundary>
   </StrictMode>,
-)
+);

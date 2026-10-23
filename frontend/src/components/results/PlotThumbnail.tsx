@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import { cssVar, useResolvedTheme } from '../../utils/theme';
 import {
   PlotDefinition,
   FlowVariable,
@@ -110,6 +111,7 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
     return [{ color: theme.stroke, pts }];
   })();
 
+  const uiTheme = useResolvedTheme(); // canvas colours are read per draw
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -130,7 +132,7 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
 
     const allPts = seriesList.flatMap((s) => s.pts);
     if (allPts.length < 2) {
-      ctx.fillStyle = '#A5ACB5';
+      ctx.fillStyle = cssVar('--fg-4');
       ctx.font = '10px ui-monospace, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -156,7 +158,7 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
     const sy = (v: number) => pad.t + (1 - (v - vMin) / vSpan) * plotH;
 
     // Background subtle grid line
-    ctx.strokeStyle = '#F0F2F5';
+    ctx.strokeStyle = cssVar('--line-soft');
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(pad.l, pad.t + plotH / 2);
@@ -182,7 +184,7 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
       ctx.closePath();
       const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + plotH);
       grad.addColorStop(0, theme.fill);
-      grad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       ctx.fillStyle = grad;
       ctx.fill();
     }
@@ -205,7 +207,7 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
 
     // Min / max annotations
     ctx.font = '9px ui-monospace, monospace';
-    ctx.fillStyle = '#8A929E';
+    ctx.fillStyle = cssVar('--fg-3');
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     const fmt = (n: number) =>
@@ -217,7 +219,7 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
     // seriesList is derived fresh each render from plot/solverRuns, so those
     // are the real dependencies - spreading it as a dep would just thrash.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plot, theme, solverRuns]);
+  }, [plot, theme, solverRuns, uiTheme]);
 
   return (
     <div
@@ -226,17 +228,17 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
       tabIndex={0}
       className={`group relative rounded border p-2.5 transition-all cursor-pointer text-left ${
         isSelected
-          ? 'bg-[#F0F5FF] border-[#2563EB]'
-          : 'bg-white border-[#EDEFF3] hover:border-[#C4C9D0] hover:bg-[#F9FAFB]'
+          ? 'bg-accent-soft border-accent'
+          : 'bg-surface border-line-soft hover:border-line-strong hover:bg-surface-2'
       }`}
     >
       {/* 65px sparkline thumbnail canvas */}
-      <div className="w-full h-[64px] bg-[#F8FAFC] rounded border border-[#F1F3F5] overflow-hidden mb-2">
+      <div className="w-full h-[64px] bg-surface-2 rounded border border-line-soft overflow-hidden mb-2">
         <canvas ref={canvasRef} className="w-full h-full block" />
       </div>
 
       <div className="flex items-center justify-between gap-1">
-        <span className="text-xs font-semibold text-[#171A1F] truncate">
+        <span className="text-xs font-semibold text-fg truncate">
           {plot.name || 'Untitled Plot'}
         </span>
         <span
@@ -246,13 +248,13 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
         />
       </div>
 
-      <div className="text-[11px] text-[#69717D] truncate mt-0.5 font-medium">
+      <div className="text-[11px] text-fg-2 truncate mt-0.5 font-medium">
         {isMonitor
           ? (plot.monitorFields ?? []).map(getMonitorLabel).join(', ') || 'No quantity selected'
           : getVariableLabel(plot.variable)}
       </div>
 
-      <div className="flex items-center justify-between text-[10px] text-[#8A929E] mt-1 font-mono">
+      <div className="flex items-center justify-between text-[10px] text-fg-3 mt-1 font-mono">
         {isMonitor ? (
           <span>vs {plot.monitorX === 'time' ? 'time' : 'iteration'}</span>
         ) : (

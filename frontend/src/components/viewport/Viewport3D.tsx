@@ -25,7 +25,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   onToggleStreamlines,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  
+
   // Camera state
   const [zoom, setZoom] = useState<number>(65);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -232,13 +232,15 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   };
 
   return (
-    <div className="relative w-full h-full bg-white overflow-hidden flex flex-col select-none">
+    <div className="relative w-full h-full bg-surface overflow-hidden flex flex-col select-none">
       {/* Top Floating Viewport Toolbar */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-white border border-[#E1E4E8] rounded-sm px-2.5 py-1.5 text-xs text-[#171A1F]">
+      <div className="absolute top-3 left-3 z-10 flex items-center gap-2 bg-surface border border-line rounded-sm px-2.5 py-1.5 text-xs text-fg">
         <button
           onClick={onToggleWireframe}
           className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
-            showMeshWireframe ? 'bg-blue-50 text-blue-600 font-medium border border-blue-200' : 'hover:bg-slate-100 text-slate-600'
+            showMeshWireframe
+              ? 'bg-accent-soft text-accent font-medium border border-accent-line'
+              : 'hover:bg-surface-3 text-fg-2'
           }`}
           title="Toggle Mesh Wireframe"
         >
@@ -249,7 +251,9 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         <button
           onClick={onToggleStreamlines}
           className={`flex items-center gap-1.5 px-2 py-1 rounded transition-colors ${
-            showStreamlines ? 'bg-blue-50 text-blue-600 font-medium border border-blue-200' : 'hover:bg-slate-100 text-slate-600'
+            showStreamlines
+              ? 'bg-accent-soft text-accent font-medium border border-accent-line'
+              : 'hover:bg-surface-3 text-fg-2'
           }`}
           title="Toggle Streamlines"
         >
@@ -257,11 +261,11 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
           <span>Streamlines</span>
         </button>
 
-        <div className="w-px h-4 bg-slate-200" />
+        <div className="w-px h-4 bg-line" />
 
         <button
           onClick={resetView}
-          className="flex items-center gap-1 px-2 py-1 hover:bg-slate-100 rounded text-slate-600 transition-colors"
+          className="flex items-center gap-1 px-2 py-1 hover:bg-surface-3 rounded text-fg-2 transition-colors"
           title="Reset View"
         >
           <RotateCcw className="w-3.5 h-3.5" />

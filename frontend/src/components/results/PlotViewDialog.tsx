@@ -243,19 +243,19 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-[#0B0D10]/25 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-scrim p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-5xl h-[82vh] rounded bg-white border border-[#E4E7EC] flex flex-col overflow-hidden"
+        className="w-full max-w-5xl h-[82vh] rounded bg-surface border border-line flex flex-col overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Plot Details"
       >
         {/* Header */}
-        <div className="px-5 py-3 border-b border-[#EDEFF3] bg-[#FAFBFC] flex items-center justify-between shrink-0">
+        <div className="px-5 py-3 border-b border-line-soft bg-surface-2 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             {editingName ? (
               <div className="flex items-center gap-1.5">
@@ -268,12 +268,12 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                     if (e.key === 'Escape') setEditingName(false);
                   }}
                   autoFocus
-                  className="px-2 py-1 text-sm font-bold text-[#171A1F] border border-[#2563EB] rounded bg-white focus:outline-none"
+                  className="px-2 py-1 text-sm font-bold text-fg border border-accent rounded bg-surface focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={handleSaveRename}
-                  className="p-1 text-green-600 hover:bg-green-50 rounded"
+                  className="p-1 text-success hover:bg-green-50 rounded"
                 >
                   <Check className="w-4 h-4" />
                 </button>
@@ -283,20 +283,20 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                 <h2
                   onClick={handleStartRename}
                   title="Click to rename"
-                  className="text-base font-bold text-[#171A1F] truncate cursor-pointer hover:text-[#2563EB] transition-colors"
+                  className="text-base font-bold text-fg truncate cursor-pointer hover:text-accent transition-colors"
                 >
                   {plot.name}
                 </h2>
                 <button
                   type="button"
                   onClick={handleStartRename}
-                  className="text-[11px] text-[#8A929E] hover:text-[#2563EB] underline"
+                  className="text-[11px] text-fg-3 hover:text-accent underline"
                 >
                   rename
                 </button>
               </div>
             )}
-            <span className="text-[11px] text-[#8A929E] font-mono bg-[#F1F3F5] px-2 py-0.5 rounded border border-[#E1E4E8]">
+            <span className="text-[11px] text-fg-3 font-mono bg-surface-3 px-2 py-0.5 rounded border border-line">
               {plot.runId ? `Run: ${plot.runId}` : 'Current Run'}
             </span>
           </div>
@@ -308,7 +308,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                 onClick={handleReSample}
                 disabled={reSampling}
                 title="Re-sample line data from solver run"
-                className="inline-flex items-center gap-1 text-xs font-medium text-[#69717D] hover:text-[#171A1F] bg-white border border-[#E1E4E8] px-2.5 py-1.5 rounded-sm hover:bg-[#F5F6F8] transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-1 text-xs font-medium text-fg-2 hover:text-fg bg-surface border border-line px-2.5 py-1.5 rounded-sm hover:bg-app transition-colors disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${reSampling ? 'animate-spin' : ''}`} />
                 <span>Re-sample</span>
@@ -318,7 +318,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
               type="button"
               onClick={handleDelete}
               title="Delete this plot"
-              className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:text-red-700 bg-white border border-red-200 px-2.5 py-1.5 rounded-sm hover:bg-red-50 transition-colors"
+              className="inline-flex items-center gap-1 text-xs font-medium text-danger hover:text-danger bg-surface border border-danger-line px-2.5 py-1.5 rounded-sm hover:bg-danger-soft transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Delete</span>
@@ -326,7 +326,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 text-[#69717D] hover:bg-[#EEF1F5] rounded transition-colors"
+              className="p-1.5 text-fg-2 hover:bg-surface-3 rounded transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -334,24 +334,21 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
         </div>
 
         {reSampleError && (
-          <div className="px-5 py-2 bg-red-50 text-red-700 text-xs border-b border-red-200">
+          <div className="px-5 py-2 bg-danger-soft text-danger text-xs border-b border-danger-line">
             {reSampleError}
           </div>
         )}
 
         {/* Controls Toolbar */}
         {isMonitor ? (
-          <div className="px-5 py-2.5 border-b border-[#EDEFF3] bg-[#F8FAFC] flex flex-wrap items-center gap-4 text-xs shrink-0">
+          <div className="px-5 py-2.5 border-b border-line-soft bg-surface-2 flex flex-wrap items-center gap-4 text-xs shrink-0">
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 Quantities:
               </span>
               <div className="flex items-center gap-2">
                 {series.map((s) => (
-                  <span
-                    key={s.key}
-                    className="inline-flex items-center gap-1 font-medium text-[#171A1F]"
-                  >
+                  <span key={s.key} className="inline-flex items-center gap-1 font-medium text-fg">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
                     {s.name}
                   </span>
@@ -359,7 +356,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 X axis:
               </span>
               <div className="flex items-center gap-1">
@@ -370,8 +367,8 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                     onClick={() => onUpdatePlot({ ...plot, monitorX: x })}
                     className={`px-2 py-0.5 rounded capitalize text-xs font-medium border transition-colors ${
                       monitorX === x
-                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        ? 'bg-accent-soft text-accent-fg border-accent-line'
+                        : 'bg-surface text-fg-2 border-line hover:bg-app'
                     }`}
                   >
                     {x}
@@ -381,16 +378,16 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
             </div>
           </div>
         ) : (
-          <div className="px-5 py-2.5 border-b border-[#EDEFF3] bg-[#F8FAFC] flex flex-wrap items-center justify-between gap-4 text-xs shrink-0">
+          <div className="px-5 py-2.5 border-b border-line-soft bg-surface-2 flex flex-wrap items-center justify-between gap-4 text-xs shrink-0">
             {/* X axis Picker */}
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 X axis:
               </span>
               <select
                 value={xAxis}
                 onChange={(e) => handleXAxisChange(e.target.value as 'distance' | FlowVariable)}
-                className="px-2.5 py-1 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                className="px-2.5 py-1 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
                 <option value="distance">Distance along line</option>
                 {FLOW_VARIABLES.map((v) => (
@@ -403,13 +400,13 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
 
             {/* Variable Picker */}
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 Y axis:
               </span>
               <select
                 value={plot.variable}
                 onChange={(e) => handleVariableChange(e.target.value as FlowVariable)}
-                className="px-2.5 py-1 bg-white border border-[#E1E4E8] rounded-sm font-medium text-[#171A1F] focus:outline-none focus:border-[#2563EB]"
+                className="px-2.5 py-1 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
                 {FLOW_VARIABLES.map((v) => (
                   <option key={v.id} value={v.id}>
@@ -421,7 +418,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
 
             {/* Colormap Selector */}
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 Colormap:
               </span>
               <div className="flex items-center gap-1">
@@ -432,8 +429,8 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                     onClick={() => handleColormapChange(map)}
                     className={`px-2 py-0.5 rounded capitalize text-xs font-medium border transition-colors ${
                       plot.colormap === map
-                        ? 'bg-[#2563EB] text-white border-[#2563EB]'
-                        : 'bg-white text-[#69717D] border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        ? 'bg-accent-soft text-accent-fg border-accent-line'
+                        : 'bg-surface text-fg-2 border-line hover:bg-app'
                     }`}
                   >
                     {map}
@@ -444,8 +441,8 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
 
             {/* Min / Max Range Controls */}
             <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider flex items-center gap-1">
-                <Sliders className="w-3 h-3 text-[#69717D]" />
+              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider flex items-center gap-1">
+                <Sliders className="w-3 h-3 text-fg-2" />
                 Clip Range:
               </span>
               <div className="flex items-center gap-1.5 font-mono">
@@ -455,22 +452,22 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                   placeholder="Min (auto)"
                   value={plot.rangeMin ?? ''}
                   onChange={(e) => handleMinChange(e.target.value)}
-                  className="w-24 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs focus:outline-none focus:border-[#2563EB]"
+                  className="w-24 px-2 py-1 bg-surface border border-line rounded text-xs focus:outline-none focus:border-accent"
                 />
-                <span className="text-[#8A929E]">to</span>
+                <span className="text-fg-3">to</span>
                 <input
                   type="number"
                   step="any"
                   placeholder="Max (auto)"
                   value={plot.rangeMax ?? ''}
                   onChange={(e) => handleMaxChange(e.target.value)}
-                  className="w-24 px-2 py-1 bg-white border border-[#E1E4E8] rounded text-xs focus:outline-none focus:border-[#2563EB]"
+                  className="w-24 px-2 py-1 bg-surface border border-line rounded text-xs focus:outline-none focus:border-accent"
                 />
                 {(plot.rangeMin !== null || plot.rangeMax !== null) && (
                   <button
                     type="button"
                     onClick={handleResetRange}
-                    className="text-[11px] text-[#2563EB] hover:underline ml-1"
+                    className="text-[11px] text-accent hover:underline ml-1"
                   >
                     Reset
                   </button>
@@ -481,7 +478,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
         )}
 
         {/* Chart Area */}
-        <div className="flex-1 min-h-0 relative p-4 bg-white">
+        <div className="flex-1 min-h-0 relative p-4 bg-surface">
           <CanvasChart
             data={chartData}
             xKey="x"
@@ -505,7 +502,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
         </div>
 
         {/* Footer: Probe Line / Monitor Specifications */}
-        <div className="px-5 py-2.5 border-t border-[#EDEFF3] bg-[#FAFBFC] flex items-center justify-between text-[11px] text-[#8A929E] font-mono shrink-0">
+        <div className="px-5 py-2.5 border-t border-line-soft bg-surface-2 flex items-center justify-between text-[11px] text-fg-3 font-mono shrink-0">
           {isMonitor ? (
             <span>{monitorRows.length} iterations</span>
           ) : plot.line ? (

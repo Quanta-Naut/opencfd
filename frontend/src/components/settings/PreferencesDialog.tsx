@@ -1,8 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, AlertTriangle, Loader2, RefreshCw, Check, Terminal } from 'lucide-react';
-import { fetchSettings, updateSettings, solverEnvironment, setupStatus, AppSettings } from '../../utils/api';
+import {
+  X,
+  AlertTriangle,
+  Loader2,
+  RefreshCw,
+  Check,
+  Terminal,
+  Monitor,
+  Sun,
+  Moon,
+} from 'lucide-react';
+import {
+  fetchSettings,
+  updateSettings,
+  solverEnvironment,
+  setupStatus,
+  AppSettings,
+} from '../../utils/api';
 import { toast } from '../ui/Toast';
+import { setThemePreference, useThemePreference, type ThemePreference } from '../../utils/theme';
 
 export interface PreferencesDialogProps {
   open: boolean;
@@ -17,7 +34,10 @@ function solverSummary(env: any): { name: string; detail: string } {
   const adapters = env.adapters || {};
   if (env.active === 'openfoam-local') {
     const a = adapters['openfoam-local'] || {};
-    return { name: a.version ? `OpenFOAM ${a.version}` : 'OpenFOAM (local)', detail: a.detail || 'Ready.' };
+    return {
+      name: a.version ? `OpenFOAM ${a.version}` : 'OpenFOAM (local)',
+      detail: a.detail || 'Ready.',
+    };
   }
   if (env.active === 'openfoam-wsl') {
     const a = adapters['openfoam-wsl'] || {};
@@ -33,8 +53,8 @@ function solverSummary(env: any): { name: string; detail: string } {
 }
 
 const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <div className="space-y-2 pb-4 border-b border-[#EDEFF3] last:border-b-0 last:pb-0">
-    <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block">
+  <div className="space-y-2 pb-4 border-b border-line-soft last:border-b-0 last:pb-0">
+    <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block">
       {title}
     </span>
     {children}
@@ -43,12 +63,19 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
 
 const Row: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div className="flex items-start justify-between gap-4">
-    <span className="text-[#69717D] shrink-0">{label}</span>
-    <span className="text-[#171A1F] text-right">{children}</span>
+    <span className="text-fg-2 shrink-0">{label}</span>
+    <span className="text-fg text-right">{children}</span>
   </div>
 );
 
+const THEME_CHOICES: { id: ThemePreference; label: string; icon: React.ReactNode }[] = [
+  { id: 'system', label: 'System', icon: <Monitor className="w-3.5 h-3.5" /> },
+  { id: 'light', label: 'Light', icon: <Sun className="w-3.5 h-3.5" /> },
+  { id: 'dark', label: 'Dark', icon: <Moon className="w-3.5 h-3.5" /> },
+];
+
 export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onClose }) => {
+  const themePref = useThemePreference();
   const [os, setOs] = useState<OS>('unknown');
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [env, setEnv] = useState<any>(null);
@@ -141,39 +168,67 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0B0D10]/25 p-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-scrim p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
       <div
-        className="w-full max-w-lg bg-white border border-[#E1E4E8] rounded flex flex-col overflow-hidden"
+        className="w-full max-w-lg bg-surface border border-line rounded flex flex-col overflow-hidden"
         role="dialog"
         aria-modal="true"
         aria-label="Preferences"
       >
-        <div className="px-4 py-3 border-b border-[#EDEFF3] bg-[#FAFBFC] flex items-center justify-between shrink-0">
-          <h2 className="text-sm font-bold text-[#171A1F]">Preferences</h2>
+        <div className="px-4 py-3 border-b border-line-soft bg-surface-2 flex items-center justify-between shrink-0">
+          <h2 className="text-sm font-bold text-fg">Preferences</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-1 text-[#69717D] hover:text-[#171A1F] hover:bg-[#EDEFF3] rounded transition-colors"
+            className="p-1 text-fg-2 hover:text-fg hover:bg-surface-3 rounded transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-4 space-y-4 text-xs text-[#171A1F] max-h-[70vh] overflow-y-auto">
+        <div className="p-4 space-y-4 text-xs text-fg max-h-[70vh] overflow-y-auto">
           {loading ? (
-            <div className="flex items-center gap-2 text-[#69717D] py-6 justify-center">
+            <div className="flex items-center gap-2 text-fg-2 py-6 justify-center">
               <Loader2 className="w-4 h-4 animate-spin" />
               <span>Loading preferences…</span>
             </div>
           ) : (
             <>
+              <Section title="Appearance">
+                <Row label="Theme">
+                  <span
+                    role="radiogroup"
+                    aria-label="Theme"
+                    className="inline-flex p-0.5 rounded border border-line bg-surface-2"
+                  >
+                    {THEME_CHOICES.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={themePref === c.id}
+                        onClick={() => setThemePreference(c.id)}
+                        className={`h-6 px-2.5 inline-flex items-center gap-1.5 rounded-sm font-medium transition-colors ${
+                          themePref === c.id
+                            ? 'bg-surface text-fg border border-line'
+                            : 'text-fg-3 hover:text-fg border border-transparent'
+                        }`}
+                      >
+                        {c.icon}
+                        {c.label}
+                      </button>
+                    ))}
+                  </span>
+                </Row>
+              </Section>
+
               {/* Solver environment - read-only status, all platforms */}
               <Section title="Solver environment">
-                <div className="rounded border border-[#E1E4E8] divide-y divide-[#EDEFF3]">
+                <div className="rounded border border-line divide-y divide-line-soft">
                   <div className="px-3 py-2 space-y-1.5">
                     <Row label="Platform">{osLabel}</Row>
                     <Row label="Active solver">
@@ -181,15 +236,13 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                     </Row>
                   </div>
                   <div className="px-3 py-2 flex items-start gap-2">
-                    <Terminal className="w-3.5 h-3.5 text-[#8A929E] shrink-0 mt-0.5" />
-                    <p className="text-[11px] leading-relaxed text-[#69717D] flex-1">
-                      {summary.detail}
-                    </p>
+                    <Terminal className="w-3.5 h-3.5 text-fg-3 shrink-0 mt-0.5" />
+                    <p className="text-[11px] leading-relaxed text-fg-2 flex-1">{summary.detail}</p>
                     <button
                       type="button"
                       onClick={() => void refreshEnv()}
                       disabled={envLoading}
-                      className="p-1 -mr-0.5 text-[#69717D] hover:text-[#171A1F] hover:bg-[#F5F6F8] rounded transition-colors shrink-0 disabled:opacity-50"
+                      className="p-1 -mr-0.5 text-fg-2 hover:text-fg hover:bg-app rounded transition-colors shrink-0 disabled:opacity-50"
                       title="Re-detect"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${envLoading ? 'animate-spin' : ''}`} />
@@ -201,10 +254,10 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
               {/* Windows-only preferences */}
               {isWindows && (
                 <Section title="Windows">
-                  <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block pt-1">
+                  <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block pt-1">
                     Case file storage
                   </span>
-                  <p className="text-[#69717D] leading-relaxed">
+                  <p className="text-fg-2 leading-relaxed">
                     OpenCFD runs the solver inside a managed WSL2 environment on Windows. Choose
                     where a project's solver case files live.
                   </p>
@@ -212,8 +265,8 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                   <label
                     className={`flex items-start gap-2.5 p-2.5 rounded border cursor-pointer transition-colors ${
                       settings?.case_storage === 'wsl'
-                        ? 'border-[#2563EB] bg-[#EFF6FF]'
-                        : 'border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        ? 'border-accent bg-accent-soft'
+                        : 'border-line hover:bg-app'
                     }`}
                   >
                     <input
@@ -225,10 +278,10 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                       disabled={saving}
                     />
                     <div>
-                      <div className="font-semibold text-[#171A1F]">
+                      <div className="font-semibold text-fg">
                         WSL filesystem (recommended, default)
                       </div>
-                      <div className="text-[#69717D] mt-0.5">
+                      <div className="text-fg-2 mt-0.5">
                         Case files live inside the managed WSL environment. Fast - the solver reads
                         and writes its own native filesystem directly - but not directly browsable
                         from Windows Explorer.
@@ -239,8 +292,8 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                   <label
                     className={`flex items-start gap-2.5 p-2.5 rounded border cursor-pointer transition-colors ${
                       settings?.case_storage === 'windows'
-                        ? 'border-[#2563EB] bg-[#EFF6FF]'
-                        : 'border-[#E1E4E8] hover:bg-[#F5F6F8]'
+                        ? 'border-accent bg-accent-soft'
+                        : 'border-line hover:bg-app'
                     }`}
                   >
                     <input
@@ -252,12 +305,12 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                       disabled={saving}
                     />
                     <div>
-                      <div className="font-semibold text-[#171A1F]">Windows filesystem</div>
-                      <div className="text-[#69717D] mt-0.5">
+                      <div className="font-semibold text-fg">Windows filesystem</div>
+                      <div className="text-fg-2 mt-0.5">
                         Case files live under your Windows user profile, visible and editable
                         directly from Windows tools.
                       </div>
-                      <div className="flex items-start gap-1.5 mt-1.5 text-amber-700">
+                      <div className="flex items-start gap-1.5 mt-1.5 text-warning">
                         <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                         <span>
                           Saving on Windows may cause performance issues - every solver read and
@@ -268,19 +321,20 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                     </div>
                   </label>
 
-                  <div className="rounded border border-[#E1E4E8] px-3 py-2 space-y-1.5 mt-1">
+                  <div className="rounded border border-line px-3 py-2 space-y-1.5 mt-1">
                     <Row label="Managed environment">
                       {setup?.distro_ready ? (
-                        <span className="inline-flex items-center gap-1 text-[#16A34A]">
+                        <span className="inline-flex items-center gap-1 text-success">
                           <Check className="w-3.5 h-3.5" />
-                          ready{setup?.installed_version ? ` · pack ${setup.installed_version}` : ''}
+                          ready
+                          {setup?.installed_version ? ` · pack ${setup.installed_version}` : ''}
                         </span>
                       ) : (
-                        <span className="text-amber-700">needs setup</span>
+                        <span className="text-warning">needs setup</span>
                       )}
                     </Row>
                     {setup?.detail && (
-                      <p className="text-[11px] leading-relaxed text-[#69717D]">{setup.detail}</p>
+                      <p className="text-[11px] leading-relaxed text-fg-2">{setup.detail}</p>
                     )}
                   </div>
                 </Section>
@@ -289,10 +343,10 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
               {/* macOS / Linux preferences */}
               {!isWindows && (
                 <Section title={osLabel === 'unknown' ? 'OpenFOAM' : osLabel}>
-                  <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider block pt-1">
+                  <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block pt-1">
                     OpenFOAM environment (advanced)
                   </span>
-                  <p className="text-[#69717D] leading-relaxed">
+                  <p className="text-fg-2 leading-relaxed">
                     The environment script sourced before every solve. Leave it blank to auto-detect
                     your OpenFOAM install - set it only if auto-detection picks the wrong version.
                   </p>
@@ -303,13 +357,13 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                       value={bashrcDraft}
                       onChange={(e) => setBashrcDraft(e.target.value)}
                       placeholder={autoBashrc || '/opt/openfoam13/etc/bashrc'}
-                      className="flex-1 min-w-0 px-2 py-1.5 bg-white border border-[#E1E4E8] rounded-sm font-mono text-[11px] text-[#171A1F] placeholder:text-[#A5ACB5] focus:outline-none focus:border-[#2563EB] transition-colors"
+                      className="flex-1 min-w-0 px-2 py-1.5 bg-surface border border-line rounded-sm font-mono text-[11px] text-fg placeholder:text-fg-4 focus:outline-none focus:border-accent transition-colors"
                     />
                     <button
                       type="button"
                       onClick={() => handleBashrcChange(bashrcDraft)}
                       disabled={saving || bashrcDraft.trim() === (settings?.foam_bashrc ?? '')}
-                      className="px-2.5 py-1.5 rounded-sm border border-[#2563EB] text-[#2563EB] font-medium hover:bg-[#EFF6FF] disabled:opacity-40 disabled:pointer-events-none transition-colors shrink-0"
+                      className="px-2.5 py-1.5 rounded-sm border border-accent text-accent font-medium hover:bg-accent-soft disabled:opacity-40 disabled:pointer-events-none transition-colors shrink-0"
                     >
                       Save
                     </button>
@@ -318,18 +372,18 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                         type="button"
                         onClick={() => handleBashrcChange('')}
                         disabled={saving}
-                        className="px-2.5 py-1.5 rounded-sm border border-[#E1E4E8] text-[#69717D] font-medium hover:text-[#171A1F] hover:bg-[#F5F6F8] disabled:opacity-40 transition-colors shrink-0"
+                        className="px-2.5 py-1.5 rounded-sm border border-line text-fg-2 font-medium hover:text-fg hover:bg-app disabled:opacity-40 transition-colors shrink-0"
                       >
                         Auto-detect
                       </button>
                     )}
                   </div>
-                  <div className="rounded border border-[#E1E4E8] px-3 py-2 space-y-1.5">
+                  <div className="rounded border border-line px-3 py-2 space-y-1.5">
                     <Row label="In use">
                       {settings?.foam_bashrc ? (
                         <span className="font-mono text-[11px]">{settings.foam_bashrc}</span>
                       ) : (
-                        <span className="text-[#69717D]">auto-detected</span>
+                        <span className="text-fg-2">auto-detected</span>
                       )}
                     </Row>
                     <Row label="Auto-detected">
@@ -338,13 +392,13 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
                       </span>
                     </Row>
                   </div>
-                  <p className="text-[11px] leading-relaxed text-[#8A929E]">
+                  <p className="text-[11px] leading-relaxed text-fg-3">
                     Takes effect on the next solver run.
                   </p>
                 </Section>
               )}
 
-              {error && <p className="text-red-600">{error}</p>}
+              {error && <p className="text-danger">{error}</p>}
             </>
           )}
         </div>

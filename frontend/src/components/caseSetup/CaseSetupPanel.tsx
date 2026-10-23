@@ -1,6 +1,20 @@
 import React, { useEffect, useMemo } from 'react';
-import { CircleHelp, Gauge, Wind, Layers3, Thermometer, Droplets, LockKeyhole, Zap } from 'lucide-react';
-import { CFDProjectState, CaseSetupConfig, PhysicsConfig, BoundaryConditions } from '../../types/cfd';
+import {
+  CircleHelp,
+  Gauge,
+  Wind,
+  Layers3,
+  Thermometer,
+  Droplets,
+  LockKeyhole,
+  Zap,
+} from 'lucide-react';
+import {
+  CFDProjectState,
+  CaseSetupConfig,
+  PhysicsConfig,
+  BoundaryConditions,
+} from '../../types/cfd';
 import { FlowType } from '../../types/cadWorkflow';
 import { deriveFlow } from '../../caseSetup/flowCalc';
 import { turbulenceModel } from '../../caseSetup/turbulenceCatalog';
@@ -126,53 +140,80 @@ export const CaseSetupPanel: React.FC<CaseSetupProps> = ({
   const section: SectionProps = { state, setPhysics, setCaseSetup, setBoundaries, refLength, flow };
 
   return (
-    <div className="h-full w-full bg-[#F5F6F8] flex min-h-0" role="region" aria-label="Case setup">
-      <aside className="w-[260px] bg-white border-r border-[#E1E4E8] p-4 shrink-0 overflow-y-auto">
+    <div className="h-full w-full bg-app flex min-h-0" role="region" aria-label="Case setup">
+      <aside className="w-[260px] bg-surface border-r border-line p-4 shrink-0 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-[11px] font-semibold text-[#69717D] uppercase tracking-wider">CFD analysis</span>
-          <CircleHelp className="w-3.5 h-3.5 text-[#A5ACB5]" />
+          <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
+            CFD analysis
+          </span>
+          <CircleHelp className="w-3.5 h-3.5 text-fg-4" />
         </div>
         <div className="space-y-1.5">
           <button
             onClick={() =>
-              setPhysics({ compressibility: 'incompressible', equationOfState: 'constantDensity', energyModel: 'disabled', speedRegime: 'incompressible' })
+              setPhysics({
+                compressibility: 'incompressible',
+                equationOfState: 'constantDensity',
+                energyModel: 'disabled',
+                speedRegime: 'incompressible',
+              })
             }
             className={`w-full p-3 rounded border text-left transition-all ${
-              !compressible ? 'bg-blue-50 border-[#2563EB] ring-1 ring-[#2563EB]' : 'border-[#E1E4E8] hover:bg-[#F8F9FA]'
+              !compressible
+                ? 'bg-accent-soft border-accent ring-1 ring-accent'
+                : 'border-line hover:bg-surface-2'
             }`}
           >
             <div className="flex items-center gap-2">
-              <Gauge className={`w-4 h-4 ${!compressible ? 'text-[#2563EB]' : 'text-[#69717D]'}`} />
+              <Gauge className={`w-4 h-4 ${!compressible ? 'text-accent' : 'text-fg-2'}`} />
               <span className="text-xs font-semibold">Incompressible flow</span>
             </div>
-            <span className="text-[11px] text-[#69717D] block ml-6 mt-1">Constant density, Mach &lt; 0.3</span>
+            <span className="text-[11px] text-fg-2 block ml-6 mt-1">
+              Constant density, Mach &lt; 0.3
+            </span>
           </button>
           <button
             onClick={() =>
-              setPhysics({ compressibility: 'compressible', equationOfState: 'perfectGas', energyModel: 'enabled', speedRegime: flow.regimeHint === 'incompressible' ? 'subsonic' : flow.regimeHint })
+              setPhysics({
+                compressibility: 'compressible',
+                equationOfState: 'perfectGas',
+                energyModel: 'enabled',
+                speedRegime: flow.regimeHint === 'incompressible' ? 'subsonic' : flow.regimeHint,
+              })
             }
             className={`w-full p-3 rounded border text-left transition-all ${
-              compressible ? 'bg-blue-50 border-[#2563EB] ring-1 ring-[#2563EB]' : 'border-[#E1E4E8] hover:bg-[#F8F9FA]'
+              compressible
+                ? 'bg-accent-soft border-accent ring-1 ring-accent'
+                : 'border-line hover:bg-surface-2'
             }`}
           >
             <div className="flex items-center gap-2">
-              <Wind className={`w-4 h-4 ${compressible ? 'text-[#2563EB]' : 'text-[#69717D]'}`} />
+              <Wind className={`w-4 h-4 ${compressible ? 'text-accent' : 'text-fg-2'}`} />
               <span className="text-xs font-semibold">Compressible flow</span>
             </div>
-            <span className="text-[11px] text-[#69717D] block ml-6 mt-1">Density &amp; energy, up to hypersonic</span>
+            <span className="text-[11px] text-fg-2 block ml-6 mt-1">
+              Density &amp; energy, up to hypersonic
+            </span>
           </button>
         </div>
 
-        <div className="border-t border-[#E1E4E8] my-5" />
-        <span className="text-[11px] font-semibold text-[#A5ACB5] uppercase tracking-wider block mb-2">Other modes</span>
+        <div className="border-t border-line my-5" />
+        <span className="text-[11px] font-semibold text-fg-4 uppercase tracking-wider block mb-2">
+          Other modes
+        </span>
         <div className="space-y-1">
           {lockedModes.map(([id, label, Icon]) => (
-            <div key={id} className="p-2.5 rounded flex items-center gap-2.5 text-[#A5ACB5] cursor-not-allowed">
+            <div
+              key={id}
+              className="p-2.5 rounded flex items-center gap-2.5 text-fg-4 cursor-not-allowed"
+            >
               <LockKeyhole className="w-3.5 h-3.5 shrink-0" />
               <Icon className="w-3.5 h-3.5 shrink-0" />
               <span className="text-[11px] leading-tight">
                 {label}
-                <span className="block text-[10px] mt-0.5 uppercase tracking-wide">Coming soon</span>
+                <span className="block text-[10px] mt-0.5 uppercase tracking-wide">
+                  Coming soon
+                </span>
               </span>
             </div>
           ))}

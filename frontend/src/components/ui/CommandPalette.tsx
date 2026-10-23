@@ -137,20 +137,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9000] flex items-start justify-center pt-[12vh] bg-black/40"
+      className="fixed inset-0 z-[9000] flex items-start justify-center pt-[12vh] bg-scrim"
       onMouseDown={onClose}
       role="presentation"
     >
       <div
-        className="w-[600px] max-w-[92vw] bg-white border border-[#D1D5DB] rounded overflow-hidden"
+        className="w-[600px] max-w-[92vw] bg-surface border border-line-strong rounded overflow-hidden"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
       >
         {/* Query row */}
-        <div className="flex items-center gap-2 px-3 h-11 border-b border-[#E1E4E8]">
-          <Search className="w-4 h-4 text-[#8A929E] shrink-0" />
+        <div className="flex items-center gap-2 px-3 h-11 border-b border-line">
+          <Search className="w-4 h-4 text-fg-3 shrink-0" />
           <input
             ref={inputRef}
             autoFocus
@@ -162,7 +162,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
             onKeyDown={onInputKeyDown}
             placeholder="Search commands, stages, actions…"
             spellCheck={false}
-            className="flex-1 bg-transparent outline-none text-[14px] text-[#171A1F] placeholder:text-[#A5ACB5]"
+            className="flex-1 bg-transparent outline-none text-[14px] text-fg placeholder:text-fg-4"
           />
           <Kbd>Esc</Kbd>
         </div>
@@ -170,13 +170,11 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
         {/* Results */}
         <div ref={listRef} className="max-h-[52vh] overflow-y-auto py-1">
           {grouped.length === 0 ? (
-            <div className="px-4 py-10 text-center text-[13px] text-[#69717D]">
-              No matching commands
-            </div>
+            <div className="px-4 py-10 text-center text-[13px] text-fg-2">No matching commands</div>
           ) : (
             grouped.map(([group, cmds]) => (
               <div key={group}>
-                <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[#8A929E]">
+                <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-fg-3">
                   {group}
                 </div>
                 {cmds.map((cmd) => {
@@ -192,16 +190,16 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
                       className={clsx(
                         'w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[13px] transition-colors',
                         cmd.disabled
-                          ? 'text-[#C4C9D0] cursor-not-allowed'
+                          ? 'text-fg-5 cursor-not-allowed'
                           : isActive
-                            ? 'bg-[#EFF6FF] text-[#171A1F]'
-                            : 'text-[#374151] hover:bg-[#F5F6F8]',
+                            ? 'bg-accent-soft text-fg'
+                            : 'text-fg hover:bg-app',
                       )}
                     >
                       <span
                         className={clsx(
                           'w-4 h-4 shrink-0 flex items-center justify-center',
-                          cmd.disabled ? 'text-[#C4C9D0]' : 'text-[#69717D]',
+                          cmd.disabled ? 'text-fg-5' : 'text-fg-2',
                         )}
                       >
                         {cmd.icon}
@@ -209,7 +207,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
                       <span className="flex-1 min-w-0">
                         <span className="block truncate font-medium">{cmd.title}</span>
                         {(cmd.disabled ? cmd.disabledReason : cmd.subtitle) && (
-                          <span className="block truncate text-[11px] text-[#8A929E]">
+                          <span className="block truncate text-[11px] text-fg-3">
                             {cmd.disabled ? cmd.disabledReason : cmd.subtitle}
                           </span>
                         )}
@@ -230,7 +228,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-3 h-8 border-t border-[#E1E4E8] bg-[#F5F6F8] text-[11px] text-[#69717D]">
+        <div className="flex items-center justify-between px-3 h-8 border-t border-line bg-app text-[11px] text-fg-2">
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
               <Kbd>

@@ -63,25 +63,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <div className="w-80 h-full flex flex-col bg-white border-r border-slate-200 select-none z-20">
+    <div className="w-80 h-full flex flex-col bg-surface border-r border-line select-none z-20">
       {/* App Header Branding */}
-      <div className="px-4 py-3.5 border-b border-slate-200 flex items-center justify-between bg-white">
+      <div className="px-4 py-3.5 border-b border-line flex items-center justify-between bg-surface">
         <div className="flex items-center gap-2.5">
-          <div className="w-7 h-7 rounded bg-[#171A1F] flex items-center justify-center text-white">
+          <div className="w-7 h-7 rounded bg-inverse flex items-center justify-center text-on-inverse">
             <Wind className="w-4 h-4" />
           </div>
           <div>
-            <span className="font-bold text-slate-900 text-sm tracking-tight">OpenCFD Studio</span>
-            <span className="text-[10px] text-slate-400 block -mt-0.5">OpenFOAM &amp; Gmsh Suite</span>
+            <span className="font-bold text-fg text-sm tracking-tight">OpenCFD Studio</span>
+            <span className="text-[10px] text-fg-4 block -mt-0.5">OpenFOAM &amp; Gmsh Suite</span>
           </div>
         </div>
-        <span className="text-[10px] font-mono px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded-sm border border-slate-200 font-semibold">
+        <span className="text-[10px] font-mono px-1.5 py-0.5 bg-surface-3 text-fg-2 rounded-sm border border-line font-semibold">
           v1.0
         </span>
       </div>
 
       {/* Step Navigation Pill Bar */}
-      <div className="p-2 border-b border-slate-200 bg-slate-50/50 space-y-1">
+      <div className="p-2 border-b border-line bg-surface-2/50 space-y-1">
         <div className="grid grid-cols-3 gap-1">
           {steps.slice(0, 3).map((step) => {
             const Icon = step.icon;
@@ -92,12 +92,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setActiveStep(step.id)}
                 className={`py-1.5 px-1 rounded-sm text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
                   isActive
-                    ? 'bg-white text-blue-600 border border-slate-200 font-semibold'
-                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                    ? 'bg-surface text-accent border border-line font-semibold'
+                    : 'text-fg-2 hover:text-fg hover:bg-surface-3'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
-                <span className="truncate w-full text-center text-[10px]">{step.label.split('. ')[1]}</span>
+                <span className="truncate w-full text-center text-[10px]">
+                  {step.label.split('. ')[1]}
+                </span>
               </button>
             );
           })}
@@ -112,12 +114,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => setActiveStep(step.id)}
                 className={`py-1.5 px-1 rounded-sm text-[11px] font-medium flex flex-col items-center gap-1 transition-all ${
                   isActive
-                    ? 'bg-white text-blue-600 border border-slate-200 font-semibold'
-                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                    ? 'bg-surface text-accent border border-line font-semibold'
+                    : 'text-fg-2 hover:text-fg hover:bg-surface-3'
                 }`}
               >
                 <Icon className="w-3.5 h-3.5" />
-                <span className="truncate w-full text-center text-[10px]">{step.label.split('. ')[1]}</span>
+                <span className="truncate w-full text-center text-[10px]">
+                  {step.label.split('. ')[1]}
+                </span>
               </button>
             );
           })}
@@ -125,7 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Active Workflow Panel Content */}
-      <div className="flex-1 overflow-y-auto bg-white">
+      <div className="flex-1 overflow-y-auto bg-surface">
         {activeStep === 'geometry' && (
           <GeometryMeshPanel
             config={state.geometry}
@@ -136,10 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {activeStep === 'physics' && (
-          <PhysicsTurbulencePanel
-            config={state.physics}
-            onChange={updatePhysics}
-          />
+          <PhysicsTurbulencePanel config={state.physics} onChange={updatePhysics} />
         )}
 
         {activeStep === 'yplus' && (
@@ -180,13 +181,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Footer Info Badge */}
-      <div className="p-3 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500 flex justify-between items-center">
+      <div className="p-3 bg-surface-2 border-t border-line text-[11px] text-fg-2 flex justify-between items-center">
         <span className="truncate">
           {state.physics.regime === 'turbulent' ? state.physics.turbulenceModel : 'Laminar'}
         </span>
-        <span className="font-mono text-slate-400">
-          U = {state.boundaries.inletVelocity} m/s
-        </span>
+        <span className="font-mono text-fg-4">U = {state.boundaries.inletVelocity} m/s</span>
       </div>
     </div>
   );

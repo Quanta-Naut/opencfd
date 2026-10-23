@@ -67,7 +67,7 @@ export function Root() {
       <SetupGate>
         <Suspense
           fallback={
-            <div className="h-screen w-screen flex items-center justify-center bg-[#F4F5F7] text-[#69717D]">
+            <div className="h-screen w-screen flex items-center justify-center bg-surface-2 text-fg-2">
               <Loader2 className="w-5 h-5 animate-spin" />
             </div>
           }

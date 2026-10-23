@@ -1,43 +1,99 @@
 /**
- * Design tokens for OpenCFD
- * Following philosophy in DESIGN.md:
- * - Neutral gray scale
- * - Single accent color (#2563EB) reserved for primary action and true selection
- * - Flat 1px borders, no blur or shadows
- * - Strict radius scale: 2px (sm) for controls, 4px (default/md) for panels/modals
+ * OpenCFD design tokens. See docs/DESIGN.md.
+ *
+ * Every colour in the UI comes from these semantic roles, never a raw hex in
+ * a component. `data-theme` on <html> is always the resolved theme
+ * ("light" | "dark"); utils/theme.ts sets it from the user's preference
+ * (System / Light / Dark) before first paint.
+ *
+ * - Surfaces step from the outer chrome (app) to panels (surface) to rows,
+ *   inputs and hover (surface-2/3). The viewport has its own role so the
+ *   canvas can sit a step darker than the panels around it.
+ * - One accent, reserved for the primary action and the true selection.
+ * - Depth comes from lines and surface contrast, never shadows.
  */
 
-:root {
-  /* Text */
-  --color-text-primary: #171A1F;
-  --color-text-secondary: #69717D;
-  --color-text-tertiary: #8A929E;
-  --color-text-muted: #A5ACB5;
-  --color-text-disabled: #C4C9D0;
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
 
-  /* Borders */
-  --color-border-default: #E1E4E8;
-  --color-border-subtle: #EDEFF3;
-  --color-border-mesh: #CBD5E1;
+  --app: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f8f9fa;
+  --surface-3: #edeff3;
+  --viewport: #fafafa;
 
-  /* Surfaces & Backgrounds */
-  --color-bg-canvas: #FFFFFF;
-  --color-bg-chrome: #F5F6F8;
-  --color-bg-subtle: #EDEFF3;
-  --color-bg-panel: #FFFFFF;
+  --line: #e1e4e8;
+  --line-soft: #edeff3;
+  --line-strong: #c4c9d0;
 
-  /* Accent (Used ONLY for primary action & current selection) */
-  --color-accent: #2563EB;
-  --color-accent-hover: #1D4ED8;
-  --color-accent-subtle: #EFF6FF;
+  --fg: #171a1f;
+  --fg-2: #69717d;
+  --fg-3: #8a929e;
+  --fg-4: #a5acb5;
+  --fg-5: #c4c9d0;
 
-  /* Status Colors */
-  --color-status-success: #10B981;
-  --color-status-warning: #F59E0B;
-  --color-status-danger: #EF4444;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-soft: #eff6ff;
+  --accent-fg: #1d4ed8;
+  --accent-line: #bfd3f6;
 
-  /* Engineering Radii */
-  --radius-none: 0px;
-  --radius-control: 2px; /* buttons, inputs, small chips */
-  --radius-panel: 4px;   /* cards, panels, dialogs */
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --danger-line: #fecaca;
+  --success: #16a34a;
+  --success-soft: #f0fdf4;
+  --success-line: #bbf7d0;
+  --warning: #d97706;
+  --warning-soft: #fffbeb;
+  --warning-line: #fde68a;
+
+  --inverse: #171a1f;
+  --on-inverse: #ffffff;
+  --scrim: rgba(15, 17, 20, 0.4);
+  --scrollbar: #d1d5db;
+  --scrollbar-hover: #9ca3af;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --app: #121315;
+  --surface: #1a1b1e;
+  --surface-2: #202125;
+  --surface-3: #292a2f;
+  --viewport: #0e0f11;
+
+  --line: #2b2d32;
+  --line-soft: #222428;
+  --line-strong: #3b3e45;
+
+  --fg: #e6e8eb;
+  --fg-2: #a3a9b2;
+  --fg-3: #80868f;
+  --fg-4: #62676f;
+  --fg-5: #464a51;
+
+  --accent: #3b82f6;
+  --accent-hover: #5b97f8;
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --accent-fg: #8ab4ff;
+  --accent-line: rgba(59, 130, 246, 0.5);
+
+  --danger: #f26b6b;
+  --danger-soft: rgba(242, 107, 107, 0.12);
+  --danger-line: rgba(242, 107, 107, 0.4);
+  --success: #3fcf7a;
+  --success-soft: rgba(63, 207, 122, 0.12);
+  --success-line: rgba(63, 207, 122, 0.4);
+  --warning: #f2b23e;
+  --warning-soft: rgba(242, 178, 62, 0.12);
+  --warning-line: rgba(242, 178, 62, 0.4);
+
+  --inverse: #e6e8eb;
+  --on-inverse: #121315;
+  --scrim: rgba(0, 0, 0, 0.55);
+  --scrollbar: #3b3e45;
+  --scrollbar-hover: #565a63;
 }

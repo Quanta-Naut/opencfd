@@ -9,19 +9,33 @@ interface TooltipProps {
   children: React.ReactElement;
   delay?: number;
   maxWidth?: number;
+  /** 'right' places the tip beside the element (for vertical rails). */
+  side?: 'auto' | 'right';
 }
 
 /**
  * Clean floating tooltip. Renders into <body> (never clipped by scroll areas),
  * fades + slides in after a short hover delay, fades out on leave.
  */
-export const Tooltip: React.FC<TooltipProps> = ({ content, children, delay = 750, maxWidth = 260 }) => {
+export const Tooltip: React.FC<TooltipProps> = ({
+  content,
+  children,
+  delay = 750,
+  maxWidth = 260,
+  side = 'auto',
+}) => {
   const anchor = useRef<HTMLElement | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const suppressed = useRef(false); // stays suppressed after a click until the pointer leaves
   const [state, setState] = useState<State>('hidden');
-  const [pos, setPos] = useState<{ left: number; top: number; placement: 'top' | 'bottom' }>({
-    left: 0, top: 0, placement: 'bottom',
+  const [pos, setPos] = useState<{
+    left: number;
+    top: number;
+    placement: 'top' | 'bottom' | 'right';
+  }>({
+    left: 0,
+    top: 0,
+    placement: 'bottom',
   });
 
   const clear = () => window.clearTimeout(timer.current);
@@ -35,6 +49,11 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, delay = 750
       const el = anchor.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
+      if (side === 'right') {
+        setPos({ left: r.right + 8, top: r.top + r.height / 2, placement: 'right' });
+        setState('in');
+        return;
+      }
       const roomBelow = window.innerHeight - r.bottom;
       const placement: 'top' | 'bottom' = roomBelow < 150 && r.top > roomBelow ? 'top' : 'bottom';
       const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - maxWidth - 8));
@@ -42,7 +61,7 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, delay = 750
       setPos({ left, top, placement });
       setState('in');
     }, delay);
-  }, [delay, maxWidth]);
+  }, [delay, maxWidth, side]);
 
   const hide = useCallback(() => {
     clear();
@@ -61,14 +80,20 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, delay = 750
 
   useEffect(() => () => clear(), []);
 
-  const setRef = useCallback((node: HTMLElement | null) => {
-    anchor.current = node;
-    const childRef = (children as any).ref;
-    if (typeof childRef === 'function') childRef(node);
-    else if (childRef && typeof childRef === 'object') childRef.current = node;
-  }, [children]);
+  const setRef = useCallback(
+    (node: HTMLElement | null) => {
+      anchor.current = node;
+      const childRef = (children as any).ref;
+      if (typeof childRef === 'function') childRef(node);
+      else if (childRef && typeof childRef === 'object') childRef.current = node;
+    },
+    [children],
+  );
 
-  const compose = (own: any, mine: (e: any) => void) => (e: any) => { own?.(e); mine(e); };
+  const compose = (own: any, mine: (e: any) => void) => (e: any) => {
+    own?.(e);
+    mine(e);
+  };
 
   const childProps = (children.props ?? {}) as Record<string, any>;
   const trigger = React.cloneElement(children as React.ReactElement<any>, {
@@ -87,9 +112,11 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, children, delay = 750
           <div
             data-placement={pos.placement}
             data-state={state}
-            onTransitionEnd={() => { if (state === 'out') setState('hidden'); }}
+            onTransitionEnd={() => {
+              if (state === 'out') setState('hidden');
+            }}
             style={{ position: 'fixed', left: pos.left, top: pos.top, maxWidth }}
-            className="tooltip-pop pointer-events-none z-[9999] rounded bg-white border border-[#E4E7EC] px-3 py-2 text-[11px] leading-relaxed text-[#3F4652]"
+            className="tooltip-pop pointer-events-none z-[9999] rounded bg-surface border border-line px-3 py-2 text-[11px] leading-relaxed text-fg"
           >
             {content}
           </div>,

@@ -20,7 +20,7 @@ export const AnalysisSection: React.FC<
     >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <Field label="Flow topology" hint="Set in Geometry ▸ Domain">
-          <div className="w-full px-2.5 py-2 bg-[#F5F6F8] border border-[#DDE2E8] rounded-sm text-xs text-[#69717D] capitalize">
+          <div className="w-full px-2.5 py-2 bg-app border border-line rounded-sm text-xs text-fg-2 capitalize">
             {flowType} flow
           </div>
         </Field>
@@ -35,7 +35,7 @@ export const AnalysisSection: React.FC<
           />
         </Field>
       </div>
-      <p className="text-[10px] text-[#69717D]">
+      <p className="text-[10px] text-fg-2">
         Steady state vs transient is chosen in the Solver tab.
       </p>
 
@@ -44,7 +44,7 @@ export const AnalysisSection: React.FC<
           label={
             <span className="flex items-center gap-1.5">
               Speed regime
-              <span className="text-[10px] font-semibold px-1 py-px rounded bg-[#EEF2FF] text-[#2563EB]">
+              <span className="text-[10px] font-semibold px-1 py-px rounded bg-accent-soft text-accent">
                 AUTO
               </span>
             </span>
@@ -66,7 +66,7 @@ export const AnalysisSection: React.FC<
         </Field>
         {/* moved out of the live UI - see caseSetup/AnalysisSection.tsx, kept for a future tutorial
         <div className="flex items-end">
-          <p className="text-[10px] text-[#69717D] leading-relaxed pb-2">
+          <p className="text-[10px] text-fg-2 leading-relaxed pb-2">
             {(physics.speedRegime === 'incompressible' || !compressible) &&
               'Constant density, pressure-based (simpleFoam / pimpleFoam).'}
             {compressible && physics.speedRegime === 'subsonic' &&

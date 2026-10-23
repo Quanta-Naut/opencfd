@@ -28,16 +28,16 @@ export const ColormapLegend: React.FC<ColormapLegendProps> = ({
   };
 
   return (
-    <div className="absolute bottom-4 right-4 bg-white border border-[#E1E4E8] rounded p-3 w-64 pointer-events-auto">
-      <div className="flex justify-between items-center mb-1 text-xs font-semibold text-slate-700">
+    <div className="absolute bottom-4 right-4 bg-surface border border-line rounded p-3 w-64 pointer-events-auto">
+      <div className="flex justify-between items-center mb-1 text-xs font-semibold text-fg">
         <span>{fieldName}</span>
-        <span className="text-slate-400 font-mono font-normal">[{unit}]</span>
+        <span className="text-fg-4 font-mono font-normal">[{unit}]</span>
       </div>
       <div
-        className="h-3 rounded-sm border border-slate-300 "
+        className="h-3 rounded-sm border border-line-strong "
         style={{ background: getGradientStyle() }}
       />
-      <div className="flex justify-between text-[11px] font-mono text-slate-500 mt-1">
+      <div className="flex justify-between text-[11px] font-mono text-fg-2 mt-1">
         <span>{min.toFixed(2)}</span>
         <span>{((min + max) / 2).toFixed(2)}</span>
         <span>{max.toFixed(2)}</span>

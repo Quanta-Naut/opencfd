@@ -7,7 +7,7 @@ interface BottomSolverDrawerProps {
   onClearLogs: () => void;
 }
 
-/** Bottom drawer — solver console only. Residuals / forces live in the right-hand
+/** Bottom drawer - solver console only. Residuals / forces live in the right-hand
  * SolverMonitorRail; OpenFOAM dictionaries open from the top bar. */
 export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   terminalLogs,
@@ -66,7 +66,9 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   const prevStatus = React.useRef(executionStatus);
   useEffect(() => {
     if (
-      (executionStatus === 'running' || executionStatus === 'meshing' || executionStatus === 'error') &&
+      (executionStatus === 'running' ||
+        executionStatus === 'meshing' ||
+        executionStatus === 'error') &&
       prevStatus.current !== executionStatus
     ) {
       setIsExpanded(true);
@@ -108,36 +110,36 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   }, [isExpanded]);
 
   return (
-    <div className="w-full bg-white border-t border-[#E1E4E8] flex flex-col select-none shrink-0 z-20">
+    <div className="w-full bg-surface border-t border-line flex flex-col select-none shrink-0 z-20">
       {/* Header */}
-      <div className="h-8 bg-[#F5F6F8] px-4 flex items-center justify-between border-b border-[#E1E4E8] text-xs">
+      <div className="h-8 bg-app px-4 flex items-center justify-between border-b border-line text-xs">
         <button
           onClick={() => setIsExpanded((v) => !v)}
           className={`px-2.5 py-0.5 rounded text-xs font-medium transition-colors ${
             isExpanded
-              ? 'bg-white text-[#171A1F] font-semibold border border-[#E1E4E8]'
-              : 'text-[#69717D] hover:text-[#171A1F]'
+              ? 'bg-surface text-fg font-semibold border border-line'
+              : 'text-fg-2 hover:text-fg'
           }`}
         >
           Console
         </button>
 
-        <div className="flex items-center gap-3 text-[11px] font-mono text-[#69717D]">
-          {executionStatus === 'running' && <span className="text-[#2563EB]">running</span>}
-          {executionStatus === 'completed' && <span className="text-[#16A34A]">converged</span>}
-          {executionStatus === 'error' && <span className="text-[#DC2626]">failed</span>}
+        <div className="flex items-center gap-3 text-[11px] font-mono text-fg-2">
+          {executionStatus === 'running' && <span className="text-accent">running</span>}
+          {executionStatus === 'completed' && <span className="text-success">converged</span>}
+          {executionStatus === 'error' && <span className="text-danger">failed</span>}
           {isExpanded && terminalLogs.length > 0 && (
             <button
               onClick={onClearLogs}
               title="Clear console"
-              className="p-1 hover:bg-[#E1E4E8] rounded text-[#69717D]"
+              className="p-1 hover:bg-line rounded text-fg-2"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="p-1 hover:bg-[#E1E4E8] rounded transition-colors text-[#171A1F]"
+            className="p-1 hover:bg-line rounded transition-colors text-fg"
             title={isExpanded ? 'Collapse' : 'Expand'}
           >
             {isExpanded ? (
@@ -153,24 +155,24 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
         <>
           <div
             onMouseDown={startDrag}
-            className="h-1.5 -mt-1.5 cursor-ns-resize bg-transparent hover:bg-[#2563EB]/40 transition-colors"
+            className="h-1.5 -mt-1.5 cursor-ns-resize bg-transparent hover:bg-accent/40 transition-colors"
             title="Drag to resize"
           />
           <div
             ref={consoleRef}
             onScroll={onConsoleScroll}
-            className="w-full p-3 font-mono text-[11px] leading-relaxed text-[#171A1F] overflow-y-auto bg-[#F5F6F8]/60 select-text cursor-text [user-select:text] selection:bg-[#2563EB]/25"
+            className="w-full p-3 font-mono text-[11px] leading-relaxed text-fg overflow-y-auto bg-app/60 select-text cursor-text [user-select:text] selection:bg-accent/25"
             style={{ height: bodyH }}
           >
-            {terminalLogs.length === 0 && <span className="text-[#A5ACB5]">No output yet.</span>}
+            {terminalLogs.length === 0 && <span className="text-fg-4">No output yet.</span>}
             {terminalLogs.map((log, i) => (
               <div
                 key={i}
                 className={`py-0.5 whitespace-pre-wrap ${
                   /converged|finished/i.test(log)
-                    ? 'text-[#16A34A] font-semibold'
+                    ? 'text-success font-semibold'
                     : /error|fail|cannot|not found|no such/i.test(log)
-                      ? 'text-[#DC2626]'
+                      ? 'text-danger'
                       : ''
                 }`}
               >
