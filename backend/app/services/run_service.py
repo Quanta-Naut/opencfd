@@ -5,8 +5,11 @@ the latest field snapshot per run.
 
 Layout:
   ~/.OpenCFD/projects/<project_id>/runs/<run_id>/
-    stream.jsonl   real-time append-only stream of solver events
-    field.json     latest field snapshot with mesh topology
+    stream.jsonl   real-time append-only stream of solver events (live field
+                   previews are logged as a small marker, not their data)
+    field.pak      the run's final field snapshot with mesh topology, in the
+                   packed format of services/packed_json.py (older runs have
+                   field.json, still read)
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.services import packed_json
 from app.services.project_service import PROJECTS_ROOT
 
 _logger = logging.getLogger(__name__)
@@ -70,7 +74,8 @@ class RunRecorder:
         self.config = config or {}
         self.run_dir = resolve_run_dir(self.project_id, self.run_id, create=True)
         self.stream_path = self.run_dir / "stream.jsonl"
-        self.field_path = self.run_dir / "field.json"
+        self.field_path = self.run_dir / "field.pak"
+        self.legacy_field_path = self.run_dir / "field.json"
         self._stream_file: Optional[Any] = None
 
         mesh = self.config.get("mesh") or {}
@@ -108,7 +113,14 @@ class RunRecorder:
                     pass
 
     def _write_field_sync(self, payload: Dict[str, Any]) -> None:
-        self._atomic_write_json(self.field_path, payload)
+        tmp_path = self.field_path.with_name(f"{self.field_path.name}.tmp.{os.getpid()}")
+        try:
+            tmp_path.write_bytes(packed_json.pack(payload))
+            os.replace(tmp_path, self.field_path)
+            self.legacy_field_path.unlink(missing_ok=True)
+        except Exception:
+            _logger.warning("could not write %s", self.field_path, exc_info=True)
+            tmp_path.unlink(missing_ok=True)
 
     async def _write_field_json(self, payload: Dict[str, Any]) -> None:
         loop = asyncio.get_event_loop()
@@ -122,7 +134,15 @@ class RunRecorder:
         await loop.run_in_executor(None, self._write_field_error_sync, reason)
 
     async def record_event(self, item: Dict[str, Any]) -> None:
-        """Append one event to stream.jsonl and update field.json if type is field."""
+        """Append one event to stream.jsonl.
+
+        A live field preview is logged as a marker with its time only. Its
+        data (every cell, several fields) is several MB on a big mesh, it
+        arrives every few seconds, and nothing reads it back: the run's
+        stored result is written once, by finish(), from the final timestep."""
+        if isinstance(item, dict) and item.get("type") == "field":
+            data = item.get("data") if isinstance(item.get("data"), dict) else {}
+            item = {"type": "field", "time": data.get("time")}
         try:
             if self._stream_file:
                 line = json.dumps(item, default=_json_default) + "\n"
@@ -130,16 +150,6 @@ class RunRecorder:
                 self._stream_file.flush()
         except Exception:
             pass
-
-        if isinstance(item, dict) and item.get("type") == "field":
-            data = item.get("data")
-            if isinstance(data, dict):
-                self.has_field = True
-                payload = {
-                    **data,
-                    "mesh": self.mesh_snapshot,
-                }
-                await self._write_field_json(payload)
 
     async def finish(self, case_dir: str | None = None) -> None:
         """Finalize the run. Writes the final field snapshot if available.
@@ -201,15 +211,13 @@ class RunRecorder:
                     "type": "log",
                     "line": f"[OpenCFD] could not save the final result snapshot: {last_error}",
                 })
-                # Whatever is on disk now is only the cheap live-preview
-                # snapshot from record_event() (per viewer *element*, not per
-                # mesh *node*). Leaving it as this run's field.json would let
-                # a later "View in Viewport" pass the presence check and then
-                # fail the frontend's own node-count guard with a cryptic
-                # mismatch error instead of the real reason (usually: the
-                # solver diverged before writing a usable final timestep).
+                # Remove any snapshot left from an earlier attempt so a later
+                # "View in Viewport" reports the real reason (usually: the
+                # solver diverged before writing a usable final timestep)
+                # instead of loading something that does not match the mesh.
                 try:
                     self.field_path.unlink(missing_ok=True)
+                    self.legacy_field_path.unlink(missing_ok=True)
                 except OSError as e:
                     _logger.warning("could not remove stale %s", self.field_path, exc_info=True)
                     await self.record_event({
@@ -221,18 +229,33 @@ class RunRecorder:
         self.close()
 
 
-def get_run_field(project_id: str, run_id: str) -> Optional[Dict[str, Any]]:
-    """Retrieve the latest field snapshot for a run."""
+def get_run_field_bytes(project_id: str, run_id: str) -> Optional[bytes]:
+    """A run's stored field snapshot in the packed format, or None. Older runs
+    stored JSON; that is packed on the fly."""
     try:
         rdir = resolve_run_dir(project_id, run_id, create=False)
     except ValueError:
         return None
-    field_file = rdir / "field.json"
-    if not field_file.is_file():
+    packed = rdir / "field.pak"
+    legacy = rdir / "field.json"
+    try:
+        if packed.is_file():
+            return packed.read_bytes()
+        if legacy.is_file():
+            return packed_json.pack(json.loads(legacy.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def get_run_field(project_id: str, run_id: str) -> Optional[Dict[str, Any]]:
+    """Retrieve a run's stored field snapshot as a plain dict."""
+    raw = get_run_field_bytes(project_id, run_id)
+    if raw is None:
         return None
     try:
-        return json.loads(field_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return packed_json.unpack(raw)
+    except ValueError:
         return None
 
 

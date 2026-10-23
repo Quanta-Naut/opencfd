@@ -8,6 +8,10 @@ import {
 } from '../types/cfd';
 import { API_BASE, WS_BASE } from './backend';
 import { MESH_MEDIA_TYPE, readMeshResponse } from './meshCodec';
+import { PACKED_MEDIA_TYPE, readPackedOrJson } from './packedJson';
+
+/** Field endpoints answer packed when asked (see packedJson). */
+const PACKED_ACCEPT = `${PACKED_MEDIA_TYPE}, application/json`;
 
 /** Mesh endpoints answer in the binary container when asked (see meshCodec). */
 const MESH_REQUEST_HEADERS = {
@@ -32,13 +36,19 @@ export async function fetchSolverResults(
   signal?: AbortSignal,
 ): Promise<{ data: any | null; detail?: string }> {
   try {
+    // With a project, the backend reads the project's saved mesh, so the
+    // whole mesh is not uploaded as JSON on every results load.
     const res = await fetch(`${API_BASE}/api/solver/results`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project_id: projectId ?? null, mesh, time: time ?? null }),
+      headers: { 'Content-Type': 'application/json', Accept: PACKED_ACCEPT },
+      body: JSON.stringify({
+        project_id: projectId ?? null,
+        mesh: projectId ? {} : mesh,
+        time: time ?? null,
+      }),
       signal,
     });
-    const j = await res.json().catch(() => ({}));
+    const j = await readPackedOrJson(res).catch(() => ({}));
     if (!res.ok) return { data: null, detail: j.detail || `HTTP ${res.status}` };
     return j.success ? { data: j.data } : { data: null, detail: j.detail || 'no results' };
   } catch (e: any) {
@@ -601,11 +611,12 @@ export async function fetchRunField(
       `${API_BASE}/api/solver/runs/${encodeURIComponent(projectId)}/${encodeURIComponent(runId)}/field`,
       {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { Accept: PACKED_ACCEPT },
         signal,
       },
     );
-    const j = await res.json().catch(() => ({}));
+    // A packed reply is the stored snapshot itself; JSON is the usual envelope.
+    const j = await readPackedOrJson(res).catch(() => ({}));
     if (!res.ok) return { data: null, detail: j.detail || `HTTP ${res.status}` };
     if (j.success === false)
       return { data: null, detail: j.detail || 'no stored field for this run' };

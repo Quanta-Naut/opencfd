@@ -6,7 +6,8 @@ Every project is a folder under ~/.OpenCFD/projects/<slug>/ containing:
   session.json   the StudioSession sent by the frontend, minus the heavy blobs
   mesh.bin       the generated mesh (session key `meshData`), in the binary
                  format of services/mesh_codec.py
-  field.json     the loaded result field (session key `fieldData`)
+  field.pak      the loaded result field (session key `fieldData`), in the
+                 packed format of services/packed_json.py
   (mesh/ and case/ subdirs are reserved for future Gmsh / OpenFOAM output)
 
 The folder name is the project id and never changes; renaming only edits the
@@ -15,11 +16,10 @@ display name inside project.json.
 The mesh and field are kept out of session.json because they can be tens of
 megabytes: the session is autosaved after nearly every edit, and re-sending
 and re-writing the mesh each time froze the UI. The frontend writes them
-through `save_blob` only when they change. `get_project` merges field.json
-back into the session; the mesh is listed in `binaryBlobs` instead and the
-client fetches it separately with `get_blob_bytes`, which skips ~17 MB of
-JSON on every project open. Older projects (inline blobs, or a mesh.json) are
-migrated on first open.
+through `save_blob` only when they change, both in binary formats.
+`get_project` lists them in `binaryBlobs` and the client fetches each with
+`get_blob_bytes`, which skips tens of MB of JSON on every project open. Older
+projects (inline blobs, or mesh.json / field.json) are migrated on first open.
 """
 
 import json
@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import mesh_codec
+from . import mesh_codec, packed_json
 
 SCHEMA_VERSION = 1
 PROJECTS_ROOT = Path.home() / ".OpenCFD" / "projects"
@@ -81,33 +81,41 @@ def _write_json(path: Path, data: Any) -> None:
 
 
 # Session keys stored in their own file, written only when they change.
-BLOB_FILES = {"meshData": "mesh.bin", "fieldData": "field.json"}
-# Blobs stored in a binary format, fetched separately rather than inlined.
-BINARY_BLOBS = {"meshData"}
-LEGACY_MESH_JSON = "mesh.json"
+BLOB_FILES = {"meshData": "mesh.bin", "fieldData": "field.pak"}
+# Every blob is binary now; the set stays so a future JSON blob is easy to add.
+BINARY_BLOBS = {"meshData", "fieldData"}
+LEGACY_JSON_FILES = {"meshData": "mesh.json", "fieldData": "field.json"}
+BLOB_MEDIA_TYPES = {"meshData": mesh_codec.MEDIA_TYPE, "fieldData": packed_json.MEDIA_TYPE}
+
+
+def _is_binary_blob(key: str, raw: bytes) -> bool:
+    return mesh_codec.is_binary_mesh(raw) if key == "meshData" else packed_json.is_packed(raw)
+
+
+def _encode_blob(key: str, value: Any) -> bytes:
+    return mesh_codec.encode_mesh(value) if key == "meshData" else packed_json.pack(value)
 
 
 def _write_blob_bytes(pdir: Path, key: str, raw: bytes) -> None:
     """Write a blob atomically (temp file + rename) so a crash mid-write never
-    leaves a truncated mesh behind. `null` removes it. A JSON mesh (older
+    leaves a truncated file behind. `null` removes it. A JSON body (older
     client, or an inline session blob) is converted to the binary format."""
     path = pdir / BLOB_FILES[key]
-    if key == "meshData":
-        (pdir / LEGACY_MESH_JSON).unlink(missing_ok=True)
+    (pdir / LEGACY_JSON_FILES[key]).unlink(missing_ok=True)
     if raw.strip() in (b"", b"null"):
         path.unlink(missing_ok=True)
         return
-    if key in BINARY_BLOBS and not mesh_codec.is_binary_mesh(raw):
-        raw = mesh_codec.encode_mesh(json.loads(raw))
+    if not _is_binary_blob(key, raw):
+        raw = _encode_blob(key, json.loads(raw))
     tmp = path.with_suffix(".tmp")
     tmp.write_bytes(raw)
     tmp.replace(path)
 
 
-def _migrate_legacy_mesh(pdir: Path) -> None:
-    legacy = pdir / LEGACY_MESH_JSON
-    if legacy.is_file() and not (pdir / BLOB_FILES["meshData"]).is_file():
-        _write_blob_bytes(pdir, "meshData", legacy.read_bytes())
+def _migrate_legacy_blob(pdir: Path, key: str) -> None:
+    legacy = pdir / LEGACY_JSON_FILES[key]
+    if legacy.is_file() and not (pdir / BLOB_FILES[key]).is_file():
+        _write_blob_bytes(pdir, key, legacy.read_bytes())
 
 
 def _split_blobs(pdir: Path, session: Dict[str, Any]) -> bool:
@@ -270,16 +278,11 @@ def get_project(pid: str) -> Dict[str, Any]:
     session = _read_json(_session_path(pdir), {})
     if _split_blobs(pdir, session):
         _write_json(_session_path(pdir), session)  # one-time migration
-    _migrate_legacy_mesh(pdir)
     binary: List[str] = []
     for key, fname in BLOB_FILES.items():
-        if key in BINARY_BLOBS:
-            if (pdir / fname).is_file():
-                binary.append(key)
-            continue
-        blob = _read_json(pdir / fname, None)
-        if blob is not None:
-            session[key] = blob
+        _migrate_legacy_blob(pdir, key)
+        if (pdir / fname).is_file():
+            binary.append(key)
     return {"meta": meta, "session": session, "binaryBlobs": binary}
 
 
@@ -290,8 +293,7 @@ def get_blob_bytes(pid: str, key: str) -> Optional[bytes]:
     pdir = _project_dir(pid)
     if not pdir.is_dir():
         raise FileNotFoundError(f"Project '{pid}' not found")
-    if key == "meshData":
-        _migrate_legacy_mesh(pdir)
+    _migrate_legacy_blob(pdir, key)
     path = pdir / BLOB_FILES[key]
     return path.read_bytes() if path.is_file() else None
 
@@ -332,8 +334,12 @@ def save_blob(pid: str, key: str, raw: bytes) -> None:
     pdir = _project_dir(pid)
     if not pdir.is_dir():
         raise FileNotFoundError(f"Project '{pid}' not found")
-    if key in BINARY_BLOBS and mesh_codec.is_binary_mesh(raw):
-        mesh_codec.decode_header(raw)  # reject a truncated or corrupt body
+    if _is_binary_blob(key, raw):
+        # reject a truncated or corrupt body
+        if key == "meshData":
+            mesh_codec.decode_header(raw)
+        else:
+            packed_json.validate(raw)
     else:
         head = raw.lstrip()[:1]
         if head not in (b"{", b"[", b"n", b""):
@@ -378,10 +384,11 @@ def duplicate_project(pid: str) -> Dict[str, Any]:
     meta = _read_json(_meta_path(pdir), None)
     if not meta:
         raise FileNotFoundError(f"Project '{pid}' is missing metadata")
-    session = get_project(pid)["session"]  # includes the field blob
+    session = get_project(pid)["session"]
     new_meta = create_project(f"{meta.get('name', pid)} copy")
     saved = save_session(new_meta["id"], session)
-    mesh = get_blob_bytes(pid, "meshData")
-    if mesh:
-        _write_blob_bytes(_project_dir(new_meta["id"]), "meshData", mesh)
+    for key in BLOB_FILES:
+        raw = get_blob_bytes(pid, key)
+        if raw:
+            _write_blob_bytes(_project_dir(new_meta["id"]), key, raw)
     return saved

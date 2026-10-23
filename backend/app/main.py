@@ -26,7 +26,7 @@ from app.services.cad2d_service import (
     compute_2d_fillet,
     generate_mesh_from_cad_loop
 )
-from app.services import project_service, run_service, settings_service, mesh_codec
+from app.services import project_service, run_service, settings_service, mesh_codec, packed_json
 
 app = FastAPI(title="OpenCFD Backend API", version="1.0.0")
 
@@ -140,6 +140,16 @@ def _json_default(o: Any) -> Any:
 
 def _wants_binary_mesh(request: Request) -> bool:
     return mesh_codec.MEDIA_TYPE in request.headers.get("accept", "")
+
+
+def _envelope_response(request: Request, envelope: Dict[str, Any], status_code: int = 200) -> Response:
+    """A `{success, data|detail}` reply, packed (services/packed_json.py) when
+    the client accepts it. Field payloads are mostly big float arrays."""
+    if packed_json.MEDIA_TYPE in request.headers.get("accept", ""):
+        return Response(content=packed_json.pack(envelope), media_type=packed_json.MEDIA_TYPE,
+                        status_code=status_code)
+    body = json.dumps(envelope, separators=(",", ":"), default=_json_default)
+    return Response(content=body, media_type="application/json", status_code=status_code)
 
 
 def _mesh_response(mesh: Any, binary: bool = False) -> Response:
@@ -275,18 +285,28 @@ class SolverResultsRequest(BaseModel):
 
 
 @app.post("/api/solver/results")
-async def solver_results_endpoint(req: SolverResultsRequest):
+async def solver_results_endpoint(req: SolverResultsRequest, request: Request):
     from app.services.solver.results import ResultsUnavailable
-    try:
+
+    def read() -> Dict[str, Any]:
+        # The client normally omits the mesh and the project's saved copy is
+        # used, instead of uploading the whole mesh as JSON on every load.
+        mesh = req.mesh
+        if not mesh.get("nodes") and req.project_id:
+            mesh = project_service.load_mesh(req.project_id) or {}
         case_dir = str(resolve_case_dir(req.project_id))
-        data = read_field_results(case_dir, req.mesh, req.time)
+        data = read_field_results(case_dir, mesh, req.time)
         if data is None:
             return {"success": False, "detail": "no solver output found for this project"}
         return {"success": True, "data": data}
+
+    try:
+        envelope = await asyncio.to_thread(read)
     except ResultsUnavailable as e:
-        return {"success": False, "detail": str(e)}
+        envelope = {"success": False, "detail": str(e)}
     except Exception as e:
-        return {"success": False, "detail": f"could not read results: {e}"}
+        envelope = {"success": False, "detail": f"could not read results: {e}"}
+    return _envelope_response(request, envelope)
 
 
 class ParaviewLaunchRequest(BaseModel):
@@ -543,7 +563,7 @@ async def get_project_blob_endpoint(pid: str, key: str):
         raise HTTPException(status_code=400, detail=str(e))
     if raw is None:
         raise HTTPException(status_code=404, detail=f"Project '{pid}' has no {key}")
-    media = mesh_codec.MEDIA_TYPE if key in project_service.BINARY_BLOBS else "application/json"
+    media = project_service.BLOB_MEDIA_TYPES.get(key, "application/json")
     return Response(content=raw, media_type=media)
 
 @app.put("/api/projects/{pid}/session")
@@ -586,8 +606,13 @@ async def duplicate_project_endpoint(pid: str):
 
 # -- Run persistence (~/.OpenCFD/projects/<pid>/runs/<rid>) --------------------
 @app.get("/api/solver/runs/{project_id}/{run_id}/field")
-async def get_solver_run_field_endpoint(project_id: str, run_id: str):
-    data = run_service.get_run_field(project_id, run_id)
+async def get_solver_run_field_endpoint(project_id: str, run_id: str, request: Request):
+    if packed_json.MEDIA_TYPE in request.headers.get("accept", ""):
+        raw = await asyncio.to_thread(run_service.get_run_field_bytes, project_id, run_id)
+        if raw is not None:
+            # The stored snapshot is already packed; send its bytes as-is.
+            return Response(content=raw, media_type=packed_json.MEDIA_TYPE)
+    data = await asyncio.to_thread(run_service.get_run_field, project_id, run_id)
     if data is None:
         reason = run_service.get_run_field_error(project_id, run_id)
         detail = (
@@ -728,7 +753,13 @@ async def websocket_solver_stream(websocket: WebSocket):
 
             async for item in adapter.run(case_dir, config):
                 await recorder.record_event(item)
-                await websocket.send_json(item)
+                if item.get("type") == "field":
+                    # A live preview is several MB of floats on a big mesh:
+                    # send it as one packed binary frame, packed off the loop.
+                    frame = await asyncio.to_thread(packed_json.pack, item)
+                    await websocket.send_bytes(frame)
+                else:
+                    await websocket.send_json(item)
 
             await recorder.finish(case_dir)
         except WebSocketDisconnect:

@@ -114,6 +114,10 @@ def _coeff_files(case_dir: Path) -> List[Path]:
     return hits
 
 
+_COEFF_HEAD_BYTES = 8192
+_COEFF_TAIL_BYTES = 4096
+
+
 def read_force_coeffs(case_dir: str | Path) -> Optional[Dict[str, float]]:
     """Return {"cd": .., "cl": ..} from the newest forceCoeffs output, or None."""
     files = _coeff_files(Path(case_dir))
@@ -122,14 +126,25 @@ def read_force_coeffs(case_dir: str | Path) -> Optional[Dict[str, float]]:
     path = max(files, key=lambda p: p.stat().st_mtime)
     header: List[str] = []
     last: Optional[str] = None
-    for raw in path.read_text(encoding='utf-8', errors='ignore').splitlines():
+    # Called once per solver iteration while the file keeps growing, so read
+    # only its head (the "#" column header) and its tail (the newest row)
+    # rather than the whole file each time.
+    with open(path, "rb") as f:
+        head = f.read(_COEFF_HEAD_BYTES)
+        size = f.seek(0, 2)
+        f.seek(max(0, size - _COEFF_TAIL_BYTES))
+        tail = f.read()
+    for raw in head.decode("utf-8", errors="ignore").splitlines():
         s = raw.strip()
-        if not s:
-            continue
         if s.startswith("#"):
             header = s.lstrip("#").split()
-            continue
-        last = s
+    tail_lines = tail.decode("utf-8", errors="ignore").splitlines()
+    if size > _COEFF_TAIL_BYTES:
+        tail_lines = tail_lines[1:]  # the first line may be cut mid-row
+    for raw in tail_lines:
+        s = raw.strip()
+        if s and not s.startswith("#"):
+            last = s
     if not last:
         return None
     cols = last.split()

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { toast } from '../components/ui/Toast';
 import { WS_BASE } from '../utils/api';
+import { unpack } from '../utils/packedJson';
 import { CFDProjectState, ResidualDataPoint, SolverRunRecord } from '../types/cfd';
 
 /** Lines kept in the console, and in a run's saved log. The full stream is on
@@ -235,6 +236,8 @@ export function useSolverRun(params: {
     }
 
     const ws = new WebSocket(`${WS_BASE}/ws/solver`);
+    // Live field previews arrive as packed binary frames (see packedJson).
+    ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -285,7 +288,7 @@ export function useSolverRun(params: {
     };
 
     ws.onmessage = (evt) => {
-      const msg = JSON.parse(evt.data);
+      const msg = evt.data instanceof ArrayBuffer ? unpack(evt.data) : JSON.parse(evt.data);
       if (msg.type === 'log' || msg.type === 'residual') {
         if (msg.type === 'log') pendingLogsRef.current.push(msg.line);
         else pendingResidualsRef.current.push(msg.data);
