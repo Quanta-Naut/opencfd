@@ -2,23 +2,25 @@ import React, { useState } from 'react';
 import {
   Combine,
   Eraser,
-  Frame,
   Grid3x3,
   Magnet,
-  Merge,
   PanelLeftClose,
   PanelLeftOpen,
   MousePointer2,
   Redo2,
-  Ruler,
-  SlidersHorizontal,
-  Spline,
-  Square,
-  SquarePlus,
   SquareSplitHorizontal,
   Trash2,
   Undo2,
 } from 'lucide-react';
+import {
+  AssociateIcon,
+  CreateBlockIcon,
+  EdgeParamsIcon,
+  InitBlockIcon,
+  MatchSpacingIcon,
+  MergeVerticesIcon,
+  OGridIcon,
+} from './blockIcons';
 import { Tooltip } from '../../../ui/Tooltip';
 import { Kbd } from '../../../ui/Kbd';
 import type { BlockTool } from './shared';
@@ -28,12 +30,12 @@ import type { BlockTool } from './shared';
 export const TOOLS: { id: BlockTool; icon: React.ElementType; label: string; key: string }[] = [
   { id: 'select', icon: MousePointer2, label: 'Select', key: 'V' },
   { id: 'split', icon: SquareSplitHorizontal, label: 'Split', key: 'K' },
-  { id: 'draw', icon: SquarePlus, label: 'Create block', key: 'B' },
-  { id: 'ogrid', icon: Frame, label: 'O-grid', key: 'O' },
-  { id: 'assoc', icon: Spline, label: 'Associate', key: 'A' },
-  { id: 'params', icon: SlidersHorizontal, label: 'Edge params', key: 'E' },
-  { id: 'match', icon: Ruler, label: 'Match edge spacing', key: 'T' },
-  { id: 'mergeV', icon: Merge, label: 'Merge vertices', key: 'M' },
+  { id: 'draw', icon: CreateBlockIcon, label: 'Create block', key: 'B' },
+  { id: 'ogrid', icon: OGridIcon, label: 'O-grid', key: 'O' },
+  { id: 'assoc', icon: AssociateIcon, label: 'Associate', key: 'A' },
+  { id: 'params', icon: EdgeParamsIcon, label: 'Edge params', key: 'E' },
+  { id: 'match', icon: MatchSpacingIcon, label: 'Match edge spacing', key: 'T' },
+  { id: 'mergeV', icon: MergeVerticesIcon, label: 'Merge vertices', key: 'M' },
   { id: 'mergeB', icon: Combine, label: 'Merge blocks', key: 'J' },
   { id: 'delete', icon: Trash2, label: 'Delete block', key: 'X' },
 ];
@@ -119,7 +121,7 @@ export function BlockToolRail(p: {
       {item(
         'init',
         'Initialize: one block around all the geometry',
-        <Square className="w-4 h-4" />,
+        <InitBlockIcon className="w-4 h-4" />,
         p.initializeBlocks,
       )}
       {sep}
