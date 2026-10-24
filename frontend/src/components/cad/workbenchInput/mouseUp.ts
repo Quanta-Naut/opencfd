@@ -44,6 +44,10 @@ export function onMouseUp(e: React.MouseEvent, wb: MouseUpContext) {
     pendingPanRef.current = null;
   }
 
+  if (blockDrag.current?.shape) {
+    blockDrag.current = null;
+    return;
+  }
   if (blockDrag.current) {
     const moved = Boolean(blockDrag.current.recorded);
     const vid = blockDrag.current.vid;

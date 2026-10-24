@@ -32,6 +32,8 @@ export interface BlockDragState {
   recorded?: boolean;
   /** What the vertex is attached to for this drag; free when Alt was held. */
   home?: VertexHome;
+  /** Set when an edge shape point is dragged instead of a vertex. */
+  shape?: { edgeId: string; index: number };
 }
 
 /** Turning angle above which an outline point is a corner. */

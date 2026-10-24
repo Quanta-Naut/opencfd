@@ -33,6 +33,16 @@ export const TOOL_FIELDS: Record<BlockTool, ToolField[]> = {
     { key: 'ref', label: 'Reference', kind: 'edge' },
     { key: 'targets', label: 'Targets', kind: 'edge', multi: true },
   ],
+  align: [
+    { key: 'a', label: 'From', kind: 'vertex' },
+    { key: 'b', label: 'To', kind: 'vertex' },
+    { key: 'verts', label: 'Vertices', kind: 'vertex', multi: true },
+  ],
+  shape: [{ key: 'edge', label: 'Edge', kind: 'edge' }],
+  link: [
+    { key: 'src', label: 'Source', kind: 'edge' },
+    { key: 'edges', label: 'Edges', kind: 'edge', multi: true },
+  ],
   mergeV: [
     { key: 'keep', label: 'Keep', kind: 'vertex' },
     { key: 'merge', label: 'Merge', kind: 'vertex' },

@@ -91,6 +91,9 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
       else if (k === 'a') setBlockTool('assoc');
       else if (k === 'e') setBlockTool('params');
       else if (k === 't') setBlockTool('match');
+      else if (k === 'l') setBlockTool('align');
+      else if (k === 's') setBlockTool('shape');
+      else if (k === 'i') setBlockTool('link');
       else if (k === 'p') setShowPremesh((v) => !v);
     }
     return;

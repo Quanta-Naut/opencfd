@@ -3,6 +3,7 @@ import { Blocking, BlockEdge } from './types';
 import { dedupeClose, entityRing, near, resampleOpen } from './geometry';
 import { movedEdgePath, outlinesFor } from './editor';
 import { associatedEdgePath } from './hexa';
+import { refreshShapes } from './shape';
 
 /**
  * Reproject a curved block edge onto its associated CAD entity outline
@@ -99,10 +100,11 @@ export function applyVertexMove(
     }
     return { ...e, path: e.path.map((p) => ({ ...p })) };
   });
-  return {
+  // Shaped and linked edges are rebuilt last, from the moved vertices.
+  return refreshShapes({
     vertices,
     edges,
     blocks: bk.blocks.map((b) => ({ id: b.id, edges: [...b.edges] })),
     links: bk.links ? bk.links.map((grp) => [...grp]) : undefined,
-  };
+  });
 }

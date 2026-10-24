@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { MousePointerClick, X } from 'lucide-react';
 import type { CadEntity } from '../../../../types/cadWorkflow';
+import { straightenEdges } from '../../../../types/blocking';
 import type { Blocking, SpacingJump } from '../../../../types/blocking';
 import { TOOLS } from './BlockToolRail';
 import { EdgeParams } from './BlockInspector';
-import { card, smallBtn } from './shared';
+import { card, Field, smallBtn } from './shared';
 import type { BlockMsg, BlockTool } from './shared';
 import { TOOL_FIELDS, fieldsReady } from './toolFields';
 import type { ToolPicks } from './toolFields';
@@ -20,6 +21,9 @@ const HINT: Partial<Record<BlockTool, string>> = {
   match: 'Targets take the reference cell size where they meet it.',
   mergeV: 'The second vertex moves onto the first.',
   mergeB: 'The two blocks must share a whole side.',
+  align: 'Vertices on a curve slide along it to the line.',
+  shape: 'Click the edge to add a point, drag points to bend it. Alt-click removes one.',
+  link: 'The edges bend like the source. Factor 1 is the same bend, 0 straight.',
 };
 
 /** The active tool's command dialog (Fusion 360 style): selection fields,
@@ -38,6 +42,8 @@ export function BlockToolDialog(p: {
   setOgridScale: (v: number) => void;
   matchCopy: boolean;
   setMatchCopy: (v: boolean) => void;
+  linkFactor: number;
+  setLinkFactor: (v: number) => void;
   blockSpacingJumps: SpacingJump[];
   blockMsg: BlockMsg;
   commitTool: () => void;
@@ -47,8 +53,16 @@ export function BlockToolDialog(p: {
   const tool = TOOLS.find((t) => t.id === p.blockTool);
   if (!tool || p.blockTool === 'select') return null;
   const fields = TOOL_FIELDS[p.blockTool];
-  // Draw and Split apply as you click; Edge params as you type.
-  const live = p.blockTool === 'draw' || p.blockTool === 'split' || p.blockTool === 'params';
+  // Draw, Split and Edge shape apply as you click; Edge params as you type.
+  const live =
+    p.blockTool === 'draw' ||
+    p.blockTool === 'split' ||
+    p.blockTool === 'params' ||
+    p.blockTool === 'shape';
+  const shaped =
+    p.blockTool === 'shape'
+      ? p.blocking.edges.find((e) => e.id === p.toolPicks.edge?.[0])
+      : undefined;
   const ready = live || fieldsReady(p.blockTool, p.toolPicks);
   const hint = HINT[p.blockTool];
   return (
@@ -140,6 +154,27 @@ export function BlockToolDialog(p: {
             />
             Copy to parallel edges
           </label>
+        )}
+        {p.blockTool === 'link' && (
+          <div className="flex items-center gap-2">
+            <span className="w-[72px] shrink-0 text-fg-2">Factor</span>
+            <Field value={p.linkFactor} onCommit={(v) => v !== undefined && p.setLinkFactor(v)} />
+          </div>
+        )}
+        {shaped && (
+          <div className="flex items-center gap-2">
+            <span className="w-[72px] shrink-0 text-fg-2">Points</span>
+            <span className="font-mono">
+              {shaped.link ? 'linked' : (shaped.shape?.length ?? 0)}
+            </span>
+            <button
+              className={`${smallBtn} ml-auto`}
+              disabled={!shaped.shape?.length && !shaped.link}
+              onClick={() => p.onUpdateBlocking(straightenEdges(p.blocking, [shaped.id]))}
+            >
+              Straighten
+            </button>
+          </div>
         )}
         {p.blockTool === 'params' && (p.toolPicks.edges ?? []).length > 0 && (
           <div className="pt-1.5 border-t border-line">

@@ -13,7 +13,15 @@ import {
   GeometryBBox,
   createDomainEntity,
 } from '../../../types/cadWorkflow';
-import { Blocking, pickEdge, blockAt } from '../../../types/blocking';
+import {
+  Blocking,
+  pickEdge,
+  blockAt,
+  addShapePoint,
+  removeShapePoint,
+  shapePointsWorld,
+  notShapeable,
+} from '../../../types/blocking';
 import { activeFieldOf, pickInto } from '../workbenchUi/blockEditor/toolFields';
 import type { ToolPicks } from '../workbenchUi/blockEditor/toolFields';
 import type { CadTool } from '../workbenchCore';
@@ -74,6 +82,46 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
     setCmdText,
   } = wb;
   userInteractedRef.current = true;
+  /** Edge shape tool on its picked edge: grab a point (Alt removes it), or
+   *  click the edge to add one and drag it. False when the click was elsewhere. */
+  const shapeEdgeClick = (raw: Point2D, alt: boolean): boolean => {
+    const se = blocking.edges.find((x) => x.id === toolPicks.edge?.[0]);
+    if (!se || !onUpdateBlocking) return false;
+    const pts = shapePointsWorld(blocking, se);
+    let hi = -1;
+    let bd = 8 / zoom;
+    pts.forEach((q, i) => {
+      const d = Math.hypot(q.x - raw.x, q.y - raw.y);
+      if (d < bd) {
+        bd = d;
+        hi = i;
+      }
+    });
+    if (hi >= 0) {
+      if (alt) onUpdateBlocking(removeShapePoint(blocking, se.id, hi));
+      else
+        blockDrag.current = {
+          vid: se.v0,
+          origin: { ...pts[hi] },
+          shape: { edgeId: se.id, index: hi },
+        };
+      return true;
+    }
+    const hit = pickEdge(blocking, raw, 8 / zoom);
+    if (hit?.edgeId !== se.id) return false;
+    const r = addShapePoint(blocking, se.id, hit.pt);
+    if ('error' in r) {
+      setBlockMsg({ text: r.error, error: true });
+      return true;
+    }
+    blockDrag.current = {
+      vid: se.v0,
+      origin: { ...hit.pt },
+      shape: { edgeId: se.id, index: r.index },
+    };
+    onUpdateBlocking(r.blocking);
+    return true;
+  };
   // Step 2: Domain Handle Drag start
   if (!displayOnly && currentStep === 2 && hoveredDomainHandle) {
     const hasDomain = cadState.entities.some((e) => e.role === 'domain_boundary');
@@ -115,6 +163,8 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
       addBlockCorner(snapBlockVertex(raw, '').pt);
     } else if (blockTool === 'split') {
       if (splitHover) splitAtHover();
+    } else if (blocking && blockTool === 'shape' && shapeEdgeClick(raw, e.altKey)) {
+      // A shape point was grabbed, added or removed on the picked edge.
     } else if (blocking) {
       // Command tools: the click fills the dialog's active selection field.
       const f = activeFieldOf(blockTool, toolField);
@@ -134,7 +184,19 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
       }
       if (id && f) {
         // O-grid pass-through edges must lie on the outside of the picked blocks.
-        if (blockTool === 'ogrid' && f.key === 'pass') {
+        // Only edges inside the mesh, off the geometry, take a free shape.
+        const why =
+          blockTool === 'shape' || (blockTool === 'link' && f.key === 'edges')
+            ? notShapeable(
+                blocking,
+                blocking.edges.find((x) => x.id === id),
+              )
+            : null;
+        if (why) {
+          setBlockMsg({ text: why, error: true });
+          id = null;
+        }
+        if (id && blockTool === 'ogrid' && f.key === 'pass') {
           const sel = new Set(toolPicks.blocks ?? []);
           let uses = 0;
           for (const b of blocking.blocks) if (sel.has(b.id) && b.edges.includes(id)) uses++;

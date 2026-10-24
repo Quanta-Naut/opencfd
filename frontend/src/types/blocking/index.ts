@@ -10,6 +10,7 @@ export type {
   Block,
   Blocking,
   StructuredMeshRequest,
+  ShapePoint,
 } from './types';
 export { emptyBlocking } from './types';
 
@@ -74,3 +75,5 @@ export * from './quality';
 export * from './stations';
 export { ogridBlocks } from './ogridAround';
 export * from './spacing';
+export * from './shape';
+export * from './vertexOps';

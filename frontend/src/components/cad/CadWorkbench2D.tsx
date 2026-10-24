@@ -44,6 +44,10 @@ import {
   matchEdgeSpacing,
   mergeVertices,
   mergeBlocks,
+  alignVertices,
+  linkEdgeShape,
+  setEdgeLength,
+  constrainToCurves,
 } from '../../types/blocking';
 import { TOOL_FIELDS } from './workbenchUi/blockEditor/toolFields';
 import type { ToolPicks } from './workbenchUi/blockEditor/toolFields';
@@ -829,6 +833,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   blockingRef.current = blocking;
   const selectedEdgeIdRef = useRef<string | null>(null);
   const [matchCopy, setMatchCopy] = useState(false);
+  const [linkFactor, setLinkFactor] = useState(1);
   const [hoverCurveId, setHoverCurveId] = useState<string | null>(null);
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
@@ -1088,6 +1093,21 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [edgeTagMap, cadState.entities],
   );
 
+  // What the numeric vertex moves (Set edge length, Align) keep a vertex on.
+  const moveCtx = useMemo(
+    () => ({ entities: cadState.entities, outlines: blockOutlines, tag: blockTag }),
+    [cadState.entities, blockOutlines, blockTag],
+  );
+
+  /** ICEM "Set Edge Length": the edge becomes `length` long by moving `moveVid`. */
+  const setEdgeLen = useCallback(
+    (edgeId: string, length: number, moveVid: string) => {
+      if (!blocking) return;
+      applyBlockOp(setEdgeLength(blocking, edgeId, length, moveVid, moveCtx), 'Edge length set.');
+    },
+    [blocking, moveCtx, applyBlockOp],
+  );
+
   const initializeBlocks = useCallback(() => {
     const bk = initializeBlocking(cadState.entities);
     if (!bk) {
@@ -1154,6 +1174,27 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           `Spacing matched on ${n('targets', 'edge')}.`,
         );
         break;
+      case 'align': {
+        if (!pk('a').length || !pk('b').length || !pk('verts').length) return;
+        const res = alignVertices(blocking, pk('a')[0], pk('b')[0], pk('verts'), moveCtx);
+        if ('error' in res) ok = applyBlockOp(res, '');
+        else if (!res.moved) {
+          setBlockMsg({ text: 'None of those vertices can reach the line.', error: true });
+          ok = false;
+        } else
+          ok = applyBlockOp(
+            res.blocking,
+            `${res.moved} aligned${res.skipped ? `, ${res.skipped} could not move` : ''}.`,
+          );
+        break;
+      }
+      case 'link':
+        if (!pk('src').length || !pk('edges').length) return;
+        ok = applyBlockOp(
+          linkEdgeShape(blocking, pk('src')[0], pk('edges'), linkFactor),
+          `${n('edges', 'edge')} linked.`,
+        );
+        break;
       case 'mergeV':
         if (!pk('keep').length || !pk('merge').length) return;
         ok = applyBlockOp(mergeVertices(blocking, pk('keep')[0], pk('merge')[0]), 'Vertices merged.');
@@ -1174,7 +1215,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setBlockDrawPts([]);
       setBlockTool('select');
     }
-  }, [blocking, blockTool, toolPicks, ogridScale, matchCopy, cadState.entities, blockTag, curvePatch, applyBlockOp]);
+  }, [blocking, blockTool, toolPicks, ogridScale, matchCopy, linkFactor, moveCtx, cadState.entities, blockTag, curvePatch, applyBlockOp]);
 
   /** Cancel / Esc: undo what the tool changed and go back to Select. Under
    *  Select it just clears the selection. */
@@ -1217,7 +1258,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         setBlockMsg({ text: 'This vertex is fixed to a geometry point.', error: true });
         return;
       }
-      const target = (home && constrainToHome(home, pt)) ?? pt;
+      // An associated vertex stays on its curve: the nearest point to the one typed.
+      const target =
+        (v.curves?.length
+          ? constrainToCurves(pt, v.curves, cadState.entities)
+          : home && constrainToHome(home, pt)) ?? pt;
       const next = applyVertexMove(blocking, vid, target, cadState.entities);
       if (!vertexMoveKeepsBlocksValid(blocking, next, vid)) {
         setBlockMsg({ text: 'That location would fold a block.', error: true });
@@ -2560,6 +2605,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             setOgridScale,
             matchCopy,
             setMatchCopy,
+            linkFactor,
+            setLinkFactor,
+            setEdgeLen,
             commitTool,
             cancelTool,
             startTool,

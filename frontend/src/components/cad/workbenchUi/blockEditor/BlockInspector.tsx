@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Point2D, CadEntity } from '../../../../types/cadWorkflow';
 import {
   Blocking,
@@ -11,6 +11,7 @@ import {
   edgeStations,
   endCells,
   setEdgeParams,
+  straightenEdges,
   PREMESH_MIN_ANGLE,
   PREMESH_MIN_DET,
 } from '../../../../types/blocking';
@@ -36,6 +37,7 @@ export function BlockInspector(p: {
   blockPremesh: BlockPremesh[];
   blockSpacingJumps: SpacingJump[];
   setVertexLocation: (vid: string, pt: Point2D) => void;
+  setEdgeLen: (edgeId: string, length: number, moveVid: string) => void;
   deleteBlockById: (id: string) => void;
   ogridThis: (blockId: string) => void;
 }) {
@@ -47,7 +49,20 @@ export function BlockInspector(p: {
   const blockIdx = p.selectedBlockId
     ? blocking.blocks.findIndex((b) => b.id === p.selectedBlockId)
     : -1;
-  if (edge) return <EdgeParams {...p} edgeIds={[edge.id]} />;
+  if (edge)
+    return (
+      <EdgeParams {...p} edgeIds={[edge.id]}>
+        <EdgeLength
+          key={edge.id}
+          edgeId={edge.id}
+          v0={edge.v0}
+          v1={edge.v1}
+          length={edgeLen(blocking, edge.id)}
+          kinds={p.blockVertexKinds}
+          setEdgeLen={p.setEdgeLen}
+        />
+      </EdgeParams>
+    );
   if (vertex) {
     const kind = p.blockVertexKinds.get(vertex.id) ?? 'free';
     const [name, desc] = KIND_TEXT[kind];
@@ -135,6 +150,59 @@ export function BlockInspector(p: {
   return null;
 }
 
+const edgeLen = (bk: Blocking, id: string) => {
+  const e = bk.edges.find((x) => x.id === id)!;
+  const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
+  const pts = [vm.get(e.v0)!, ...e.path, vm.get(e.v1)!];
+  let L = 0;
+  for (let i = 1; i < pts.length; i++)
+    L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+  return L;
+};
+
+/** ICEM "Set Edge Length": type the length, pick which end moves. */
+function EdgeLength(p: {
+  edgeId: string;
+  v0: string;
+  v1: string;
+  length: number;
+  kinds: Map<string, VertexKind>;
+  setEdgeLen: (edgeId: string, length: number, moveVid: string) => void;
+}) {
+  const pinned = (v: string) => p.kinds.get(v) === 'pinned';
+  // End 2 moves unless it is pinned and end 1 is not.
+  const [end, setEnd] = useState<0 | 1>(pinned(p.v1) && !pinned(p.v0) ? 0 : 1);
+  const moveVid = end === 0 ? p.v0 : p.v1;
+  return (
+    <div className="grid grid-cols-2 gap-1.5 items-end">
+      <Labeled label="Length" hint="The other end stays put; the moving end keeps to its curve.">
+        <Field
+          value={Number(p.length.toPrecision(6))}
+          min={0}
+          disabled={pinned(p.v0) && pinned(p.v1)}
+          onCommit={(v) => v && p.setEdgeLen(p.edgeId, v, moveVid)}
+        />
+      </Labeled>
+      <Labeled label="Moving end">
+        <div className="flex rounded-sm border border-line overflow-hidden">
+          {([0, 1] as const).map((k) => (
+            <button
+              key={k}
+              disabled={pinned(k === 0 ? p.v0 : p.v1)}
+              onClick={() => setEnd(k)}
+              className={`flex-1 py-1 text-[11px] disabled:opacity-40 ${
+                end === k ? 'bg-accent-soft text-accent-fg' : 'bg-app text-fg-2 hover:text-fg'
+              }`}
+            >
+              {k + 1}
+            </button>
+          ))}
+        </div>
+      </Labeled>
+    </div>
+  );
+}
+
 function Metric(p: { label: string; v: number; ok: boolean; unit?: string }) {
   return (
     <div className="p-1.5 rounded-sm border border-line bg-app">
@@ -168,6 +236,7 @@ export function EdgeParams(p: {
   bare?: boolean;
   /** Edit the edge's whole parallel group (always copies, no copy controls). */
   group?: boolean;
+  children?: React.ReactNode;
 }) {
   const { blocking } = p;
   const edge = blocking.edges.find((e) => e.id === p.edgeIds[0]);
@@ -255,6 +324,7 @@ export function EdgeParams(p: {
           {edge.patch ?? 'interior'} · {fmtLen(actual.L)}
         </span>
       </div>
+      {p.children}
       <div className="grid grid-cols-2 gap-1.5">
         <Labeled
           label={`Nodes${parallel ? ` (+${parallel} parallel)` : ''}`}
@@ -379,15 +449,27 @@ export function EdgeParams(p: {
         ) : null}
       </div>
       {!p.bare && (
-        <p className="text-[10px] text-fg-2">
+        <div className="flex items-center gap-1.5 text-[10px] text-fg-2">
           {edge.curves?.length ? (
             <span className="text-success">On {curveNames}</span>
           ) : edge.curveId ? (
             'On the outline under it'
+          ) : edge.link ? (
+            `Bends like another edge (x${edge.link.factor})`
+          ) : edge.shape?.length ? (
+            `Bent through ${edge.shape.length} point${edge.shape.length > 1 ? 's' : ''}`
           ) : (
             'Straight'
           )}
-        </p>
+          {(edge.link || edge.shape?.length) && (
+            <button
+              className={`${smallBtn} ml-auto`}
+              onClick={() => p.onUpdateBlocking(straightenEdges(blocking, [edge.id]))}
+            >
+              Straighten
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

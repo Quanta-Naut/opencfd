@@ -47,6 +47,18 @@ export interface BlockEdge {
    *  mirrors by projection along the wall normals (ICEM copy-by-projection),
    *  so grid lines leave a curved wall square to it. Overrides `law`. */
   match?: string;
+  /** ICEM "Split Edge" spline points of an edge off the geometry, in the
+   *  edge's own frame; `path` is the spline through them (see shape.ts). */
+  shape?: ShapePoint[];
+  /** ICEM "Link Edge Shape": this edge bends like `edge`, scaled by `factor`. */
+  link?: { edge: string; factor: number };
+}
+
+/** A point in an edge's frame: `s` along the chord from v0 (0..1), `n` to
+ *  its left, both in chord lengths. */
+export interface ShapePoint {
+  s: number;
+  n: number;
 }
 
 export interface Block {

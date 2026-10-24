@@ -93,3 +93,34 @@ export const MergeVerticesIcon = (p: IconProps) => (
     <circle cx="18" cy="12" r="3" fill="currentColor" />
   </Svg>
 );
+
+/** Vertices brought onto the line through two others. */
+export const AlignIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 17h18" strokeDasharray="2.5 3" />
+    <circle cx="4.5" cy="17" r="2.5" fill="currentColor" stroke="none" />
+    <circle cx="19.5" cy="17" r="2.5" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="5" r="2" />
+    <path d="M12 8v5.5M10 11.5l2 2 2-2" strokeWidth={1.5} />
+  </Svg>
+);
+
+/** An edge bent through a point you drag. */
+export const ShapeEdgeIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 19C6 12 8.5 8 12 8s6 4 8 11" />
+    <rect x="9.5" y="5.5" width="5" height="5" />
+    <g fill="currentColor" stroke="none">
+      <circle cx="4" cy="19" r="2.5" />
+      <circle cx="20" cy="19" r="2.5" />
+    </g>
+  </Svg>
+);
+
+/** One edge taking the bend of another. */
+export const LinkShapeIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 11C7 3 17 3 21 11" />
+    <path d="M3 20C7 12 17 12 21 20" strokeDasharray="2.5 3" />
+  </Svg>
+);

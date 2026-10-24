@@ -92,6 +92,8 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
               setOgridScale={p.setOgridScale}
               matchCopy={p.matchCopy}
               setMatchCopy={p.setMatchCopy}
+              linkFactor={p.linkFactor}
+              setLinkFactor={p.setLinkFactor}
               blockSpacingJumps={p.blockSpacingJumps}
               blockMsg={msg}
               commitTool={p.commitTool}
@@ -115,6 +117,7 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
               blockPremesh={p.blockPremesh}
               blockSpacingJumps={p.blockSpacingJumps}
               setVertexLocation={p.setVertexLocation}
+              setEdgeLen={p.setEdgeLen}
               deleteBlockById={p.deleteBlockById}
               ogridThis={(id) => p.startTool('ogrid', { blocks: [id] }, 'pass')}
             />
@@ -152,6 +155,9 @@ export interface BlockEditorToolsProps {
   setOgridScale: React.Dispatch<React.SetStateAction<number>>;
   matchCopy: boolean;
   setMatchCopy: React.Dispatch<React.SetStateAction<boolean>>;
+  linkFactor: number;
+  setLinkFactor: React.Dispatch<React.SetStateAction<number>>;
+  setEdgeLen: (edgeId: string, length: number, moveVid: string) => void;
   commitTool: () => void;
   cancelTool: () => void;
   /** Open a tool with its fields already filled. */

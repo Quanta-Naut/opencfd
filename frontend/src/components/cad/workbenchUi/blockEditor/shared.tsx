@@ -10,7 +10,10 @@ export type BlockTool =
   | 'mergeB'
   | 'assoc'
   | 'params'
-  | 'match';
+  | 'match'
+  | 'align'
+  | 'shape'
+  | 'link';
 
 export type BlockMsg = { text: string; error: boolean } | null;
 

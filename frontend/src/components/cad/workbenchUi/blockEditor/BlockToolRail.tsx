@@ -13,13 +13,16 @@ import {
   Undo2,
 } from 'lucide-react';
 import {
+  AlignIcon,
   AssociateIcon,
   CreateBlockIcon,
   EdgeParamsIcon,
   InitBlockIcon,
+  LinkShapeIcon,
   MatchSpacingIcon,
   MergeVerticesIcon,
   OGridIcon,
+  ShapeEdgeIcon,
 } from './blockIcons';
 import { Tooltip } from '../../../ui/Tooltip';
 import { Kbd } from '../../../ui/Kbd';
@@ -33,6 +36,9 @@ export const TOOLS: { id: BlockTool; icon: React.ElementType; label: string; key
   { id: 'draw', icon: CreateBlockIcon, label: 'Create block', key: 'B' },
   { id: 'ogrid', icon: OGridIcon, label: 'O-grid', key: 'O' },
   { id: 'assoc', icon: AssociateIcon, label: 'Associate', key: 'A' },
+  { id: 'align', icon: AlignIcon, label: 'Align vertices', key: 'L' },
+  { id: 'shape', icon: ShapeEdgeIcon, label: 'Edge shape', key: 'S' },
+  { id: 'link', icon: LinkShapeIcon, label: 'Link edge shape', key: 'I' },
   { id: 'params', icon: EdgeParamsIcon, label: 'Edge params', key: 'E' },
   { id: 'match', icon: MatchSpacingIcon, label: 'Match edge spacing', key: 'T' },
   { id: 'mergeV', icon: MergeVerticesIcon, label: 'Merge vertices', key: 'M' },
@@ -71,7 +77,7 @@ export function BlockToolRail(p: {
     }
   };
   const btn = (active: boolean) =>
-    `w-8 h-8 inline-flex items-center justify-center rounded transition-colors disabled:opacity-30 disabled:pointer-events-none ${
+    `w-7 h-7 shrink-0 inline-flex items-center justify-center rounded transition-colors disabled:opacity-30 disabled:pointer-events-none ${
       active ? 'bg-accent-soft text-accent-fg' : 'text-fg-2 hover:bg-surface-3 hover:text-fg'
     }`;
   const tip = (label: string, kbd?: string) => (
@@ -80,7 +86,7 @@ export function BlockToolRail(p: {
       {kbd && <Kbd>{kbd}</Kbd>}
     </span>
   );
-  const sep = <span className="h-px w-5 bg-line my-1 shrink-0" />;
+  const sep = <span className="h-px w-5 bg-line my-0.5 shrink-0" />;
   const item = (
     key: string,
     label: React.ReactNode,
@@ -110,7 +116,7 @@ export function BlockToolRail(p: {
       </div>
     );
   return (
-    <div className="absolute top-14 left-3 z-20 flex flex-col items-center gap-0.5 p-1 bg-surface border border-line rounded select-none">
+    <div className="absolute top-14 left-3 z-20 flex flex-col items-center gap-0.5 p-1 max-h-[calc(100%-6.5rem)] overflow-y-auto bg-surface border border-line rounded select-none">
       {item('collapse', 'Hide block tools', <PanelLeftClose className="w-4 h-4" />, () =>
         fold(true),
       )}

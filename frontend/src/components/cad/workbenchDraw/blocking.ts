@@ -2,6 +2,7 @@ import { BOUNDARY_COLORS } from '../../../types/cadWorkflow';
 import {
   blockPolygon,
   curveOf,
+  shapePointsWorld,
   edgeStations,
   PREMESH_MIN_ANGLE,
   PREMESH_MIN_DET,
@@ -364,9 +365,38 @@ export function drawBlockEditor(f: DrawFrame, scene: DrawScene): void {
     splitHover,
     toolPicks,
     toolField,
+    blocking,
   } = scene;
   if (showBlocking && canvasMode === 'cad') {
     ctx.save();
+    const vpt = (id: string | undefined) => blocking?.vertices.find((v) => v.id === id)?.pt;
+    // Align: the line the vertices go onto, through From and To.
+    const la = blockTool === 'align' ? vpt(toolPicks.a?.[0]) : undefined;
+    const lb = blockTool === 'align' ? vpt(toolPicks.b?.[0]) : undefined;
+    if (la && lb && Math.hypot(lb.x - la.x, lb.y - la.y) > 0) {
+      const p = ws(la.x - (lb.x - la.x) * 100, la.y - (lb.y - la.y) * 100);
+      const q = ws(lb.x + (lb.x - la.x) * 100, lb.y + (lb.y - la.y) * 100);
+      ctx.strokeStyle = '#E05A00';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(q.x, q.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    // Edge shape: the picked edge's points, as square handles.
+    const se =
+      blockTool === 'shape' ? blocking?.edges.find((e) => e.id === toolPicks.edge?.[0]) : undefined;
+    if (se && blocking)
+      for (const p of shapePointsWorld(blocking, se)) {
+        const q = ws(p.x, p.y);
+        ctx.fillStyle = C.handleFill;
+        ctx.strokeStyle = '#E05A00';
+        ctx.lineWidth = 1.5;
+        ctx.fillRect(q.x - 4, q.y - 4, 8, 8);
+        ctx.strokeRect(q.x - 4, q.y - 4, 8, 8);
+      }
     if (blockTool === 'draw' && (blockDrawPts.length || blockCursor)) {
       const pts = [...blockDrawPts, ...(blockCursor ? [blockCursor] : [])];
       ctx.beginPath();

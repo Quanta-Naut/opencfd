@@ -4,6 +4,7 @@ import { boundsOf, ekey, entityRing, near, pointInRing, uid } from './geometry';
 import { blockCornerIds, blockPolygon } from './blockEdit';
 import { cleanBlocking, propagateNodeCounts } from './sizing';
 import { Outline } from './editor';
+import { refreshShapes } from './shape';
 
 // ICEM CFD Hexa style blocking operations (2D planar): initialize one block
 // around the geometry, associate block edges / vertices to geometry curves,
@@ -292,6 +293,8 @@ export function associateEdges(
     if (!ids.has(e.id)) continue;
     e.curves = [...curveIds];
     e.curveId = undefined;
+    e.shape = undefined;
+    e.link = undefined;
     for (const vid of [e.v0, e.v1]) {
       const v = out.vertices.find((x) => x.id === vid)!;
       const pr = projectOnCurve(c, v.pt);
@@ -325,7 +328,7 @@ export function associateEdges(
     const patch = best ?? curvePatch?.(curveIds);
     if (patch) e.patch = patch;
   }
-  return propagateNodeCounts(out);
+  return refreshShapes(propagateNodeCounts(out));
 }
 
 /** Remove the explicit association from edges (they go straight again). */
@@ -366,7 +369,7 @@ export function snapProjectVertices(bk: Blocking, entities: CadEntity[]): Blocki
     if (best) v.pt = best.pt;
   }
   reprojectAssociated(out, entities);
-  return out;
+  return refreshShapes(out);
 }
 
 /** Where a dragged associated vertex may go: the nearest point on its curves. */
@@ -443,7 +446,7 @@ export function mergeVertices(
   const uses = new Map<string, number>();
   for (const b of out.blocks) for (const id of b.edges) uses.set(id, (uses.get(id) ?? 0) + 1);
   for (const e of out.edges) if ((uses.get(e.id) ?? 0) >= 2) e.patch = undefined;
-  return propagateNodeCounts(cleanBlocking(out));
+  return refreshShapes(propagateNodeCounts(cleanBlocking(out)));
 }
 
 // ── Merge blocks ────────────────────────────────────────────────────────────

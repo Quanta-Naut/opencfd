@@ -1,6 +1,10 @@
 import { activeFieldOf } from '../workbenchUi/blockEditor/toolFields';
 import type { BlockTool } from '../workbenchUi/blockEditor/shared';
-import { constrainToHome, vertexMoveKeepsBlocksValid } from '../../../types/blocking';
+import {
+  constrainToHome,
+  moveShapePoint,
+  vertexMoveKeepsBlocksValid,
+} from '../../../types/blocking';
 import type { BlockDragState } from '../../../types/blocking';
 import React from 'react';
 import {
@@ -147,6 +151,14 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
 
   // Structured block-vertex drag / hover (mesh stage).
   if (showBlocking && canvasMode === 'cad' && blocking) {
+    const sd = blockDrag.current?.shape;
+    if (sd && onUpdateBlocking) {
+      const next = moveShapePoint(blocking, sd.edgeId, sd.index, raw);
+      // The edge's vertex stands in for it: its blocks must stay unfolded.
+      if (vertexMoveKeepsBlocksValid(blocking, next, blockDrag.current!.vid))
+        onUpdateBlocking(next);
+      return;
+    }
     if (blockDrag.current && onUpdateBlocking) {
       const { vid, home } = blockDrag.current;
       const held = home ? constrainToHome(home, raw) : null;
@@ -160,7 +172,9 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
     }
     const vHit = 12 / zoom;
     let hov: string | null = null;
-    let bd = blockTool === 'select' || blockTool === 'mergeV' ? vHit : 0;
+    const pickingVertex =
+      blockTool === 'select' || activeFieldOf(blockTool, toolField)?.kind === 'vertex';
+    let bd = pickingVertex ? vHit : 0;
     for (const v of blocking.vertices) {
       const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
       if (d < bd) {
