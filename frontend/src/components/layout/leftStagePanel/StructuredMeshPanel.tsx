@@ -4,16 +4,17 @@ import { Tooltip } from '../../ui/Tooltip';
 import { CFDProjectState } from '../../../types/cfd';
 import {
   Blocking,
-  BlockEdge,
-  EdgeLaw,
-  propagateNodeCounts,
   emptyBlocking,
   applyTargetCellSize,
+  applyWallSpacing,
   currentCellSize,
-  edgeLength,
   edgeDirectionGroups,
+  setEdgeParams,
+  wallNormalEdges,
   DIRECTION_COLORS,
 } from '../../../types/blocking';
+import { EdgeParams } from '../../cad/workbenchUi/blockEditor/BlockInspector';
+import { fmtLen } from '../../cad/workbenchUi/blockEditor/shared';
 import { computeFallbackYPlus } from '../../../utils/api';
 import { NumberField } from './NumberField';
 
@@ -76,6 +77,7 @@ export const StructuredMeshPanel: React.FC<{
   const hasBlocks = !!blocking && blocking.blocks.length > 0;
   const [openStep, setOpenStep] = useState<1 | 2>(1);
   const [showRules, setShowRules] = useState(false);
+  const [openDir, setOpenDir] = useState<string | null>(null);
 
   // Tell the canvas which color each block edge's direction group should draw
   // as, only while the Mesh sizing step (where "Direction A/B/C" live) is open.
@@ -147,9 +149,10 @@ export const StructuredMeshPanel: React.FC<{
     </div>
   );
 
-  // ── Step 2: Mesh sizing ──
+  // ── Step 2: Mesh ──
   let step2: React.ReactNode = <p className="text-[10px] text-fg-2">Build the blocks first.</p>;
   if (hasBlocks && blocking) {
+    const bkNow = blocking;
     const groupOf = edgeDirectionGroups(blocking);
     const groups: Record<string, string[]> = {};
     blocking.edges.forEach((e) => {
@@ -162,22 +165,9 @@ export const StructuredMeshPanel: React.FC<{
       const ps = Array.from(new Set(ids.map((id) => edgeById(id).patch).filter(Boolean)));
       return ps.length ? ps.join(' / ') : 'interior';
     };
-    const applyToGroup = (
-      ids: string[],
-      patch: Partial<{ nodes: number; law: EdgeLaw; ratio: number }>,
-    ) => {
-      if (!onUpdateBlocking) return;
-      onUpdateBlocking(
-        propagateNodeCounts({
-          ...blocking,
-          edges: blocking.edges.map((e) => (ids.includes(e.id) ? { ...e, ...patch } : e)),
-        }),
-      );
-    };
-    // First-cell height for the current target y+. `state.yplus.first_layer_height_mm`
-    // is kept live by the auto-y+ effect in App.tsx (recomputes on target change).
-    // Fall back to a client-side estimate from the physics if it is missing - the
-    // saved yplus blob does NOT carry the velocity/length/density/viscosity inputs.
+    // First-cell height for the target y+. `state.yplus.first_layer_height_mm`
+    // is kept live by the auto-y+ effect in App.tsx; when it is missing,
+    // estimate it here from the physics.
     const liveFirstCellMm = (() => {
       const v = state.yplus.first_layer_height_mm;
       if (typeof v === 'number' && isFinite(v) && v > 0) return v;
@@ -198,127 +188,17 @@ export const StructuredMeshPanel: React.FC<{
         return null;
       }
     })();
+    const walls = wallNormalEdges(blocking);
+    const wallGroups = new Set([...walls.keys()].map((id) => String(groupOf.get(id) ?? 0)));
+    const firstCellM = liveFirstCellMm != null ? liveFirstCellMm / 1000 : null;
+    const growth = state.yplus.expansion_ratio ?? 1.2;
+    const lbl = 'text-[10px] text-fg-2 block mb-1';
 
-    // Cluster genuinely wall-normal block edges toward their wall end. An edge
-    // qualifies only if it touches a `wall` patch at exactly one endpoint AND
-    // runs roughly perpendicular (within 45 deg) to that wall edge - so an edge
-    // that merely clips a wall corner while running along the domain is left
-    // alone. Drawing units are metres. The grading is capped: an H-grid on a
-    // slanted / curved wall can't hold an extreme y+ without shearing, so this
-    // gives a strong-but-safe boundary-layer grade, not an exact y+.
-    const growth = Math.max(1.05, Math.min(state.yplus.expansion_ratio ?? 1.2, 1.4));
-    const RATIO_CAP = 40; // strongest last/first cell we allow
-    const N_CAP = 45; // most cells we put on a wall-normal edge
-    const wallCount = blocking.edges.filter((e) => e.patch === 'wall').length;
-    const vpt = (id: string) => blocking.vertices.find((v) => v.id === id)?.pt;
-    const applyYPlusClustering = () => {
-      if (!onUpdateBlocking || !(liveFirstCellMm && liveFirstCellMm > 0)) return;
-      const h1 = liveFirstCellMm / 1000;
-      const wallEdges = blocking.edges.filter((e) => e.patch === 'wall');
-      const wallVids = new Set<string>();
-      for (const e of wallEdges) {
-        wallVids.add(e.v0);
-        wallVids.add(e.v1);
-      }
-      const edgeDirLeaving = (e: BlockEdge, vid: string): { x: number; y: number } | null => {
-        const a = vpt(e.v0),
-          b = vpt(e.v1);
-        if (!a || !b) return null;
-        const pts = [a, ...(e.path ?? []), b];
-        if (e.v0 === vid) {
-          for (let i = 1; i < pts.length; i++) {
-            const d = Math.hypot(pts[i].x - pts[0].x, pts[i].y - pts[0].y);
-            if (d > 1e-6) return { x: (pts[i].x - pts[0].x) / d, y: (pts[i].y - pts[0].y) / d };
-          }
-        } else if (e.v1 === vid) {
-          const last = pts.length - 1;
-          for (let i = last - 1; i >= 0; i--) {
-            const d = Math.hypot(pts[last].x - pts[i].x, pts[last].y - pts[i].y);
-            if (d > 1e-6)
-              return { x: (pts[last].x - pts[i].x) / d, y: (pts[last].y - pts[i].y) / d };
-          }
-        }
-        return null;
-      };
-      const chordDirOf = (e: BlockEdge): { x: number; y: number } | null => {
-        const a = vpt(e.v0),
-          b = vpt(e.v1);
-        if (!a || !b) return null;
-        const d = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-        return { x: (b.x - a.x) / d, y: (b.y - a.y) / d };
-      };
-      const perpToWallAt = (edge: BlockEdge, wallVid: string): boolean => {
-        // 1. Topological check: In a quad block containing a wall edge meeting wallVid,
-        // the edges adjacent to the wall edge in the 4-edge cycle are wall-normal.
-        for (const blk of blocking.blocks) {
-          const idx = blk.edges.indexOf(edge.id);
-          if (idx === -1) continue;
-          const adj1 = blocking.edges.find((x) => x.id === blk.edges[(idx + 1) % 4]);
-          const adj2 = blocking.edges.find((x) => x.id === blk.edges[(idx + 3) % 4]);
-          if (
-            (adj1?.patch === 'wall' && (adj1.v0 === wallVid || adj1.v1 === wallVid)) ||
-            (adj2?.patch === 'wall' && (adj2.v0 === wallVid || adj2.v1 === wallVid))
-          ) {
-            return true;
-          }
-        }
-
-        // 2. Geometric check: Roughly perpendicular to the local tangent or chord of the wall edge.
-        const ed = edgeDirLeaving(edge, wallVid);
-        if (!ed) return false;
-        for (const w of wallEdges) {
-          if (w.v0 !== wallVid && w.v1 !== wallVid) continue;
-          const wt = edgeDirLeaving(w, wallVid);
-          if (wt) {
-            const dot = Math.abs(ed.x * wt.x + ed.y * wt.y);
-            if (dot <= Math.cos(Math.PI / 4) + 1e-4) return true;
-          }
-          const wd = chordDirOf(w);
-          if (wd) {
-            const dot = Math.abs(ed.x * wd.x + ed.y * wd.y);
-            if (dot <= Math.cos(Math.PI / 4) + 1e-4) return true;
-          }
-        }
-        return false;
-      };
-      const edges = blocking.edges.map((e) => {
-        const w0 = wallVids.has(e.v0),
-          w1 = wallVids.has(e.v1);
-        if (w0 === w1) return e;
-        const wallVid = w0 ? e.v0 : e.v1;
-        if (!perpToWallAt(e, wallVid)) return e;
-        const L = edgeLength(blocking, e);
-        if (L <= 0) return e;
-        const nCellsRaw = Math.ceil(Math.log(1 + (L * (growth - 1)) / h1) / Math.log(growth));
-        const nCells = Math.max(10, Math.min(nCellsRaw, N_CAP));
-        let lo = 1.0,
-          hi = 3.0;
-        const sum = (q: number) =>
-          Math.abs(q - 1) < 1e-9 ? h1 * nCells : (h1 * (Math.pow(q, nCells) - 1)) / (q - 1);
-        while (sum(hi) < L && hi < 20) hi *= 1.5;
-        for (let it = 0; it < 60; it++) {
-          const m = 0.5 * (lo + hi);
-          if (sum(m) < L) lo = m;
-          else hi = m;
-        }
-        let rTotal = Math.min(Math.max(Math.pow(0.5 * (lo + hi), nCells - 1), 1), RATIO_CAP);
-        if (rTotal <= 1.0001) return e;
-        const ratio = Number((w0 ? rTotal : 1 / rTotal).toPrecision(4));
-        return { ...e, nodes: Math.max(e.nodes, nCells + 1), law: 'geometric' as EdgeLaw, ratio };
-      });
-      onUpdateBlocking(propagateNodeCounts({ ...blocking, edges }));
-    };
-
-    const bkNow = blocking;
     step2 = (
       <div className="space-y-2.5">
-        <div className="flex items-end gap-2">
-          <label className="flex-1">
-            <Tooltip content="Target cell edge length. Every direction's node count is set from this and its block-edge length, so a short edge gets few cells and the mesh reads uniform. Adjust a direction below to override.">
-              <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                Target cell size
-              </span>
-            </Tooltip>
+        <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+          <label>
+            <span className={lbl}>Cell size</span>
             <NumberField
               value={Number(currentCellSize(bkNow).toPrecision(3))}
               min={1e-4}
@@ -336,12 +216,120 @@ export const StructuredMeshPanel: React.FC<{
           </button>
         </div>
 
+        <div className="p-2.5 bg-surface-2 border border-line rounded space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-semibold text-fg">Wall layers</span>
+            <span className="text-[10px] text-fg-2">
+              {walls.size} edge{walls.size === 1 ? '' : 's'} off walls
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <label>
+              <Tooltip content="Target y+ of the first cell at the wall.">
+                <span className={`${lbl} cursor-help`}>y+</span>
+              </Tooltip>
+              <NumberField
+                value={state.yplus.target_yplus ?? 30}
+                min={0.1}
+                step="1"
+                fallback={30}
+                onChange={(n) => updateYPlus({ target_yplus: n })}
+                className={field}
+              />
+            </label>
+            <div>
+              <Tooltip content="First cell height for this y+, from the flow conditions.">
+                <span className={`${lbl} cursor-help`}>First cell</span>
+              </Tooltip>
+              <div className="h-[29px] flex items-center font-mono text-[11px] text-fg">
+                {firstCellM != null ? fmtLen(firstCellM) : '-'}
+              </div>
+            </div>
+            <label>
+              <Tooltip content="Growth from one layer to the next. 1.1 to 1.2 for a boundary layer.">
+                <span className={`${lbl} cursor-help`}>Growth</span>
+              </Tooltip>
+              <NumberField
+                value={growth}
+                min={1.01}
+                max={2}
+                fallback={1.2}
+                onChange={(n) => updateYPlus({ expansion_ratio: n })}
+                className={field}
+              />
+            </label>
+          </div>
+          <button
+            onClick={() =>
+              firstCellM &&
+              onUpdateBlocking?.(
+                applyWallSpacing(bkNow, firstCellM, growth, currentCellSize(bkNow)),
+              )
+            }
+            disabled={!walls.size || !firstCellM}
+            className="w-full py-1.5 rounded-sm bg-accent hover:bg-accent-hover text-white text-[11px] font-medium disabled:opacity-40 disabled:pointer-events-none transition-colors"
+          >
+            Apply wall layers
+          </button>
+        </div>
+
+        <div className="space-y-1">
+          {groupList.map(([gid, ids], i) => {
+            const e = edgeById(ids[0]);
+            const color = DIRECTION_COLORS[i % DIRECTION_COLORS.length];
+            const open = openDir === gid;
+            return (
+              <div key={gid} className="bg-surface-2 border border-line rounded">
+                <div className="flex items-center gap-2 px-2 py-1.5">
+                  <button
+                    onClick={() => setOpenDir(open ? null : gid)}
+                    className="flex-1 min-w-0 flex items-center gap-2 text-left"
+                    title="Edges along this colour on the canvas"
+                  >
+                    <ChevronDown
+                      className={`w-3 h-3 text-fg-4 shrink-0 transition-transform ${open ? '' : '-rotate-90'}`}
+                    />
+                    <span className="w-3 h-3 rounded-full shrink-0" style={{ background: color }} />
+                    <span className="truncate text-[10px] text-fg-2 lowercase">
+                      {patchLabel(ids)}
+                      {wallGroups.has(gid) ? ' · off wall' : ''}
+                      {e.law !== 'uniform'
+                        ? ` · ${e.law === 'bigeometric' ? 'graded' : e.law}`
+                        : ''}
+                    </span>
+                  </button>
+                  <NumberField
+                    value={e.nodes}
+                    integer
+                    min={2}
+                    max={600}
+                    fallback={30}
+                    onChange={(n) => onUpdateBlocking?.(setEdgeParams(bkNow, ids[0], { nodes: n }))}
+                    className={`${field} !w-14 text-right`}
+                  />
+                </div>
+                {open && (
+                  <div className="px-2 pb-2 text-[11px]">
+                    <EdgeParams
+                      bare
+                      group
+                      blocking={bkNow}
+                      onUpdateBlocking={(bk) => onUpdateBlocking?.(bk)}
+                      entities={[]}
+                      edgeIds={[ids[0]]}
+                      blockSpacingJumps={[]}
+                    />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
         {setStructuredSmooth && (
           <label className="flex items-center justify-between text-[10px] text-fg-2">
             <Tooltip content="After meshing, relax the interior grid with an elliptic (Winslow) pass so grid lines flow across block seams. Kept only if it does not make the worst cell worse.">
-              <span className="cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                Elliptic smoothing
-              </span>
+              <span className="cursor-help">Elliptic smoothing</span>
             </Tooltip>
             <input
               type="checkbox"
@@ -351,126 +339,6 @@ export const StructuredMeshPanel: React.FC<{
             />
           </label>
         )}
-
-        <div className="p-2.5 bg-surface-2 border border-line rounded space-y-2">
-          <span className="text-[11px] font-semibold text-fg block">Wall resolution (y+)</span>
-
-          <div className="grid grid-cols-3 gap-2">
-            <label>
-              <Tooltip content="Target y+ for the first cell at the wall.">
-                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                  Target y+
-                </span>
-              </Tooltip>
-              <NumberField
-                value={state.yplus.target_yplus ?? 30}
-                min={0.1}
-                step="1"
-                fallback={30}
-                onChange={(n) => updateYPlus({ target_yplus: n })}
-                className={`${field} bg-surface border-accent-line`}
-              />
-            </label>
-            <div>
-              <Tooltip content="First cell height for the current target y+ (live).">
-                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                  First cell
-                </span>
-              </Tooltip>
-              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-fg">
-                {liveFirstCellMm != null ? `${liveFirstCellMm.toFixed(4)} mm` : '-'}
-              </div>
-            </div>
-            <div>
-              <Tooltip content="Wall-tagged block edges found in the current blocking.">
-                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                  Wall edges
-                </span>
-              </Tooltip>
-              <div className="h-[29px] flex items-center font-mono font-semibold text-[11px] text-fg">
-                {wallCount}
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={applyYPlusClustering}
-            disabled={wallCount === 0}
-            className="w-full py-1.5 px-2 rounded-sm border border-line bg-surface hover:bg-surface-3 disabled:opacity-40 disabled:cursor-not-allowed text-fg text-[11px] font-medium transition-colors"
-          >
-            Cluster wall-normal edges to y+
-          </button>
-          {wallCount === 0 && (
-            <p className="text-[10px] text-fg-2 leading-relaxed">
-              Tag a block edge as wall first (Geometry - Boundary patches).
-            </p>
-          )}
-        </div>
-
-        {groupList.map(([gid, ids], i) => {
-          const e = edgeById(ids[0]);
-          const color = DIRECTION_COLORS[i % DIRECTION_COLORS.length];
-          return (
-            <div key={gid} className="p-2.5 bg-surface-2 border border-line rounded space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-fg flex items-center gap-1.5">
-                  <span
-                    className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ background: color }}
-                  />
-                  Direction {String.fromCharCode(65 + i)}
-                </span>
-                <span className="text-[10px] text-fg-2 lowercase">along {patchLabel(ids)}</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label>
-                  <Tooltip content="Grid nodes along this direction (cells = nodes minus one).">
-                    <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                      Nodes
-                    </span>
-                  </Tooltip>
-                  <NumberField
-                    value={e.nodes}
-                    integer
-                    min={2}
-                    max={600}
-                    fallback={30}
-                    onChange={(n) => applyToGroup(ids, { nodes: n })}
-                    className={field}
-                  />
-                </label>
-                <label>
-                  <Tooltip content="Last cell / first cell along the edge. 1 = uniform. Above 1 clusters cells toward the start (wall).">
-                    <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                      Grading ratio
-                    </span>
-                  </Tooltip>
-                  <NumberField
-                    value={e.ratio}
-                    min={0.05}
-                    max={20}
-                    fallback={1}
-                    onChange={(n) => applyToGroup(ids, { ratio: n })}
-                    className={field}
-                  />
-                </label>
-              </div>
-              <label className="block">
-                <span className="text-[10px] text-fg-2 block mb-1">Distribution</span>
-                <select
-                  value={e.law}
-                  onChange={(ev) => applyToGroup(ids, { law: ev.target.value as EdgeLaw })}
-                  className="w-full px-2 py-1.5 bg-surface border border-line rounded-sm text-[11px] focus:outline-none focus:border-accent"
-                >
-                  <option value="uniform">Uniform</option>
-                  <option value="geometric">Geometric (cluster one end)</option>
-                  <option value="bump">Bump (cluster both ends)</option>
-                  <option value="tanh">Spacing (tanh, set per edge)</option>
-                </select>
-              </label>
-            </div>
-          );
-        })}
       </div>
     );
   }

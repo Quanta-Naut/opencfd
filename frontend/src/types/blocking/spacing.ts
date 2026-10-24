@@ -1,7 +1,7 @@
 import { Point2D } from '../cadWorkflow';
 import { BlockEdge, Blocking } from './types';
 import { edgeStations } from './stations';
-import { setEdgeParams } from './hexa';
+import { edgeGroup, setEdgeParams } from './hexa';
 
 // Spacing continuity across block joins (Pointwise "Sync Spacings"). A grid
 // line that runs from one block edge into the next should not jump in cell
@@ -117,5 +117,92 @@ export function matchEdgeSpacing(
     done++;
   }
   if (!done) return { error: 'The target edges must meet the reference edge at a vertex.' };
+  return out;
+}
+
+/** Edges leaving a wall, keyed by edge id, with the wall vertex (or both
+ *  ends when the edge runs between two walls). A wall edge is a boundary
+ *  edge tagged `wall`, or untagged (the mesher's default patch). */
+export function wallNormalEdges(bk: Blocking): Map<string, Set<string>> {
+  const uses = new Map<string, number>();
+  for (const b of bk.blocks) for (const id of b.edges) uses.set(id, (uses.get(id) ?? 0) + 1);
+  const em = new Map(bk.edges.map((e) => [e.id, e] as const));
+  const isWall = (id: string) => {
+    const e = em.get(id);
+    return !!e && uses.get(id) === 1 && (!e.patch || e.patch === 'wall');
+  };
+  const out = new Map<string, Set<string>>();
+  for (const b of bk.blocks) {
+    for (let k = 0; k < 4; k++) {
+      if (!isWall(b.edges[k])) continue;
+      const w = em.get(b.edges[k])!;
+      for (const j of [(k + 1) % 4, (k + 3) % 4]) {
+        const id = b.edges[j];
+        if (isWall(id)) continue;
+        const e = em.get(id);
+        if (!e) continue;
+        const at = e.v0 === w.v0 || e.v0 === w.v1 ? e.v0 : e.v1;
+        if (!out.has(id)) out.set(id, new Set());
+        out.get(id)!.add(at);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Wall layers, the way an ICEM user sizes a boundary layer: every edge
+ * leaving a wall gets the first cell height at its wall end and grows by
+ * `growth` until cells reach `farCell`; the node count is what that takes.
+ * Parallel edges follow, so the layers carry round the whole O or C.
+ */
+export function applyWallSpacing(
+  bk: Blocking,
+  firstCell: number,
+  growth: number,
+  farCell: number,
+  maxNodes = 300,
+): Blocking {
+  const g = Math.max(1.01, growth);
+  const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
+  const len = (e: BlockEdge) => lengthOf(chainOf(e, vm));
+  const walls = wallNormalEdges(bk);
+  // Cells for one edge: geometric growth up to farCell, then even cells.
+  const cellsFor = (L: number, ends: number) => {
+    const half = L / ends;
+    const k = Math.max(0, Math.ceil(Math.log(Math.max(farCell / firstCell, 1)) / Math.log(g)));
+    const grown = (firstCell * (g ** k - 1)) / (g - 1);
+    const n =
+      grown >= half
+        ? Math.log(1 + (half * (g - 1)) / firstCell) / Math.log(g)
+        : k + (half - grown) / farCell;
+    return Math.ceil(n * ends);
+  };
+  let out = bk;
+  const done = new Set<string>();
+  for (const [id, at] of walls) {
+    if (done.has(id)) continue;
+    const e = out.edges.find((x) => x.id === id);
+    if (!e) continue;
+    const group = edgeGroup(out, id);
+    group.forEach((x) => done.add(x));
+    // Nodes from the longest wall-normal edge of the group.
+    let cells = 2;
+    for (const gid of group) {
+      const ge = out.edges.find((x) => x.id === gid)!;
+      const w = walls.get(gid);
+      if (w) cells = Math.max(cells, cellsFor(len(ge), w.size));
+    }
+    out = setEdgeParams(out, id, {
+      nodes: Math.min(maxNodes, cells + 1),
+      law: 'bigeometric',
+      spacing1: at.has(e.v0) ? firstCell : 0,
+      spacing2: at.has(e.v1) ? firstCell : 0,
+      ratio1: g,
+      ratio2: g,
+      maxSpace: 0,
+      copyParallel: true,
+    });
+  }
   return out;
 }

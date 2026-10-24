@@ -166,6 +166,8 @@ export function EdgeParams(p: {
   /** When given, a checkbox replaces the Copy to parallel button. */
   copyParallel?: { on: boolean; set: (v: boolean) => void };
   bare?: boolean;
+  /** Edit the edge's whole parallel group (always copies, no copy controls). */
+  group?: boolean;
 }) {
   const { blocking } = p;
   const edge = blocking.edges.find((e) => e.id === p.edgeIds[0]);
@@ -195,7 +197,10 @@ export function EdgeParams(p: {
   const set = (q: Parameters<typeof setEdgeParams>[2]) => {
     let bk = blocking;
     for (const id of p.edgeIds)
-      bk = setEdgeParams(bk, id, { ...q, copyParallel: q.copyParallel ?? p.copyParallel?.on });
+      bk = setEdgeParams(bk, id, {
+        ...q,
+        copyParallel: p.group || (q.copyParallel ?? p.copyParallel?.on),
+      });
     p.onUpdateBlocking(bk);
   };
   // A cell-size jump at one of this edge's ends (Pointwise "Sync Spacings").
@@ -319,7 +324,7 @@ export function EdgeParams(p: {
         </div>
       )}
       <div className="flex items-center gap-1.5 flex-wrap">
-        {p.copyParallel ? (
+        {p.group ? null : p.copyParallel ? (
           <label className="flex items-center gap-1.5 text-fg-2 mr-auto">
             <input
               type="checkbox"
