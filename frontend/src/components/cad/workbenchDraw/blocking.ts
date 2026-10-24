@@ -199,6 +199,24 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     }
   }
 
+  // Spacing jumps across block joins: an amber ring at the vertex and the
+  // size ratio, while editing and while sizing.
+  for (const j of blockSpacingJumps) {
+    const p = vmap.get(j.vid);
+    if (!p) continue;
+    const q = ws(p.x, p.y);
+    ctx.strokeStyle = '#D97706';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(q.x, q.y, 7, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.font = 'bold 9px Inter, sans-serif';
+    ctx.fillStyle = '#D97706';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${j.ratio < 10 ? j.ratio.toFixed(1) : Math.round(j.ratio)}x`, q.x + 10, q.y - 8);
+  }
+
   if (!editing) {
     ctx.restore();
     return;
@@ -230,19 +248,6 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
       drawEdgeArrow(f, chainOf(selectedEdgeId));
     }
   }
-
-  // Spacing jumps across block joins: an amber ring at the vertex.
-  if (editing)
-    for (const j of blockSpacingJumps) {
-      const p = vmap.get(j.vid);
-      if (!p) continue;
-      const q = ws(p.x, p.y);
-      ctx.strokeStyle = '#D97706';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(q.x, q.y, 7, 0, Math.PI * 2);
-      ctx.stroke();
-    }
 
   // Vertices in ICEM's colours: red is fixed to a point, green slides along a
   // curve, blue is free. The one under the cursor names itself.

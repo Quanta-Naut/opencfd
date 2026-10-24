@@ -364,6 +364,18 @@ export function EdgeParams(p: {
             />
           </Labeled>
         )}
+        {edge.path.length > 2 && (
+          <Labeled
+            label="Curvature"
+            hint="Nodes gather where the edge bends. 0 is off, 1 sends about half there."
+          >
+            <Field
+              value={edge.curvature ?? 0}
+              min={0}
+              onCommit={(v) => set({ curvature: v ?? 0 })}
+            />
+          </Labeled>
+        )}
         {(edge.law === 'geometric' || edge.law === 'bump') && (
           <Labeled
             label={edge.law === 'bump' ? 'End / middle ratio' : 'Last / first cell'}

@@ -622,6 +622,7 @@ export function setEdgeParams(
     ratio1?: number;
     ratio2?: number;
     maxSpace?: number;
+    curvature?: number;
     copyParallel?: boolean;
   },
 ): Blocking {
@@ -682,6 +683,10 @@ export function setEdgeParams(
       if (p.maxSpace !== undefined) {
         if (p.maxSpace > 0) e.maxSpace = p.maxSpace;
         else delete e.maxSpace;
+      }
+      if (p.curvature !== undefined) {
+        if (p.curvature > 0) e.curvature = p.curvature;
+        else delete e.curvature;
       }
     }
   }

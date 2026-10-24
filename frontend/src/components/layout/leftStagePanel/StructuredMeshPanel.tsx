@@ -7,6 +7,10 @@ import {
   emptyBlocking,
   applyTargetCellSize,
   applyWallSpacing,
+  applyAlongWall,
+  scaleSizes,
+  spacingJumps,
+  syncSpacings,
   currentCellSize,
   edgeDirectionGroups,
   setEdgeParams,
@@ -81,6 +85,10 @@ export const StructuredMeshPanel: React.FC<{
   const [openStep, setOpenStep] = useState<1 | 2>(1);
   const [showRules, setShowRules] = useState(false);
   const [openDir, setOpenDir] = useState<string | null>(null);
+  // Along-wall clustering inputs; the corner cell defaults from the cell size.
+  const [cornerCell, setCornerCell] = useState<number | null>(null);
+  const [curvature, setCurvature] = useState(1);
+  const [scaleWall, setScaleWall] = useState(false);
   useEffect(() => {
     onStep?.(openStep === 2 ? 'sizing' : 'blocking');
   }, [openStep, onStep]);
@@ -199,28 +207,49 @@ export const StructuredMeshPanel: React.FC<{
     const firstCellM = liveFirstCellMm != null ? liveFirstCellMm / 1000 : null;
     const growth = state.yplus.expansion_ratio ?? 1.2;
     const lbl = 'text-[10px] text-fg-2 block mb-1';
+    const cellNow = currentCellSize(bkNow);
+    const corner = cornerCell ?? Number((cellNow / 10).toPrecision(2));
+    const jumps = spacingJumps(bkNow);
+    const scale = (f: number) => onUpdateBlocking?.(scaleSizes(bkNow, f, !scaleWall));
+    const btn =
+      'px-2 py-1.5 text-[10px] rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors';
 
     step2 = (
       <div className="space-y-2.5">
-        <div className="grid grid-cols-[1fr_auto] items-end gap-2">
+        <div className="grid grid-cols-[1fr_auto_auto] items-end gap-1.5">
           <label>
-            <span className={lbl}>Cell size</span>
+            <Tooltip content="Even cell size for the directions with no grading.">
+              <span className={`${lbl} cursor-help`}>Cell size</span>
+            </Tooltip>
             <NumberField
-              value={Number(currentCellSize(bkNow).toPrecision(3))}
+              value={Number(cellNow.toPrecision(3))}
               min={1e-4}
               onChange={(v) => onUpdateBlocking?.(applyTargetCellSize(bkNow, v))}
               className={field}
             />
           </label>
-          <button
-            onClick={() =>
-              onUpdateBlocking?.(applyTargetCellSize(bkNow, currentCellSize(bkNow) * 0.5))
-            }
-            className="px-2 py-1.5 text-[10px] rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors"
-          >
-            Finer &times;2
-          </button>
+          <Tooltip content="Half the cells everywhere, gradings kept (ICEM Scale sizes).">
+            <button onClick={() => scale(0.5)} className={btn}>
+              Coarser
+            </button>
+          </Tooltip>
+          <Tooltip content="Twice the cells everywhere, gradings kept (ICEM Scale sizes).">
+            <button onClick={() => scale(2)} className={btn}>
+              Finer
+            </button>
+          </Tooltip>
         </div>
+        <label className="flex items-center gap-1.5 text-[10px] text-fg-2">
+          <input
+            type="checkbox"
+            checked={scaleWall}
+            onChange={(ev) => setScaleWall(ev.target.checked)}
+            className="accent-accent"
+          />
+          <Tooltip content="Off keeps the first cell at walls (your y+). On scales it too, for a grid refinement study.">
+            <span className="cursor-help">Scale the wall cell too</span>
+          </Tooltip>
+        </label>
 
         <div className="p-2.5 bg-surface-2 border border-line rounded space-y-2">
           <div className="flex items-center justify-between">
@@ -277,6 +306,59 @@ export const StructuredMeshPanel: React.FC<{
           >
             Apply wall layers
           </button>
+          <div className="border-t border-line pt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-2">
+            <label>
+              <Tooltip content="Cell length along the wall where it turns a corner or ends.">
+                <span className={`${lbl} cursor-help`}>Corner cell</span>
+              </Tooltip>
+              <NumberField
+                value={corner}
+                min={1e-7}
+                onChange={(n) => setCornerCell(n)}
+                className={field}
+              />
+            </label>
+            <label>
+              <Tooltip content="Nodes gather where the wall bends. 0 is off, 1 sends about half there.">
+                <span className={`${lbl} cursor-help`}>Curvature</span>
+              </Tooltip>
+              <NumberField
+                value={curvature}
+                min={0}
+                max={10}
+                onChange={(n) => setCurvature(n)}
+                className={field}
+              />
+            </label>
+            <button
+              onClick={() =>
+                onUpdateBlocking?.(applyAlongWall(bkNow, corner, growth, curvature).blocking)
+              }
+              disabled={!walls.size}
+              className={btn}
+            >
+              Along walls
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between text-[10px]">
+          {jumps.length ? (
+            <span className="text-warning">
+              {jumps.length} spacing jump{jumps.length > 1 ? 's' : ''} at block joins
+            </span>
+          ) : (
+            <span className="text-fg-2">No spacing jumps at block joins</span>
+          )}
+          <Tooltip content="Match the cell size on both sides of every block join (Pointwise Sync spacings).">
+            <button
+              onClick={() => onUpdateBlocking?.(syncSpacings(bkNow).blocking)}
+              disabled={!jumps.length}
+              className={`${btn} disabled:opacity-40 disabled:pointer-events-none`}
+            >
+              Sync
+            </button>
+          </Tooltip>
         </div>
 
         <div className="space-y-1">

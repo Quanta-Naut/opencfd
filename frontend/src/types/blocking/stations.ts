@@ -278,7 +278,7 @@ export function projectedStations(
   const same =
     d(S[0], D[0]) + d(S[S.length - 1], D[D.length - 1]) <=
     d(S[0], D[D.length - 1]) + d(S[S.length - 1], D[0]);
-  const st = lawStations(src, Infinity, Ls);
+  const st = curvedStations(src, S, cs);
   // Normal side: the one that reaches dst at the middle.
   const mid = at(S, cs, Ls / 2);
   const nrm = { x: -mid.t.y, y: mid.t.x };
@@ -324,6 +324,84 @@ export function edgeStations(
   const src = e.match ? em.get(e.match) : undefined;
   const proj = src ? projectedStations(src, e, vm) : null;
   if (proj) return subsample(proj, keep);
-  const c = cumLen(chainOf(e, vm));
-  return lawStations(e, keep, c[c.length - 1]);
+  const chain = chainOf(e, vm);
+  return subsample(curvedStations(e, chain, cumLen(chain)), keep);
+}
+
+// ── Curvature refinement ───────────────────────────────────────────────────
+//
+// Nodes gather where an edge turns: round a nose, into a bend, along a
+// fillet. The law's stations are remapped through the cumulative weight
+// w(s) = 1 + strength * rho(s), where rho is the turning per unit length
+// relative to the edge's average (smoothed so a polyline's corners count as
+// a bend). A circular arc turns evenly, so it stays as the law has it.
+
+/** Map from law fraction to arc fraction, and the stretch it puts on the
+ *  end cells (w at the end over the mean). Null for a straight edge. */
+export function curvatureWarp(
+  chain: Point2D[],
+  cum: number[],
+  strength: number,
+): { inv: (t: number) => number; end0: number; end1: number } | null {
+  const L = cum[cum.length - 1];
+  if (!(strength > 0) || !(L > 0) || chain.length < 3) return null;
+  const M = 400;
+  const pts = Array.from({ length: M + 1 }, (_, i) => at(chain, cum, (L * i) / M).p);
+  const turn = new Array(M).fill(0);
+  let total = 0;
+  for (let i = 1; i < M; i++) {
+    const ax = pts[i].x - pts[i - 1].x,
+      ay = pts[i].y - pts[i - 1].y;
+    const bx = pts[i + 1].x - pts[i].x,
+      by = pts[i + 1].y - pts[i].y;
+    const a = Math.abs(Math.atan2(ax * by - ay * bx, ax * bx + ay * by));
+    // Half to the interval each side of the sample.
+    turn[i - 1] += a / 2;
+    turn[i] += a / 2;
+    total += a;
+  }
+  if (total < 0.05) return null;
+  // Box smoothing over 4% of the edge each side.
+  const W = 16;
+  const sm = turn.map((_, i) => {
+    let s = 0,
+      c = 0;
+    for (let j = Math.max(0, i - W); j <= Math.min(M - 1, i + W); j++) {
+      s += turn[j];
+      c++;
+    }
+    return s / c;
+  });
+  const mean = total / M;
+  const w = sm.map((x) => 1 + strength * (x / mean));
+  const cw = [0];
+  for (const x of w) cw.push(cw[cw.length - 1] + x);
+  const tot = cw[M];
+  const wMean = tot / M;
+  const inv = (t: number) => {
+    const target = t * tot;
+    let i = 0;
+    while (i < M - 1 && cw[i + 1] < target) i++;
+    const u = (target - cw[i]) / (cw[i + 1] - cw[i] || 1);
+    return Math.min(1, Math.max(0, (i + u) / M));
+  };
+  return { inv, end0: w[0] / wMean, end1: w[M - 1] / wMean };
+}
+
+/** The law's stations, refined by curvature when the edge asks for it. End
+ *  spacings still come out as set: the law is asked for the end cells the
+ *  remap will stretch into them. */
+function curvedStations(e: BlockEdge, chain: Point2D[], cum: number[]): number[] {
+  const L = cum[cum.length - 1];
+  const warp = e.curvature ? curvatureWarp(chain, cum, e.curvature) : null;
+  if (!warp) return lawStations(e, Infinity, L);
+  const adj = {
+    ...e,
+    spacing1: e.spacing1 ? e.spacing1 * warp.end0 : e.spacing1,
+    spacing2: e.spacing2 ? e.spacing2 * warp.end1 : e.spacing2,
+  };
+  const st = lawStations(adj, Infinity, L).map(warp.inv);
+  st[0] = 0;
+  st[st.length - 1] = 1;
+  return st;
 }

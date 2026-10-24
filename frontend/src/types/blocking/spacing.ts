@@ -2,6 +2,7 @@ import { Point2D } from '../cadWorkflow';
 import { BlockEdge, Blocking } from './types';
 import { edgeStations } from './stations';
 import { edgeGroup, setEdgeParams } from './hexa';
+import { propagateNodeCounts } from './sizing';
 
 // Spacing continuity across block joins (Pointwise "Sync Spacings"). A grid
 // line that runs from one block edge into the next should not jump in cell
@@ -120,17 +121,24 @@ export function matchEdgeSpacing(
   return out;
 }
 
-/** Edges leaving a wall, keyed by edge id, with the wall vertex (or both
- *  ends when the edge runs between two walls). A wall edge is a boundary
- *  edge tagged `wall`, or untagged (the mesher's default patch). */
-export function wallNormalEdges(bk: Blocking): Map<string, Set<string>> {
+/** Ids of wall edges: boundary edges (one block) tagged `wall`, or untagged
+ *  (the mesher's default patch). */
+export function wallEdgeIds(bk: Blocking): Set<string> {
   const uses = new Map<string, number>();
   for (const b of bk.blocks) for (const id of b.edges) uses.set(id, (uses.get(id) ?? 0) + 1);
+  return new Set(
+    bk.edges
+      .filter((e) => uses.get(e.id) === 1 && (!e.patch || e.patch === 'wall'))
+      .map((e) => e.id),
+  );
+}
+
+/** Edges leaving a wall, keyed by edge id, with the wall vertex (or both
+ *  ends when the edge runs between two walls). */
+export function wallNormalEdges(bk: Blocking): Map<string, Set<string>> {
   const em = new Map(bk.edges.map((e) => [e.id, e] as const));
-  const isWall = (id: string) => {
-    const e = em.get(id);
-    return !!e && uses.get(id) === 1 && (!e.patch || e.patch === 'wall');
-  };
+  const walls = wallEdgeIds(bk);
+  const isWall = (id: string) => walls.has(id);
   const out = new Map<string, Set<string>>();
   for (const b of bk.blocks) {
     for (let k = 0; k < 4; k++) {
@@ -167,17 +175,7 @@ export function applyWallSpacing(
   const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
   const len = (e: BlockEdge) => lengthOf(chainOf(e, vm));
   const walls = wallNormalEdges(bk);
-  // Cells for one edge: geometric growth up to farCell, then even cells.
-  const cellsFor = (L: number, ends: number) => {
-    const half = L / ends;
-    const k = Math.max(0, Math.ceil(Math.log(Math.max(farCell / firstCell, 1)) / Math.log(g)));
-    const grown = (firstCell * (g ** k - 1)) / (g - 1);
-    const n =
-      grown >= half
-        ? Math.log(1 + (half * (g - 1)) / firstCell) / Math.log(g)
-        : k + (half - grown) / farCell;
-    return Math.ceil(n * ends);
-  };
+  const cellsFor = (L: number, ends: number) => cellsToFill(L, firstCell, g, farCell, ends);
   let out = bk;
   const done = new Set<string>();
   for (const [id, at] of walls) {
@@ -205,4 +203,164 @@ export function applyWallSpacing(
     });
   }
   return out;
+}
+
+/** Cells an edge of length L needs when it starts at `first` from `ends`
+ *  ends (1 or 2) and grows by `g` until cells reach `far`, then stays even. */
+export function cellsToFill(
+  L: number,
+  first: number,
+  g: number,
+  far: number,
+  ends: number,
+): number {
+  const half = L / ends;
+  if (!(first > 0) || g <= 1) return Math.ceil(L / Math.max(far, 1e-30));
+  const k = Math.max(0, Math.ceil(Math.log(Math.max(far / first, 1)) / Math.log(g)));
+  const grown = (first * (g ** k - 1)) / (g - 1);
+  const n =
+    grown >= half ? Math.log(1 + (half * (g - 1)) / first) / Math.log(g) : k + (half - grown) / far;
+  return Math.ceil(n * ends);
+}
+
+/**
+ * Pointwise "Sync Spacings" over the whole blocking: wherever a grid line
+ * jumps in cell size across a block join, the coarse edge takes the fine
+ * edge's cell size at that end. Repeats, since one fix can shift a jump
+ * along the line, and reports what is left.
+ */
+export function syncSpacings(
+  bk: Blocking,
+  limit = SPACING_JUMP_LIMIT,
+): { blocking: Blocking; fixed: number; left: number } {
+  let out = bk;
+  let fixed = 0;
+  for (let pass = 0; pass < 6; pass++) {
+    const jumps = spacingJumps(out, limit);
+    if (!jumps.length) break;
+    const cells = endCells(out);
+    for (const j of jumps) {
+      const coarse = out.edges.find((e) => e.id === j.coarse);
+      const fine = out.edges.find((e) => e.id === j.fine);
+      if (!coarse || !fine) continue;
+      const fc = cells.get(fine.id)!;
+      const size = Number((fine.v0 === j.vid ? fc.at0 : fc.at1).toPrecision(3));
+      out = setEdgeParams(out, coarse.id, {
+        law: coarse.law === 'tanh' || coarse.law === 'bigeometric' ? coarse.law : 'bigeometric',
+        [coarse.v0 === j.vid ? 'spacing1' : 'spacing2']: size,
+      });
+      fixed++;
+    }
+  }
+  return { blocking: out, fixed, left: spacingJumps(out, limit).length };
+}
+
+/**
+ * ICEM "Scale Sizes": the whole mesh `factor` times finer (2) or coarser
+ * (0.5) with every grading kept. Node counts scale; end spacings and max
+ * spaces shrink by the factor; cell-to-cell ratios become ratio^(1/factor)
+ * so the layers keep their shape at the new density. The first cell at a
+ * wall can stay as set (its y+), or scale with the rest for a refinement study.
+ */
+export function scaleSizes(bk: Blocking, factor: number, keepWallCell = true): Blocking {
+  if (!(factor > 0) || factor === 1) return bk;
+  const atWall = keepWallCell ? wallNormalEdges(bk) : new Map<string, Set<string>>();
+  const sc = (x: number | undefined, keep: boolean) => (x && !keep ? x / factor : x);
+  const rt = (r: number | undefined) => (r === undefined ? r : Math.max(1.001, r ** (1 / factor)));
+  return propagateNodeCounts({
+    ...bk,
+    edges: bk.edges.map((e) => {
+      const w = atWall.get(e.id);
+      return {
+        ...e,
+        nodes: Math.max(2, Math.min(2000, Math.round((e.nodes - 1) * factor) + 1)),
+        spacing1: sc(e.spacing1, !!w?.has(e.v0)),
+        spacing2: sc(e.spacing2, !!w?.has(e.v1)),
+        maxSpace: sc(e.maxSpace, false),
+        ratio1: e.law === 'bigeometric' ? rt(e.ratio1 ?? 1.2) : e.ratio1,
+        ratio2: e.law === 'bigeometric' ? rt(e.ratio2 ?? 1.2) : e.ratio2,
+      };
+    }),
+  });
+}
+
+/** Turning, in degrees, where two wall edges meet at a vertex. */
+const CORNER_TURN_DEG = 20;
+
+/**
+ * Cells along walls: each wall edge gets `cornerCell` at every end where the
+ * wall turns sharply (a corner, a trailing edge, a step) or stops (it meets
+ * another kind of boundary), grows from there by `growth`, and may gather
+ * nodes where the wall bends (`curvature`). An end where the wall carries on
+ * smoothly is left free. Node counts rise when the grading needs more cells
+ * than the edge has, and the parallel edges follow, so the clustering
+ * carries straight through the blocks; spacings are then synced across
+ * block joins.
+ */
+export function applyAlongWall(
+  bk: Blocking,
+  cornerCell: number,
+  growth: number,
+  curvature: number,
+): { blocking: Blocking; edges: number; corners: number } {
+  const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
+  const walls = wallEdgeIds(bk);
+  const em = new Map(bk.edges.map((e) => [e.id, e] as const));
+  const leaving = (e: BlockEdge, v: string) => {
+    const pts = chainOf(e, vm);
+    const ch = e.v0 === v ? pts : [...pts].reverse();
+    // Look a little way along, past any tiny first segment.
+    const L = lengthOf(ch);
+    let k = 1;
+    while (k < ch.length - 1 && Math.hypot(ch[k].x - ch[0].x, ch[k].y - ch[0].y) < L * 0.02) k++;
+    const d = { x: ch[k].x - ch[0].x, y: ch[k].y - ch[0].y };
+    const l = Math.hypot(d.x, d.y) || 1;
+    return { x: d.x / l, y: d.y / l };
+  };
+  const isCorner = (e: BlockEdge, v: string) => {
+    const others = [...walls]
+      .map((id) => em.get(id)!)
+      .filter((o) => o.id !== e.id && (o.v0 === v || o.v1 === v));
+    if (others.length !== 1) return true;
+    const a = leaving(e, v),
+      b = leaving(others[0], v);
+    // Carrying straight on, the two leave in opposite directions.
+    const turn =
+      180 - (Math.acos(Math.max(-1, Math.min(1, a.x * b.x + a.y * b.y))) * 180) / Math.PI;
+    return turn > CORNER_TURN_DEG;
+  };
+  const plan = [...walls].map((id) => {
+    const e = em.get(id)!;
+    const c0 = isCorner(e, e.v0),
+      c1 = isCorner(e, e.v1);
+    const L = lengthOf(chainOf(e, vm));
+    const ends = (c0 ? 1 : 0) + (c1 ? 1 : 0);
+    const far = L / Math.max(1, e.nodes - 1);
+    const need = ends ? cellsToFill(L, cornerCell, growth, far, ends) + 1 : e.nodes;
+    return { id, c0, c1, nodes: Math.min(2000, Math.max(e.nodes, need)) };
+  });
+  const params = (q: (typeof plan)[number], copyParallel: boolean) => ({
+    law: 'bigeometric' as const,
+    spacing1: q.c0 ? cornerCell : 0,
+    spacing2: q.c1 ? cornerCell : 0,
+    ratio1: growth,
+    ratio2: growth,
+    maxSpace: 0,
+    curvature,
+    copyParallel,
+  });
+  // Walls in one direction group share a count: the most any of them needs.
+  const most = new Map<string, number>();
+  for (const q of plan)
+    for (const g of edgeGroup(bk, q.id)) most.set(g, Math.max(most.get(g) ?? 0, q.nodes));
+  for (const q of plan) q.nodes = most.get(q.id) ?? q.nodes;
+  let out = bk;
+  // Each wall's grading goes across its blocks; then every wall gets its own
+  // back, since two walls can face each other (a channel's floor and roof).
+  for (const q of plan) out = setEdgeParams(out, q.id, { ...params(q, true), nodes: q.nodes });
+  for (const q of plan) out = setEdgeParams(out, q.id, params(q, false));
+  const corners = plan.reduce((k, q) => k + (q.c0 ? 1 : 0) + (q.c1 ? 1 : 0), 0);
+  // The fine corner cells must carry on across block joins, or the cells
+  // there jump from fine to coarse and skew.
+  return { blocking: syncSpacings(propagateNodeCounts(out)).blocking, edges: plan.length, corners };
 }

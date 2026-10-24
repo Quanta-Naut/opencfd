@@ -122,7 +122,7 @@ export function splitAllAt(bk: Blocking, axis: 'x' | 'y', value: number): Blocki
     const e = out.edges.find((x) => x.id === edgeId)!;
     const mid = vid(p);
     const cut = cutAlong(edgeId);
-    const keep = { patch: e.patch, nodes: e.nodes, law: e.law, ratio: e.ratio, ratio1: e.ratio1, ratio2: e.ratio2, maxSpace: e.maxSpace, curveId: e.curveId, curves: e.curves };
+    const keep = { patch: e.patch, nodes: e.nodes, law: e.law, ratio: e.ratio, ratio1: e.ratio1, ratio2: e.ratio2, maxSpace: e.maxSpace, curvature: e.curvature, curveId: e.curveId, curves: e.curves };
     // Each half keeps the end spacing of the end it still has.
     const e0: BlockEdge = { id: uid(), v0: e.v0, v1: mid, path: cut?.before ?? [], ...keep, ...(e.spacing1 ? { spacing1: e.spacing1 } : {}) };
     const e1: BlockEdge = { id: uid(), v0: mid, v1: e.v1, path: cut?.after ?? [], ...keep, ...(e.spacing2 ? { spacing2: e.spacing2 } : {}) };
@@ -283,7 +283,7 @@ export function splitSheet(
       const mv = out.vertices.find((v) => v.id === mid);
       if (mv && !mv.curves) mv.curves = [...e.curves];
     }
-    const keep = { patch: e.patch, law: e.law, ratio: e.ratio, ratio1: e.ratio1, ratio2: e.ratio2, maxSpace: e.maxSpace, curveId: e.curveId, curves: e.curves };
+    const keep = { patch: e.patch, law: e.law, ratio: e.ratio, ratio1: e.ratio1, ratio2: e.ratio2, maxSpace: e.maxSpace, curvature: e.curvature, curveId: e.curveId, curves: e.curves };
     const h0: BlockEdge = {
       id: uid(), v0: e.v0, v1: mid, nodes: Math.max(2, Math.round(e.nodes * t)),
       path: pts.slice(1, i + 1).filter((q) => Math.hypot(q.x - m.x, q.y - m.y) > 1e-9).map((q) => ({ ...q })), ...keep,

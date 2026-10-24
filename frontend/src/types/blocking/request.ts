@@ -18,7 +18,7 @@ export function toStructuredRequest(bk: Blocking): StructuredMeshRequest {
         pathPts = resampled.slice(1, -1);
       }
       // Laws the backend has no formula for go as explicit node stations.
-      const explicit = e.law === 'tanh' || e.law === 'bigeometric' || !!(e.match && byId.has(e.match));
+      const explicit = e.law === 'tanh' || e.law === 'bigeometric' || !!e.curvature || !!(e.match && byId.has(e.match));
       const stations = explicit
         ? edgeStations(bk, { ...e, nodes: nodes(e) }, Infinity, vmap, byId)
         : null;

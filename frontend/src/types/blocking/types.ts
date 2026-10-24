@@ -38,6 +38,9 @@ export interface BlockEdge {
   ratio2?: number;
   /** 'bigeometric': largest cell allowed (ICEM "Max space"). */
   maxSpace?: number;
+  /** Curvature refinement: nodes gather where the edge turns. 0 or
+   *  undefined = off; 1 sends about half the nodes to where it bends. */
+  curvature?: number;
   /** CadEntity.id whose closed outline this edge follows. Undefined = straight or unassociated. */
   curveId?: string;
   /** ICEM-style explicit association: CadEntity ids (joined end to end) this
