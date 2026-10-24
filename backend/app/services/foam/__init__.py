@@ -1,6 +1,7 @@
 """OpenFOAM case-file generation, driven by the Case Setup boundary spec."""
 import math
 import os
+import shutil
 from typing import Any, Dict, List
 
 from .boundary import normalise_patches
@@ -95,6 +96,10 @@ def generate_openfoam_case_files(
             p = os.path.join(zero_dir, name)
             if os.path.isfile(p) and f"0/{name}" not in fresh:
                 os.remove(p)
+        # 0/uniform/time, written by postProcess at time 0, carries the last
+        # run's deltaT: a steady run's 1 s makes a transient run end before
+        # its first step.
+        shutil.rmtree(os.path.join(zero_dir, "uniform"), ignore_errors=True)
     for stale in ("constant/g", "constant/thermophysicalProperties", "constant/pRef", "constant/hRef"):
         sp = os.path.join(case_dir, stale)
         if os.path.isfile(sp) and stale not in fresh:
