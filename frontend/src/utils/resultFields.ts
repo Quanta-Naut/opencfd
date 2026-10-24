@@ -21,6 +21,9 @@ export type ResultFieldId =
   | 'k'
   | 'omega'
   | 'vorticity'
+  | 'yPlus'
+  | 'tau_w'
+  | 'Cf'
   | `c:${string}`;
 
 /** A field the user defined in the calculator. */
@@ -40,9 +43,11 @@ export interface ResultFieldDef {
   /** Short name for legends and tables. */
   short: string;
   unit: string;
-  group: 'Velocity' | 'Pressure' | 'Turbulence' | 'Derived' | 'Calculator';
+  group: 'Velocity' | 'Pressure' | 'Turbulence' | 'Derived' | 'Wall' | 'Calculator';
   /** Signed about zero: the colour range is centred on 0. */
   symmetric?: boolean;
+  /** Has values on walls only: for boundary plots and reports, not contours. */
+  wallOnly?: boolean;
 }
 
 export const RESULT_FIELDS: ResultFieldDef[] = [
@@ -61,6 +66,23 @@ export const RESULT_FIELDS: ResultFieldDef[] = [
     unit: '1/s',
     group: 'Derived',
     symmetric: true,
+  },
+  { id: 'yPlus', label: 'Wall y+', short: 'y+', unit: '', group: 'Wall', wallOnly: true },
+  {
+    id: 'tau_w',
+    label: 'Wall shear stress',
+    short: 'τw',
+    unit: 'Pa',
+    group: 'Wall',
+    wallOnly: true,
+  },
+  {
+    id: 'Cf',
+    label: 'Skin friction coefficient (x)',
+    short: 'Cf',
+    unit: '',
+    group: 'Wall',
+    wallOnly: true,
   },
 ];
 
@@ -123,6 +145,9 @@ export const EXPR_FIELDS: Record<string, string> = {
   k: 'k',
   omega: 'omega',
   vorticity: 'vorticity',
+  yPlus: 'yPlus',
+  tau_w: 'tau_w',
+  Cf: 'Cf',
   x: 'x',
   y: 'y',
 };
@@ -219,6 +244,23 @@ export function fieldValues(
       if (!p || !(q > 0)) return null;
       const out = new Float64Array(p.length);
       for (let i = 0; i < p.length; i++) out[i] = ((p[i] - ref.p) * toPa) / q;
+      return out;
+    }
+    case 'tau_w': {
+      // As written: kinematic (m2/s2) when incompressible.
+      const t = fields.wallShear;
+      if (!t) return null;
+      const out = new Float64Array(t.length);
+      for (let i = 0; i < t.length; i++) out[i] = t[i] * toPa;
+      return out;
+    }
+    case 'Cf': {
+      // OpenFOAM's shear points against the flow over the wall, so flip it:
+      // positive where the flow runs along +x, negative where it reverses.
+      const t = fields.wallShearX;
+      if (!t || !(q > 0)) return null;
+      const out = new Float64Array(t.length);
+      for (let i = 0; i < t.length; i++) out[i] = (-t[i] * toPa) / q;
       return out;
     }
     case 'p_total': {

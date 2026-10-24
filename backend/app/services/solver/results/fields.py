@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np
 from .foamio import ResultsUnavailable, _read_field, _resolve_time_dir, _time_dirs
 from .geometry import _cell_centres, _elem_centroids, _nearest, _node_averager, _node_vorticity, _smooth_nodes, _tri_index
 from .streamlines import _streamlines_numpy
+from .walls import force_breakdown, wall_node_fields
+
+_log = logging.getLogger(__name__)
 
 
 def _assemble_from_cells(nodes, elements: List, centres: np.ndarray,
@@ -122,11 +126,27 @@ def read_field_results(case_dir: str | Path, mesh: Dict, time_value: Optional[st
         (str(case), n_cells, len(nodes), len(elements), owner.stat().st_mtime)
         if owner.is_file() else None
     )
-    return _assemble_from_cells(
+    payload = _assemble_from_cells(
         nodes, elements, centres, U, p,
         _read_field(tdir / "k"), _read_field(tdir / "omega"),
         tdir.name, [path.name for _, path in times], geom_key,
     )
+    # Wall y+ and shear (on wall nodes, 0 elsewhere) and the force split,
+    # when the run's function objects wrote them.
+    try:
+        walls = wall_node_fields(case, tdir, nodes[:, :2], mesh.get("boundaries") or {})
+        for name, vals in walls.items():
+            payload["fields"][name] = [round(float(v), 5) for v in vals]
+            on = vals[vals != 0]
+            payload["ranges"][name] = (
+                [round(float(on.min()), 5), round(float(on.max()), 5)] if on.size else [0.0, 1.0]
+            )
+        forces = force_breakdown(case, tdir.name)
+        if forces:
+            payload["forces"] = forces
+    except Exception:  # extras only: never lose the main result over them
+        _log.warning("could not read wall quantities from %s", tdir, exc_info=True)
+    return payload
 
 
 _PREVIEW_BIND_CACHE: Dict[tuple, np.ndarray] = {}

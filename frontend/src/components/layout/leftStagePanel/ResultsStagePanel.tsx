@@ -138,7 +138,9 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const def = fieldDef(pp.activeField);
   const unit = def.unit ? ` ${def.unit}` : '';
   const patch = bPatch || p.patches.find((x) => x === 'wall') || p.patches[0] || '';
-  const flows = view.reports.filter((r) => r.flow !== null);
+  // Nothing flows through a wall; node-averaged velocity would show a trace.
+  const walls = new Set(view.wallReports.map((r) => r.patch));
+  const flows = view.reports.filter((r) => r.flow !== null && !walls.has(r.patch));
   const inflow = flows.reduce((s, r) => s + Math.min(0, r.flow!), 0);
   const net = flows.reduce((s, r) => s + r.flow!, 0);
   const custom = pp.customFields ?? [];
@@ -671,7 +673,7 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
               {r.values ? (
                 <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 mt-1 text-[10px]">
                   {allIds
-                    .filter((id) => r.values![id] !== undefined)
+                    .filter((id) => r.values![id] !== undefined && !fieldDef(id).wallOnly)
                     .map((id) => {
                       const f = fieldDef(id);
                       const cls = id === pp.activeField ? 'text-fg font-semibold' : 'text-fg-2';
@@ -718,6 +720,83 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+          {view.forces &&
+            (view.forces.cd_pressure !== undefined || view.forces.cm !== undefined) && (
+              <div>
+                <Tooltip
+                  content="Drag and lift from the pressure on the walls and from friction along them. Cm is the pitching moment about the reference point (a quarter chord by default)."
+                  delay={300}
+                >
+                  <span className={`${lbl} block mb-1 cursor-help`}>Force breakdown</span>
+                </Tooltip>
+                <table className="w-full text-[10px]">
+                  <thead>
+                    <tr className="text-fg-3">
+                      <th className="text-left font-medium pb-0.5">&nbsp;</th>
+                      <th className="text-right font-medium">Total</th>
+                      <th className="text-right font-medium">Pressure</th>
+                      <th className="text-right font-medium">Viscous</th>
+                    </tr>
+                  </thead>
+                  <tbody className="font-mono">
+                    {(
+                      [
+                        ['Cd', view.forces.cd, view.forces.cd_pressure, view.forces.cd_viscous],
+                        ['Cl', view.forces.cl, view.forces.cl_pressure, view.forces.cl_viscous],
+                        ['Cm', view.forces.cm, undefined, undefined],
+                      ] as const
+                    ).map(([k, t, pr, vi]) => (
+                      <tr key={k} className="border-t border-line-soft">
+                        <td className="py-0.5 font-sans text-fg">{k}</td>
+                        <td className="text-right text-fg">
+                          {t !== undefined ? fmtValue(t) : '-'}
+                        </td>
+                        <td className="text-right text-fg-2">
+                          {pr !== undefined ? fmtValue(pr) : ''}
+                        </td>
+                        <td className="text-right text-fg-2">
+                          {vi !== undefined ? fmtValue(vi) : ''}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          {view.wallReports.length > 0 && (
+            <div>
+              <Tooltip
+                content="y+ is the first cell's height in wall units. Near 1 resolves the viscous layer, which k-omega SST without wall functions needs; 30 to 300 suits wall functions."
+                delay={300}
+              >
+                <span className={`${lbl} block mb-1 cursor-help`}>Walls</span>
+              </Tooltip>
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="text-fg-3">
+                    <th className="text-left font-medium pb-0.5">Patch</th>
+                    <th className="text-right font-medium">y+ avg</th>
+                    <th className="text-right font-medium">y+ max</th>
+                    <th className="text-right font-medium">τw avg (Pa)</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  {view.wallReports.map((r) => (
+                    <tr key={r.patch} className="border-t border-line-soft">
+                      <td className="py-0.5 font-sans text-fg">{r.patch}</td>
+                      <td className="text-right text-fg">
+                        {r.yPlus ? fmtValue(r.yPlus.avg) : '-'}
+                      </td>
+                      <td className="text-right text-fg-2">
+                        {r.yPlus ? fmtValue(r.yPlus.max) : '-'}
+                      </td>
+                      <td className="text-right text-fg-2">{r.tau ? fmtValue(r.tau.avg) : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
           {view.reports.length > 0 ? (
@@ -914,6 +993,8 @@ export interface ResultsStagePanelProps {
     reports: PatchReport[];
     ref: FlowReference;
     allFields: Record<string, ArrayLike<number> | undefined> | undefined;
+    wallReports: import('../../../hooks/useResultsView').WallReport[];
+    forces: import('../../../hooks/useResultsView').ForceBreakdown | null;
   };
   patches: string[];
   probePicking: boolean;

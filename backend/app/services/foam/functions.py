@@ -59,6 +59,19 @@ def build_functions(
             f"        lRef            {L};\n        Aref            {A};\n"
             "    }"
         )
+        # The same forces, split into pressure and viscous parts, at each
+        # write: the Results tab reports the drag and lift breakdown.
+        blocks.append(
+            "    forcesSplit\n    {\n"
+            "        type            forces;\n"
+            "        libs            (\"libforces.so\");\n"
+            "        writeControl    writeTime;\n"
+            f"        patches         ({patch});\n"
+            + ("" if compressible else "        rho             rhoInf;\n")
+            + f"        rhoInf          {rho};\n"
+            + f"        CofR            {_vec(forces.get('centreOfRotation', [0.25, 0, 0]))};\n"
+            "    }"
+        )
 
     for i, s in enumerate(mon.get("surfaces", []) or []):
         op = {"massFlow": "sumDirection", "areaAverage": "weightedAreaAverage",
@@ -84,6 +97,26 @@ def build_functions(
             "        writeControl    timeStep;\n        writeInterval   1;\n"
             f"        probeLocations  ( {pts} );\n"
             "        fields          (p U);\n"
+            "    }"
+        )
+
+    # Wall y+ and wall shear stress, written as fields at each write time
+    # for the Results tab's wall reports and plots.
+    if wall_patches:
+        walls = " ".join(wall_patches)
+        blocks.append(
+            "    yPlus\n    {\n"
+            "        type            yPlus;\n"
+            "        libs            (\"libfieldFunctionObjects.so\");\n"
+            "        writeControl    writeTime;\n"
+            "    }"
+        )
+        blocks.append(
+            "    wallShearStress\n    {\n"
+            "        type            wallShearStress;\n"
+            "        libs            (\"libfieldFunctionObjects.so\");\n"
+            "        writeControl    writeTime;\n"
+            f"        patches         ({walls});\n"
             "    }"
         )
 

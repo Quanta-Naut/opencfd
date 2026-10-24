@@ -34,6 +34,24 @@ export interface DiffSource {
   mesh: { nodes: number[][]; elements: number[][] };
 }
 
+/** Wall numbers for one wall patch. */
+export interface WallReport {
+  patch: string;
+  yPlus: PatchReport | null;
+  tau: PatchReport | null;
+}
+
+/** Force coefficients and their pressure / viscous parts, from the run. */
+export interface ForceBreakdown {
+  cd?: number;
+  cl?: number;
+  cm?: number;
+  cd_pressure?: number;
+  cd_viscous?: number;
+  cl_pressure?: number;
+  cl_viscous?: number;
+}
+
 export interface ProbeRow {
   id: string;
   x: number;
@@ -212,6 +230,25 @@ export function useResultsView(
     [mesh, activeVals, fields],
   );
 
+  // y+ and wall shear on each wall, where the run wrote them.
+  const wallReports = useMemo<WallReport[]>(() => {
+    if (!mesh?.nodes?.length || !fields || (!fields.yPlus && !fields.wallShear)) return [];
+    const n = mesh.nodes.length;
+    const yp = fieldValues(fields, 'yPlus', ref);
+    const tw = fieldValues(fields, 'tau_w', ref);
+    const a = yp?.length === n ? patchReports(mesh, yp) : [];
+    const b = tw?.length === n ? patchReports(mesh, tw) : [];
+    const patches = [...new Set([...a, ...b].map((r) => r.patch))];
+    return patches
+      .map((patch) => ({
+        patch,
+        yPlus: a.find((r) => r.patch === patch) ?? null,
+        tau: b.find((r) => r.patch === patch) ?? null,
+      }))
+      .filter((r) => (r.yPlus?.max ?? 0) > 0 || (r.tau?.max ?? 0) > 0);
+  }, [mesh, fields, ref]);
+  const forces = (fieldData?.forces ?? null) as ForceBreakdown | null;
+
   // Lines at the values typed for this field.
   const isoValues = pp.isoValues?.[active];
   const isoLines = useMemo(() => {
@@ -262,5 +299,7 @@ export function useResultsView(
     reports,
     /** Showing this run minus another. */
     diffing,
+    wallReports,
+    forces,
   };
 }
