@@ -630,12 +630,36 @@ export function setEdgeParams(
     return { x: b.x - a.x, y: b.y - a.y };
   };
   const sd = dir(src);
+  // Which end of each parallel edge matches the source's v0, walked through
+  // the blocks (corner k starts edge k, so edge k+2 runs back alongside edge
+  // k). Comparing directions instead goes wrong around a C or an O, where
+  // parallel edges can point any way.
+  const em = new Map(out.edges.map((e) => [e.id, e] as const));
+  const start = new Map<string, string>([[src.id, src.v0]]);
+  const queue = [src.id];
+  while (queue.length) {
+    const id = queue.shift()!;
+    const s = start.get(id)!;
+    for (const blk of out.blocks) {
+      const k = blk.edges.indexOf(id);
+      if (k < 0) continue;
+      const c = blockCornerIds(out, blk);
+      if (c.length !== 4) continue;
+      const oppId = blk.edges[(k + 2) % 4];
+      const opp = em.get(oppId);
+      if (!opp || start.has(oppId)) continue;
+      start.set(oppId, s === c[k] ? c[(k + 3) % 4] : c[(k + 2) % 4]);
+      queue.push(oppId);
+    }
+  }
   for (const e of out.edges) {
     if (!group.has(e.id)) continue;
     if (p.nodes !== undefined) e.nodes = Math.max(2, Math.round(p.nodes));
     if (e.id === edgeId || p.copyParallel) {
       const d = dir(e);
-      const same = e.id === edgeId || d.x * sd.x + d.y * sd.y >= 0;
+      const s = start.get(e.id);
+      const same =
+        e.id === edgeId || (s !== undefined ? s === e.v0 : d.x * sd.x + d.y * sd.y >= 0);
       if (p.law !== undefined) e.law = p.law;
       if (p.ratio !== undefined && p.ratio > 0) e.ratio = same ? p.ratio : 1 / p.ratio;
       const set = (k: 'spacing1' | 'spacing2', v: number | undefined) => {
