@@ -53,6 +53,22 @@ import { runGenerateMesh } from './app/meshingActions';
 import { runGenerateStructuredMesh } from './app/meshingActions';
 import { buildCommands } from './app/commands';
 
+/** A copy of the geometry, domain and patch tags taken when blocking or
+ *  meshing starts. The Mesh, Solver and Results tabs keep showing it after
+ *  the geometry is edited, until the user chooses to update. */
+export interface MeshGeometry {
+  entities: CadEntity[];
+  tags: Record<string, BoundaryTag>;
+}
+
+/** What makes two geometries different for meshing. */
+const geometryKey = (entities: CadEntity[], tags: Record<string, BoundaryTag>) =>
+  JSON.stringify(
+    entities.map((e) => ({ t: e.type, p: e.pts, c: e.isClosed, r: e.role, rad: e.radius })),
+  ) +
+  '|' +
+  JSON.stringify(tags);
+
 export interface StudioSession {
   state: CFDProjectState;
   cadEntities: CadEntity[];
@@ -72,6 +88,8 @@ export interface StudioSession {
   meshTopology?: 'unstructured' | 'structured';
   meshData?: any;
   meshSig?: string | null;
+  /** The geometry the blocks and mesh were made from (see meshGeom). */
+  meshGeom?: MeshGeometry | null;
   hasMesh?: boolean;
   fieldData?: any;
   caseFiles?: Record<string, string>;
@@ -264,16 +282,28 @@ export function App({
   // last-generated mesh is stale (geometry / tags / flow changed since).
   // Core = geometry/tags/flow. A change here is a real "your mesh is out of date"
   // event worth telling the user about.
+  // The Mesh tab works on a copy of the geometry taken when the blocks or the
+  // mesh were first made, so editing the geometry never mixes old blocks and
+  // mesh with the new outline. The copy follows the live geometry while there
+  // is nothing to lose, and is replaced only when the user chooses Update.
+  const [meshGeom, setMeshGeom] = useState<MeshGeometry | null>(
+    () => savedSession?.meshGeom ?? null,
+  );
+  const liveGeomKey = useMemo(
+    () => geometryKey(cadEntities, edgeTagMap),
+    [cadEntities, edgeTagMap],
+  );
+  const meshGeomKey = useMemo(
+    () => (meshGeom ? geometryKey(meshGeom.entities, meshGeom.tags) : null),
+    [meshGeom],
+  );
+  const geometryChanged = meshGeomKey !== null && meshGeomKey !== liveGeomKey;
+  const meshEntities = geometryChanged && meshGeom ? meshGeom.entities : cadEntities;
+  const meshTags = geometryChanged && meshGeom ? meshGeom.tags : edgeTagMap;
+
   const geomSigCore = useMemo(
-    () =>
-      JSON.stringify(
-        cadEntities.map((e) => ({ t: e.type, p: e.pts, c: e.isClosed, r: e.role, rad: e.radius })),
-      ) +
-      '|' +
-      JSON.stringify(edgeTagMap) +
-      '|' +
-      flowType,
-    [cadEntities, edgeTagMap, flowType],
+    () => geometryKey(meshEntities, meshTags) + '|' + flowType,
+    [meshEntities, meshTags, flowType],
   );
   // Full signature also folds in the blocking - block edits mark the mesh stale
   // (badge on the toggle) but do NOT raise a toast (that is just normal editing).
@@ -302,6 +332,19 @@ export function App({
   );
 
   const [meshData, setMeshData] = useState<any>(() => savedSession?.meshData ?? null);
+  // Take the Mesh tab's copy of the geometry when the first blocks or mesh
+  // appear; drop it once both are gone, so it follows the live geometry again.
+  const hasMeshWork = !!meshData?.num_elements || !!blocking?.blocks?.length;
+  useEffect(() => {
+    if (!hasMeshWork) {
+      if (meshGeom) setMeshGeom(null);
+    } else if (!meshGeom)
+      setMeshGeom({
+        entities: cadEntities.map((e) => ({ ...e, selected: false })),
+        tags: edgeTagMap,
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMeshWork, meshGeom]);
   const [meshError, setMeshError] = useState<string | null>(null);
   const [fieldData, setFieldData] = useState<any>(() => savedSession?.fieldData ?? null);
   const [caseFiles, setCaseFiles] = useState<Record<string, string>>(
@@ -424,6 +467,7 @@ export function App({
     meshTopology,
     // meshData / fieldData are saved separately by the blob effect below.
     meshSig: meshSigRef.current,
+    meshGeom,
     hasMesh: !!meshData?.num_elements,
     caseFiles,
   });
@@ -451,6 +495,7 @@ export function App({
       blocking,
       meshTopology,
       meshData,
+      meshGeom,
       caseFiles,
     ],
   );
@@ -541,22 +586,20 @@ export function App({
   const meshStale =
     !!meshData && meshSigRef.current !== null && meshSigRef.current !== geomSignature;
 
-  // One combined notice for"you edited the geometry": if the edit also broke
+  // One combined notice for "you edited the geometry": if the edit also broke
   // the domain, say so in the same toast instead of firing two.
   const lastEditNoticeRef = useRef<string>('');
   useEffect(() => {
     const broken = domainState === 'broken';
-    // only the geometry going stale (not block edits) is worth a toast
-    const geomStale =
-      !!meshData && meshCoreSigRef.current !== null && meshCoreSigRef.current !== geomSigCore;
-    const notice = broken && geomStale ? 'both' : broken ? 'domain' : geomStale ? 'mesh' : '';
+    const notice =
+      broken && geometryChanged ? 'both' : broken ? 'domain' : geometryChanged ? 'mesh' : '';
     if (notice && notice !== lastEditNoticeRef.current) {
       lastEditNoticeRef.current = notice;
       if (notice === 'both')
         toast.error('Domain boundary broke', {
           id: 'edit-notice',
           description:
-            'An edge changed and the mesh is out of date. Reselect the outline in the Domain step, then regenerate the mesh.',
+            'An edge changed. Reselect the outline in the Domain step. The Mesh tab keeps the previous geometry until you update it there.',
         });
       else if (notice === 'domain')
         toast.error('Domain boundary broke', {
@@ -564,13 +607,33 @@ export function App({
           description: 'An edge changed. Reselect the outline in the Domain step and redefine it.',
         });
       else
-        toast.warning('Mesh is out of date', {
+        toast.info('Geometry changed', {
           id: 'edit-notice',
-          description: 'The geometry changed since it was made. Regenerate to update it.',
+          description:
+            'The Mesh tab keeps the previous geometry, blocks and mesh until you update it there.',
         });
     }
     if (!notice) lastEditNoticeRef.current = '';
-  }, [domainState, meshData, geomSigCore]);
+  }, [domainState, geometryChanged]);
+
+  /** Mesh tab "Update": take the latest geometry and domain. The blocks and
+   *  the mesh were made for the old one, so they go. */
+  const takeLatestGeometry = () => {
+    setBlocking(null);
+    setMeshData(null);
+    setMeshError(null);
+    meshSigRef.current = null;
+    meshCoreSigRef.current = null;
+    clearResultsCache();
+    setMeshGeom(null);
+    toast.success('Latest geometry loaded', {
+      id: 'edit-notice',
+      description:
+        meshTopology === 'structured'
+          ? 'Build the blocks again, then generate the mesh.'
+          : 'Generate the mesh again.',
+    });
+  };
 
   const stageStatus: Partial<
     Record<StageId, { locked: boolean; reason?: string; missing?: string[] }>
@@ -598,8 +661,8 @@ export function App({
       setMeshError,
       clearResultsCache,
       state,
-      cadEntities,
-      edgeTagMap,
+      cadEntities: meshEntities,
+      edgeTagMap: meshTags,
       flowType,
       meshSigRef,
       geomSignature,
@@ -613,7 +676,7 @@ export function App({
   // Manual (ICEM-style) blocking: one block around all the geometry, which the
   // user then splits, deletes, associates and O-grids on the canvas.
   const handleInitializeBlocking = () => {
-    const bk = initializeBlocking(cadEntities);
+    const bk = initializeBlocking(meshEntities);
     if (!bk) {
       toast.error('Nothing to block', { description: 'Draw or import geometry first.' });
       return;
@@ -1248,6 +1311,12 @@ export function App({
                 displayOnly={activeStage !== 'geometry'}
                 meshData={effectiveMesh}
                 meshStale={meshStale}
+                frozenEntities={
+                  activeStage !== 'geometry' && geometryChanged && meshGeom
+                    ? meshGeom.entities
+                    : undefined
+                }
+                onTakeLatestGeometry={activeStage === 'mesh' ? takeLatestGeometry : undefined}
                 blocking={blocking}
                 blocksBuiltTick={blocksBuiltTick}
                 onUpdateBlocking={handleUpdateBlocking}
@@ -1288,7 +1357,7 @@ export function App({
                 setAngleOfAttackDeg={setAngleOfAttackDeg}
                 freestreamVelocity={freestreamVelocity}
                 activeTagTool={activeTagTool}
-                edgeTagMap={edgeTagMap}
+                edgeTagMap={activeStage === 'geometry' ? edgeTagMap : meshTags}
                 onSetEdgeTagMap={setEdgeTagMap}
                 onEntitiesChange={setCadEntities}
                 onRequestGenerateDomainRef={requestGenerateDomainRef}

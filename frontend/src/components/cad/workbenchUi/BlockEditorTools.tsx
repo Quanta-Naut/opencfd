@@ -77,6 +77,7 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
       )}
       {editing && (
         <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1.5">
+          {p.notice}
           {blockTool !== 'select' && (
             <BlockToolDialog
               blockTool={blockTool}
@@ -129,6 +130,8 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
 }
 
 export interface BlockEditorToolsProps {
+  /** Shown first in the top-right column (the geometry-changed notice). */
+  notice?: React.ReactNode;
   displayOnly: boolean;
   showBlocking: boolean;
   canvasMode: 'cad' | 'mesh';

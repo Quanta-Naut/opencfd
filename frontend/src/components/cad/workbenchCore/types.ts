@@ -157,6 +157,11 @@ export interface CadWorkbenchProps {
   activeField?: string;
   colormap?: string;
   meshStale?: boolean;
+  /** Outside the Geometry tab: the geometry the blocks and mesh were made
+   *  from, shown instead of the live one when they differ. */
+  frozenEntities?: CadEntity[];
+  /** Mesh tab: offer the latest geometry (it clears blocks and mesh). */
+  onTakeLatestGeometry?: () => void;
   domainBroken?: boolean;
   isMeshing?: boolean;
   blocking?: Blocking | null;

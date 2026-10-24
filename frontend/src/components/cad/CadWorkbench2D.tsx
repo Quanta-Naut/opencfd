@@ -88,6 +88,7 @@ import { ViewModeBar } from './workbenchUi/ViewModeBar';
 import { DraftingStrip } from './workbenchUi/DraftingStrip';
 import { ToolRail } from './workbenchUi/ToolRail';
 import { TransformDialog, GizmoValues } from './workbenchUi/TransformDialog';
+import { GeometryNotice } from './workbenchUi/GeometryNotice';
 import { useTransformCommand, isTransformTool } from './workbenchUi/useTransformCommand';
 import { autoCenterInitialGeometry } from './workbenchView/camera';
 import { buildGlScene } from './workbenchView/meshScene';
@@ -147,6 +148,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   activeField = 'U_mag',
   colormap = 'coolwarm',
   meshStale = false,
+  frozenEntities,
+  onTakeLatestGeometry,
   domainBroken = false,
   isMeshing = false,
   blocking = null,
@@ -213,33 +216,40 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const prevBlockingRef = useRef<Blocking | null>(blocking);
   const lastEditRef = useRef<'cad' | 'blocks'>('cad');
 
-  const [cadState, dispatch] = useReducer(cadReducer, {
+  const [liveCad, dispatch] = useReducer(cadReducer, {
     entities: initialEntities && initialEntities.length > 0 ? initialEntities : [],
   });
+  // Outside the Geometry tab the canvas shows the geometry the blocks and
+  // mesh were made from (frozenEntities) when it differs from the live one.
+  // Edits and the Geometry-tab actions always work on the live geometry.
+  const cadState = useMemo(
+    () => (displayOnly && frozenEntities ? { entities: frozenEntities } : liveCad),
+    [displayOnly, frozenEntities, liveCad],
+  );
 
   // Sync initial entities if provided when local state is empty
   useEffect(() => {
-    if (initialEntities && initialEntities.length > 0 && cadState.entities.length === 0) {
+    if (initialEntities && initialEntities.length > 0 && liveCad.entities.length === 0) {
       dispatch({ type: 'REPLACE_ENTITIES', entities: initialEntities });
     }
   }, [initialEntities]);
 
-  // Whenever cadState changes, push to history & notify parent
+  // Whenever liveCad changes, push to history & notify parent
   useEffect(() => {
     const h = historyRef.current;
     const idx = historyIdxRef.current;
     if (draggingDomainHandleRef.current && idx >= 0) {
       // Overwrite current history frame during continuous drag to prevent undo stack bloating
-      h[idx] = { entities: cadState.entities.map((e) => ({ ...e })) };
+      h[idx] = { entities: liveCad.entities.map((e) => ({ ...e })) };
     } else {
       // Truncate forward history on new action
       h.splice(idx + 1);
-      h.push({ entities: cadState.entities.map((e) => ({ ...e })) });
+      h.push({ entities: liveCad.entities.map((e) => ({ ...e })) });
       historyIdxRef.current = h.length - 1;
       if (h.length > 1) lastEditRef.current = 'cad'; // a real CAD edit (not the first seed)
     }
-    onEntitiesChange?.(cadState.entities);
-  }, [cadState.entities, onEntitiesChange]);
+    onEntitiesChange?.(liveCad.entities);
+  }, [liveCad.entities, onEntitiesChange]);
 
   const undo = useCallback(() => {
     if (historyIdxRef.current <= 0) return;
@@ -1333,6 +1343,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   // ── Computed Bounding Box & Domain / Boundary Validations ──────────────────
   const geometryBBox = useMemo(() => getGeometryBBox(cadState.entities), [cadState.entities]);
+  const liveBBox = useMemo(() => getGeometryBBox(liveCad.entities), [liveCad.entities]);
 
   const domainEntity = useMemo(
     () => cadState.entities.find((e) => e.role === 'domain_boundary') || null,
@@ -1364,14 +1375,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // Whenever domain factors, shape, or geometry bounding box change, update the domain entity points in real time
   useEffect(() => {
     if (flowType !== 'external') return;
-    const existingDomain = cadState.entities.find((e) => e.role === 'domain_boundary');
+    const existingDomain = liveCad.entities.find((e) => e.role === 'domain_boundary');
     // Only a "Generate domain" far-field loop tracks the sliders. A hand-drawn
     // loop pinned as the domain must be left exactly as the user drew it.
     if (!existingDomain || !existingDomain.autoDomain) return;
 
     const updatedDomain = createDomainEntity(
       domainShape,
-      geometryBBox,
+      liveBBox,
       upstreamChordFactor,
       downstreamChordFactor,
       lateralHeightFactor,
@@ -1390,7 +1401,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     if (ptsChanged) {
       dispatch({
         type: 'REPLACE_ENTITIES',
-        entities: cadState.entities.map((e) =>
+        entities: liveCad.entities.map((e) =>
           e.id === existingDomain.id ? { ...updatedDomain, selected: e.selected } : e,
         ),
       });
@@ -1401,8 +1412,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     downstreamChordFactor,
     lateralHeightFactor,
     flowType,
-    geometryBBox,
-    cadState.entities,
+    liveBBox,
+    liveCad.entities,
   ]);
 
   // ── Internal flow has no outer domain ───────────────────────────────────────
@@ -1411,9 +1422,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // geometry (for internal flow the drawn walls ARE the boundary).
   useEffect(() => {
     if (flowType !== 'internal') return;
-    if (!cadState.entities.some((e) => e.role === 'domain_boundary')) return;
+    if (!liveCad.entities.some((e) => e.role === 'domain_boundary')) return;
     const next: CadEntity[] = [];
-    for (const e of cadState.entities) {
+    for (const e of liveCad.entities) {
       if (e.role !== 'domain_boundary') {
         next.push(e);
         continue;
@@ -1425,7 +1436,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       next.push(rest);
     }
     dispatch({ type: 'REPLACE_ENTITIES', entities: next });
-  }, [flowType, cadState.entities]);
+  }, [flowType, liveCad.entities]);
 
   // Clear a stale domain-handle hover once the domain is gone.
   useEffect(() => {
@@ -2257,7 +2268,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // ── Apply fillet ─────────────────────────────────────────────────────────────
   const applyFillet = async () => {
     setIsLoading(true);
-    const updated = [...cadState.entities];
+    const updated = [...liveCad.entities];
     for (let i = 0; i < updated.length; i++) {
       if (updated[i].pts.length >= 3) {
         try {
@@ -2278,7 +2289,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   const applyOffset = async () => {
     setIsLoading(true);
-    const updated = [...cadState.entities];
+    const updated = [...liveCad.entities];
     for (let i = 0; i < updated.length; i++) {
       if (updated[i].pts.length >= 2) {
         try {
@@ -2302,7 +2313,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const handleGenerateDomain = useCallback(
     () =>
       generateDomain({
-        cadState,
+        cadState: liveCad,
         domainShape,
         geometryBBox,
         upstreamChordFactor,
@@ -2319,13 +2330,13 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       upstreamChordFactor,
       downstreamChordFactor,
       lateralHeightFactor,
-      cadState.entities,
+      liveCad.entities,
       fitBoundingBox,
     ],
   );
 
   const handleSetSelectedAsDomain = useCallback(() => {
-    const selIds = new Set(cadState.entities.filter((e) => e.selected).map((e) => e.id));
+    const selIds = new Set(liveCad.entities.filter((e) => e.selected).map((e) => e.id));
     if (selIds.size === 0) {
       setCmdText(
         'DOMAIN: Select the loop (or all its segments) first, then click "Use selected loop as the domain".',
@@ -2333,7 +2344,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       toast.info('Select the boundary loop on the canvas first');
       return;
     }
-    const updated = cadState.entities.map((e) => {
+    const updated = liveCad.entities.map((e) => {
       if (selIds.has(e.id)) {
         // Manual domain: never gets autoDomain, so it is never regenerated.
         const { autoDomain, ...rest } = e;
@@ -2351,17 +2362,17 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       `DOMAIN: ${selIds.size} ${selIds.size === 1 ? 'edge' : 'edges'} set as the fluid domain boundary.`,
     );
     toast.success('Fluid domain defined');
-  }, [cadState.entities]);
+  }, [liveCad.entities]);
 
   const handleSetSelectedAsGeometry = useCallback(() => {
-    const selectedCount = cadState.entities.filter((e) => e.selected).length;
+    const selectedCount = liveCad.entities.filter((e) => e.selected).length;
     if (selectedCount === 0) {
       setCmdText(
         'GEOMETRY: Select one or more curves/entities on canvas first, then click "Set Selected as Geometry".',
       );
       return;
     }
-    const updated = cadState.entities.map((e) => {
+    const updated = liveCad.entities.map((e) => {
       if (e.selected) {
         return { ...e, role: 'geometry' as const, layer: 'geometry' as const };
       }
@@ -2369,29 +2380,29 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     });
     dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
     setCmdText(`GEOMETRY: ${selectedCount} entity/entities designated as CFD Obstacle Geometry.`);
-  }, [cadState.entities]);
+  }, [liveCad.entities]);
 
   const handleSelectAllGeometry = useCallback(() => {
-    const geomCount = cadState.entities.filter(
+    const geomCount = liveCad.entities.filter(
       (e) => e.layer !== 'construction' && e.role !== 'domain_boundary',
     ).length;
     if (geomCount === 0) {
       setCmdText('GEOMETRY: No obstacle geometry found on canvas.');
       return;
     }
-    const updated = cadState.entities.map((e) => ({
+    const updated = liveCad.entities.map((e) => ({
       ...e,
       selected: e.layer !== 'construction' && e.role !== 'domain_boundary',
     }));
     dispatch({ type: 'REPLACE_ENTITIES', entities: updated });
     setCmdText(`GEOMETRY: Selected ${geomCount} obstacle entities on canvas.`);
-  }, [cadState.entities]);
+  }, [liveCad.entities]);
 
   const handleClearGeometry = useCallback(() => {
-    const remaining = cadState.entities.filter((e) => e.role === 'domain_boundary');
+    const remaining = liveCad.entities.filter((e) => e.role === 'domain_boundary');
     dispatch({ type: 'REPLACE_ENTITIES', entities: remaining });
     setCmdText('GEOMETRY: Cleared all obstacle geometry from canvas.');
-  }, [cadState.entities]);
+  }, [liveCad.entities]);
 
   const handleAutoSuggestTags = useCallback(() => {
     const suggested = autoSuggestBoundaryTags(boundaryEdges, angleOfAttackDeg, flowType);
@@ -2404,7 +2415,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const handleMeshHandoff = useCallback(
     async () =>
       meshHandoff({
-        cadState,
+        cadState: liveCad,
         flowType,
         setCmdText,
         setIsLoading,
@@ -2416,7 +2427,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         cadName,
       }),
     [
-      cadState.entities,
+      liveCad.entities,
       flowType,
       domainLength,
       domainHeight,
@@ -2602,6 +2613,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   const selectedCount = cadState.entities.filter((e) => e.selected).length;
 
+  // Mesh tab: the geometry changed since the blocks / mesh were made. It sits
+  // at the top of the block editor's right-hand column when that is open.
+  const blockColumn = displayOnly && showBlocking && !!onUpdateBlocking && canvasMode === 'cad';
+  const geometryNotice =
+    displayOnly && frozenEntities && onTakeLatestGeometry ? (
+      <GeometryNotice structured={showBlocking} onUpdate={onTakeLatestGeometry} />
+    ) : null;
+
   return (
     <div className="relative w-full h-full flex flex-col bg-surface overflow-hidden">
       {/* ════════════════════ CANVAS ════════════════════════════════════════════ */}
@@ -2720,8 +2739,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           }}
         />
 
+        {geometryNotice && !blockColumn && (
+          <div className="absolute top-3 right-3 z-20">{geometryNotice}</div>
+        )}
         <BlockEditorTools
           {...{
+            notice: blockColumn ? geometryNotice : null,
             displayOnly,
             showBlocking,
             canvasMode,
