@@ -18,13 +18,31 @@ export function plotXY(
   ref: FlowReference,
 ): { xs: ArrayLike<number>; ys: ArrayLike<number> } {
   if (!data) return { xs: [], ys: [] };
+  const fields = withLineXY(plot, data);
   const ys =
-    fieldValues(data.fields, plot.variable, ref) ??
-    ('values' in data && data.values ? data.values : []);
+    fieldValues(fields, plot.variable, ref) ?? ('values' in data && data.values ? data.values : []);
   const xAxis = plot.xAxis ?? 'distance';
   const xs =
-    xAxis === 'distance' ? data.distance : (fieldValues(data.fields, xAxis, ref) ?? data.distance);
+    xAxis === 'distance' ? data.distance : (fieldValues(fields, xAxis, ref) ?? data.distance);
   return { xs, ys };
+}
+
+/** A line plot's samples with the point coordinates added, for calculator
+ *  fields that read x and y. */
+export function withLineXY(
+  plot: PlotDefinition,
+  data: PlotSamples | PlotSampleData,
+): Record<string, ArrayLike<number> | undefined> | undefined {
+  const f = data.fields;
+  if (!f || f.x || !plot.line) return f;
+  const [x1, y1] = plot.line.p1;
+  const [x2, y2] = plot.line.p2;
+  const L = Math.hypot(x2 - x1, y2 - y1) || 1;
+  return {
+    ...f,
+    x: data.distance.map((d) => x1 + ((x2 - x1) * d) / L),
+    y: data.distance.map((d) => y1 + ((y2 - y1) * d) / L),
+  };
 }
 
 /** Sample a line or boundary plot from another run (or re-sample its own). */

@@ -212,6 +212,8 @@ export interface PostProcessConfig {
   vectorSpacing: number;
   /** Probe points on the field, in model coordinates. */
   probes: { id: string; x: number; y: number }[];
+  /** Fields defined in the calculator. */
+  customFields: import('../utils/resultFields').CustomField[];
 }
 
 export interface SolverRunRecord {

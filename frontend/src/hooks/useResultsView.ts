@@ -4,6 +4,7 @@ import type { ResultsOverlay } from '../components/cad/workbenchCore';
 import {
   RESULT_FIELDS,
   fieldDef,
+  registerCustomFields,
   fieldValues,
   fmtValue,
   valueRange,
@@ -45,27 +46,45 @@ export function useResultsView(
   pp: PostProcessConfig,
   physics: PhysicsConfig,
 ) {
+  const custom = pp.customFields;
   const ref = useMemo<FlowReference>(() => {
     const compressible = physics.compressibility === 'compressible';
+    registerCustomFields(custom ?? []);
     return {
       compressible,
       rho: physics.density || 1.225,
       U: physics.inletVelocity || 1,
       p: compressible ? physics.inletPressure || 0 : 0,
+      nu: physics.kinematicViscosity || 1.5e-5,
+      custom: custom ?? [],
     };
-  }, [physics.compressibility, physics.density, physics.inletVelocity, physics.inletPressure]);
+  }, [
+    physics.compressibility,
+    physics.density,
+    physics.inletVelocity,
+    physics.inletPressure,
+    physics.kinematicViscosity,
+    custom,
+  ]);
 
-  const fields = fieldData?.fields;
+  // The solver fields plus the point coordinates, which calculator
+  // expressions can read as x and y.
+  const rawFields = fieldData?.fields;
+  const fields = useMemo(() => {
+    const nodes = mesh?.nodes;
+    if (!rawFields || !nodes?.length || rawFields.U_mag?.length !== nodes.length) return rawFields;
+    return { ...rawFields, x: nodes.map((n) => n[0]), y: nodes.map((n) => n[1]) };
+  }, [rawFields, mesh?.nodes]);
   const active = pp.activeField;
 
   /** Which fields this result can show (an older run has no Ux / Uy). */
   const available = useMemo(
     () =>
       new Set(
-        RESULT_FIELDS.filter((f) => {
-          const v = fieldValues(fields, f.id, ref);
+        [...RESULT_FIELDS.map((f) => f.id), ...(ref.custom ?? []).map((f) => f.id)].filter((id) => {
+          const v = fieldValues(fields, id, ref);
           return !!v && v.length > 0;
-        }).map((f) => f.id),
+        }),
       ),
     [fields, ref],
   );
@@ -170,5 +189,16 @@ export function useResultsView(
     [pp, available, probeRows, active, def],
   );
 
-  return { ref, available, displayFieldData, range, autoRange, overlay, probeRows, reports };
+  return {
+    ref,
+    available,
+    /** Solver fields plus x and y, for sampling boundaries and the calculator. */
+    allFields: fields,
+    displayFieldData,
+    range,
+    autoRange,
+    overlay,
+    probeRows,
+    reports,
+  };
 }

@@ -155,6 +155,7 @@ export function buildInitialCFDState(savedState: Partial<CFDProjectState> | unde
       contourLines: false,
       vectorSpacing: 28,
       probes: [],
+      customFields: [],
       ...(savedState?.postprocess || {}),
     },
     executionStatus: savedState?.executionStatus === 'completed' ? 'completed' : 'idle',

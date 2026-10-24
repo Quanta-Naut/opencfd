@@ -137,6 +137,8 @@ export function patchSamples(
     return c;
   });
   if (!chains.length) return null;
+  // Coordinates ride along, for calculator fields that read x and y.
+  fields = { x: N.map((n) => n[0]), y: N.map((n) => n[1]), ...fields };
   const names = Object.keys(fields).filter((k) => fields[k]);
   const out: { distance: number[]; fields: Record<string, number[]> } = {
     distance: [],

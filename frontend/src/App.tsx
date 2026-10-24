@@ -1035,7 +1035,7 @@ export function App({
       const mesh = effectiveMesh;
       const fd = effectiveFieldData;
       if (!mesh?.nodes?.length || !fd?.fields) return false;
-      const s = patchSamples(mesh, fd.fields, patch, axis);
+      const s = patchSamples(mesh, resultsView.allFields ?? fd.fields, patch, axis);
       if (!s || s.distance.length < 2) return false;
       const plot: PlotDefinition = {
         id: `plot_${Date.now().toString(36)}`,
@@ -1058,7 +1058,14 @@ export function App({
       handleCreatePlot(plot);
       return true;
     },
-    [effectiveMesh, effectiveFieldData, targetRunForPlot.id, resultsView.ref, handleCreatePlot],
+    [
+      effectiveMesh,
+      effectiveFieldData,
+      targetRunForPlot.id,
+      resultsView.ref,
+      resultsView.allFields,
+      handleCreatePlot,
+    ],
   );
 
   const handleSaveImage = useCallback(() => {

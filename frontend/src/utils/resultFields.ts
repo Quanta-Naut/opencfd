@@ -5,6 +5,11 @@
 // Pressure: an incompressible OpenFOAM run solves kinematic pressure p/rho
 // (m2/s2); a compressible one solves static pressure in Pa. Everything shown
 // is in Pa, scaled by the reference density where needed.
+//
+// Calculator fields (id `c:<name>`) are expressions over these, defined per
+// project and evaluated here like any derived field.
+
+import { evalExpr, exprVars, isExprError, parseExpr, type ExprNode } from './fieldExpr';
 
 export type ResultFieldId =
   | 'U_mag'
@@ -15,7 +20,19 @@ export type ResultFieldId =
   | 'p_total'
   | 'k'
   | 'omega'
-  | 'vorticity';
+  | 'vorticity'
+  | `c:${string}`;
+
+/** A field the user defined in the calculator. */
+export interface CustomField {
+  /** `c:` plus the name. */
+  id: `c:${string}`;
+  name: string;
+  unit: string;
+  expr: string;
+  /** Signed about zero: centre the colour range on 0. */
+  symmetric?: boolean;
+}
 
 export interface ResultFieldDef {
   id: ResultFieldId;
@@ -23,7 +40,7 @@ export interface ResultFieldDef {
   /** Short name for legends and tables. */
   short: string;
   unit: string;
-  group: 'Velocity' | 'Pressure' | 'Turbulence' | 'Derived';
+  group: 'Velocity' | 'Pressure' | 'Turbulence' | 'Derived' | 'Calculator';
   /** Signed about zero: the colour range is centred on 0. */
   symmetric?: boolean;
 }
@@ -47,7 +64,28 @@ export const RESULT_FIELDS: ResultFieldDef[] = [
   },
 ];
 
-export const fieldDef = (id: string): ResultFieldDef =>
+// Labels for calculator fields, for the many places that name a field by id
+// alone. Kept in step with the project's list by useResultsView.
+let customDefs: CustomField[] = [];
+export function registerCustomFields(list: CustomField[]): void {
+  customDefs = list;
+}
+
+export const fieldDef = (id: string): ResultFieldDef => {
+  const c = id.startsWith('c:') ? customDefs.find((f) => f.id === id) : undefined;
+  if (c)
+    return {
+      id: c.id,
+      label: c.name,
+      short: c.name,
+      unit: c.unit,
+      group: 'Calculator',
+      symmetric: c.symmetric,
+    };
+  return builtinDef(id);
+};
+
+const builtinDef = (id: string): ResultFieldDef =>
   RESULT_FIELDS.find((f) => f.id === id) ?? {
     id: id as ResultFieldId,
     label: id,
@@ -66,6 +104,87 @@ export interface FlowReference {
   /** Freestream static pressure in the solver's own units (0 for an
    *  incompressible run, Pa for a compressible one). */
   p: number;
+  /** Kinematic viscosity, m2/s. */
+  nu?: number;
+  /** The project's calculator fields. */
+  custom?: CustomField[];
+}
+
+/** What a calculator expression can read besides constants: the solver and
+ *  derived fields under short names, and the point coordinates. */
+export const EXPR_FIELDS: Record<string, string> = {
+  U: 'U_mag',
+  U_mag: 'U_mag',
+  Ux: 'Ux',
+  Uy: 'Uy',
+  p: 'p',
+  Cp: 'Cp',
+  p0: 'p_total',
+  k: 'k',
+  omega: 'omega',
+  vorticity: 'vorticity',
+  x: 'x',
+  y: 'y',
+};
+
+/** Freestream constants an expression can use. */
+export function exprConstants(ref: FlowReference): Record<string, number> {
+  return {
+    rho: ref.rho,
+    U_inf: ref.U,
+    p_inf: ref.compressible ? ref.p : 0,
+    q_inf: 0.5 * ref.rho * ref.U * ref.U,
+    nu: ref.nu ?? 1.5e-5,
+    pi: Math.PI,
+  };
+}
+
+const parsed = new Map<string, ReturnType<typeof parseExpr>>();
+function parseCached(src: string) {
+  let e = parsed.get(src);
+  if (!e) {
+    e = parseExpr(src);
+    if (parsed.size > 200) parsed.clear();
+    parsed.set(src, e);
+  }
+  return e;
+}
+
+/** Check an expression: the parse error, or the first name it does not know. */
+export function checkExpr(
+  src: string,
+  ref: FlowReference,
+): { ok: boolean; tree: ExprNode | null; error: { message: string; pos: number } | null } {
+  const e = parseCached(src);
+  if (isExprError(e)) return { ok: false, tree: null, error: e };
+  const consts = exprConstants(ref);
+  for (const [name, pos] of exprVars(e))
+    if (!(name in EXPR_FIELDS) && !(name in consts))
+      return { ok: false, tree: null, error: { message: `Unknown name "${name}"`, pos } };
+  return { ok: true, tree: e, error: null };
+}
+
+/** Evaluate an expression over a set of fields; null if it does not parse or
+ *  reads a field this data does not have. */
+export function evaluateExpr(
+  src: string,
+  fields: Record<string, Arr | undefined>,
+  ref: FlowReference,
+): Float64Array | null {
+  const c = checkExpr(src, ref);
+  if (!c.tree) return null;
+  const vars: Record<string, number | Arr> = { ...exprConstants(ref) };
+  let n = -1;
+  for (const name of exprVars(c.tree).keys()) {
+    const id = EXPR_FIELDS[name];
+    if (!id) continue;
+    const v = id === 'x' || id === 'y' ? fields[id] : fieldValues(fields, id, ref);
+    if (!v) return null;
+    vars[name] = v;
+    n = v.length;
+  }
+  if (n < 0) n = (fields.U_mag ?? fields.p)?.length ?? 0;
+  return evalExpr(c.tree, vars, n);
 }
 
 type Arr = ArrayLike<number>;
@@ -84,6 +203,10 @@ export function fieldValues(
   // Solver pressure to Pa: kinematic pressure times density.
   const toPa = ref.compressible ? 1 : ref.rho;
   const q = 0.5 * ref.rho * ref.U * ref.U;
+  if (id.startsWith('c:')) {
+    const def = ref.custom?.find((f) => f.id === id);
+    return def ? evaluateExpr(def.expr, fields, ref) : null;
+  }
   switch (id) {
     case 'p': {
       if (!p) return null;

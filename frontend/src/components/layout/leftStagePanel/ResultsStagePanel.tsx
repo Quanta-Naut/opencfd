@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, Crosshair, ImageDown, Plus, X } from 'lucide-react';
+import { Calculator, ChevronDown, Crosshair, ImageDown, Pencil, Plus, X } from 'lucide-react';
 import type { StageId, StageStatus } from '../stages';
 import { CFDProjectState, PostProcessConfig } from '../../../types/cfd';
 import { StageGate } from './StageGate';
@@ -7,7 +7,15 @@ import { NumberField } from './NumberField';
 import { Tooltip } from '../../ui/Tooltip';
 import { toast } from '../../ui/Toast';
 import { colormapRGB } from '../../cad/workbenchCore';
-import { RESULT_FIELDS, fieldDef, fmtValue, type ResultFieldId } from '../../../utils/resultFields';
+import {
+  RESULT_FIELDS,
+  fieldDef,
+  fmtValue,
+  type CustomField,
+  type FlowReference,
+  type ResultFieldId,
+} from '../../../utils/resultFields';
+import { FieldCalculatorDialog } from '../../results/FieldCalculatorDialog';
 import type { ProbeRow } from '../../../hooks/useResultsView';
 import type { PatchReport } from '../../../utils/boundaryData';
 
@@ -112,6 +120,8 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const [bPatch, setBPatch] = useState('');
   const [bVar, setBVar] = useState<ResultFieldId>('Cp');
   const [bAxis, setBAxis] = useState<'x' | 'y' | 's'>('x');
+  // Calculator dialog: closed, a new field (null) or the field being edited.
+  const [calc, setCalc] = useState<CustomField | null | undefined>(undefined);
 
   if (activeStage !== 'results') return null;
   if (stageStatus?.results?.locked)
@@ -130,6 +140,24 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const flows = view.reports.filter((r) => r.flow !== null);
   const inflow = flows.reduce((s, r) => s + Math.min(0, r.flow!), 0);
   const net = flows.reduce((s, r) => s + r.flow!, 0);
+  const custom = pp.customFields ?? [];
+  const allIds: ResultFieldId[] = [...RESULT_FIELDS.map((f) => f.id), ...custom.map((f) => f.id)];
+  const saveCustom = (f: CustomField) => {
+    const exists = custom.some((c) => c.id === f.id);
+    set({
+      customFields: exists ? custom.map((c) => (c.id === f.id ? f : c)) : [...custom, f],
+      // A new field is what you want to look at.
+      ...(exists ? {} : { activeField: f.id }),
+    });
+    setCalc(undefined);
+  };
+  const removeCustom = (f: CustomField) => {
+    if (!confirm(`Delete the calculator field "${f.name}"?`)) return;
+    set({
+      customFields: custom.filter((c) => c.id !== f.id),
+      ...(pp.activeField === f.id ? { activeField: 'U_mag' as ResultFieldId } : {}),
+    });
+  };
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -163,6 +191,17 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
                   ))}
                 </optgroup>
               ))}
+              {custom.length > 0 && (
+                <optgroup label="Calculator">
+                  {custom.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                      {f.unit ? ` (${f.unit})` : ''}
+                      {p.hasField && !view.available.has(f.id) ? ' - not in this run' : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
 
@@ -293,6 +332,77 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
           />
         </Section>
 
+        <Section
+          id="calculator"
+          title="Calculator"
+          open={open}
+          setOpen={setOpen}
+          aside={
+            <Tooltip content="New calculator field" delay={300}>
+              <button
+                type="button"
+                aria-label="New calculator field"
+                onClick={() => setCalc(null)}
+                className="p-0.5 rounded-sm text-fg-2 hover:text-fg hover:bg-surface-2"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </Tooltip>
+          }
+        >
+          {custom.length === 0 ? (
+            <button type="button" onClick={() => setCalc(null)} className={ghostBtn}>
+              <Calculator className="w-3.5 h-3.5" />
+              New field from an expression
+            </button>
+          ) : (
+            <ul className="space-y-1">
+              {custom.map((f) => {
+                const on = pp.activeField === f.id;
+                return (
+                  <li
+                    key={f.id}
+                    className={`group flex items-center gap-1.5 rounded-sm border px-2 py-1 ${
+                      on ? 'bg-accent-soft border-accent-line' : 'border-line bg-surface'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => set({ activeField: f.id })}
+                      title="Show as contours"
+                      className="flex-1 min-w-0 text-left"
+                    >
+                      <div
+                        className={`text-[11px] font-medium truncate ${on ? 'text-accent-fg' : 'text-fg'}`}
+                      >
+                        {f.name}
+                        {f.unit && <span className="text-fg-3 font-normal"> {f.unit}</span>}
+                      </div>
+                      <div className="text-[10px] font-mono text-fg-2 truncate">{f.expr}</div>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Edit ${f.name}`}
+                      onClick={() => setCalc(f)}
+                      className="p-0.5 text-fg-3 hover:text-fg"
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${f.name}`}
+                      onClick={() => removeCustom(f)}
+                      className="p-0.5 text-fg-3 hover:text-danger"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Section>
+
         <Section id="overlays" title="Overlays" open={open} setOpen={setOpen}>
           <Check
             label="Mesh"
@@ -394,23 +504,21 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
               </div>
               {r.values ? (
                 <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 mt-1 text-[10px]">
-                  {RESULT_FIELDS.filter((f) => r.values![f.id] !== undefined).map((f) => (
-                    <React.Fragment key={f.id}>
-                      <dt
-                        className={f.id === pp.activeField ? 'text-fg font-semibold' : 'text-fg-2'}
-                      >
-                        {f.short}
-                      </dt>
-                      <dd
-                        className={`font-mono text-right ${
-                          f.id === pp.activeField ? 'text-fg font-semibold' : 'text-fg-2'
-                        }`}
-                      >
-                        {fmtValue(r.values![f.id]!)}
-                        {f.unit ? ` ${f.unit}` : ''}
-                      </dd>
-                    </React.Fragment>
-                  ))}
+                  {allIds
+                    .filter((id) => r.values![id] !== undefined)
+                    .map((id) => {
+                      const f = fieldDef(id);
+                      const cls = id === pp.activeField ? 'text-fg font-semibold' : 'text-fg-2';
+                      return (
+                        <React.Fragment key={id}>
+                          <dt className={`${cls} truncate`}>{f.short}</dt>
+                          <dd className={`font-mono text-right ${cls}`}>
+                            {fmtValue(r.values![id]!)}
+                            {f.unit ? ` ${f.unit}` : ''}
+                          </dd>
+                        </React.Fragment>
+                      );
+                    })}
                 </dl>
               ) : (
                 <p className="mt-1 text-[10px] text-fg-3">Outside the mesh.</p>
@@ -531,12 +639,15 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
                 onChange={(e) => setBVar(e.target.value as ResultFieldId)}
                 className={select}
               >
-                {RESULT_FIELDS.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.short}
-                    {f.unit ? ` (${f.unit})` : ''}
-                  </option>
-                ))}
+                {allIds.map((id) => {
+                  const f = fieldDef(id);
+                  return (
+                    <option key={id} value={id}>
+                      {f.short}
+                      {f.unit ? ` (${f.unit})` : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
             <div className="flex items-center gap-1">
@@ -606,6 +717,16 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
           Open in ParaView
         </button>
       </div>
+
+      <FieldCalculatorDialog
+        open={calc !== undefined}
+        initial={calc ?? null}
+        takenNames={custom.filter((c) => c.id !== calc?.id).map((c) => c.name)}
+        fields={p.hasField ? view.allFields : undefined}
+        flowRef={view.ref}
+        onSave={saveCustom}
+        onClose={() => setCalc(undefined)}
+      />
     </div>
   );
 }
@@ -625,6 +746,8 @@ export interface ResultsStagePanelProps {
     autoRange: [number, number] | null;
     probeRows: ProbeRow[];
     reports: PatchReport[];
+    ref: FlowReference;
+    allFields: Record<string, ArrayLike<number> | undefined> | undefined;
   };
   patches: string[];
   probePicking: boolean;

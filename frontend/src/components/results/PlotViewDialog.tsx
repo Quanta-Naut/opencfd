@@ -21,7 +21,7 @@ import {
   monitorResidualsFor,
   runLabel,
 } from './PlotThumbnail';
-import { loadPlotSamples, plotXLabel, plotXY, type PlotSamples } from './plotData';
+import { loadPlotSamples, plotXLabel, plotXY, withLineXY, type PlotSamples } from './plotData';
 import { RESULT_FIELDS, fieldValues, type FlowReference } from '../../utils/resultFields';
 import { toast } from '../ui/Toast';
 
@@ -239,11 +239,16 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   }, [plot, isMonitor, shownRuns.join(','), solverRuns, monitorX, loaded, flowRef, multi]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fields this plot's samples can show, raw or derived.
+  // Built-in fields, then the project's calculator fields.
+  const fieldIds = useMemo<FlowVariable[]>(
+    () => [...RESULT_FIELDS.map((f) => f.id), ...(flowRef.custom ?? []).map((f) => f.id)],
+    [flowRef],
+  );
   const available = useMemo(() => {
-    const f = plot?.data?.fields;
-    if (!f) return null;
-    return new Set(RESULT_FIELDS.filter((d) => fieldValues(f, d.id, flowRef)).map((d) => d.id));
-  }, [plot?.data?.fields, flowRef]);
+    if (!plot?.data?.fields) return null;
+    const f = withLineXY(plot, plot.data);
+    return new Set(fieldIds.filter((id) => fieldValues(f, id, flowRef)));
+  }, [plot, fieldIds, flowRef]);
 
   const isResidualMonitor =
     isMonitor && (plot?.monitorFields ?? []).some((f) => f.startsWith('residual_'));
@@ -288,7 +293,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
 
   const handleVariableChange = (newVar: FlowVariable) => {
     // Computable from the cached samples: switch instantly.
-    const vals = fieldValues(plot.data?.fields, newVar, flowRef);
+    const vals = plot.data ? fieldValues(withLineXY(plot, plot.data), newVar, flowRef) : null;
     if (vals && plot.data) {
       onUpdatePlot({ ...plot, variable: newVar, data: { ...plot.data, values: Array.from(vals) } });
       return;
@@ -611,11 +616,13 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                 className="px-2.5 py-1 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
                 <option value="distance">{plotXLabel(plot)}</option>
-                {RESULT_FIELDS.filter((v) => !available || available.has(v.id)).map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {getVariableLabel(v.id)}
-                  </option>
-                ))}
+                {fieldIds
+                  .filter((id) => !available || available.has(id))
+                  .map((id) => (
+                    <option key={id} value={id}>
+                      {getVariableLabel(id)}
+                    </option>
+                  ))}
               </select>
             </div>
 
@@ -628,9 +635,9 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                 onChange={(e) => handleVariableChange(e.target.value as FlowVariable)}
                 className="px-2.5 py-1 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
-                {RESULT_FIELDS.map((v) => (
-                  <option key={v.id} value={v.id} disabled={!!available && !available.has(v.id)}>
-                    {getVariableLabel(v.id)}
+                {fieldIds.map((id) => (
+                  <option key={id} value={id} disabled={!!available && !available.has(id)}>
+                    {getVariableLabel(id)}
                   </option>
                 ))}
               </select>
