@@ -367,7 +367,7 @@ class OpenFoamAdapter(SolverAdapter):
         tail: List[str] = []
         # live cell-based field preview: poll the newest written time dir every
         # few seconds and push it to the viewer while the solve runs.
-        preview_mesh = config.get("mesh") if config.get("mesh", {}).get("nodes") else None
+        preview_mesh = config.get("mesh") if (config.get("mesh") or {}).get("nodes") else None
         loop = asyncio.get_event_loop()
         last_preview_time = ""
         next_preview_at = time.monotonic() + 4.0

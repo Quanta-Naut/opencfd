@@ -307,7 +307,12 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
 
         gmsh.option.setNumber("Mesh.RecombineAll", 1)
         gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 1)
-        gmsh.option.setNumber("Mesh.Smoothing", 6)
+        # No Gmsh smoothing: on a transfinite surface it evens out the interior
+        # spacing while the boundary nodes keep the edge distribution, so the
+        # first row bends to meet every clustered edge. In long thin cells (a
+        # wake) that bend made ~90 deg non-orthogonal faces and the solver
+        # diverged. The elliptic passes below keep a result only if it is better.
+        gmsh.option.setNumber("Mesh.Smoothing", 0)
         gmsh.model.mesh.generate(2)
 
         node_tags, coords, _ = gmsh.model.mesh.getNodes()

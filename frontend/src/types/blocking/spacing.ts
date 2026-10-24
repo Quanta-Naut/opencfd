@@ -13,6 +13,9 @@ import { propagateNodeCounts } from './sizing';
 /** Above this end-cell ratio across a join the vertex is flagged. */
 export const SPACING_JUMP_LIMIT = 2;
 
+/** Largest cell-to-cell growth along an edge that Sync spacings will make. */
+const SYNC_MAX_GROWTH = 1.5;
+
 export interface SpacingJump {
   vid: string;
   /** Larger / smaller end cell of the two edges meeting there. */
@@ -227,7 +230,9 @@ export function cellsToFill(
  * Pointwise "Sync Spacings" over the whole blocking: wherever a grid line
  * jumps in cell size across a block join, the coarse edge takes the fine
  * edge's cell size at that end. Repeats, since one fix can shift a jump
- * along the line, and reports what is left.
+ * along the line, and reports what is left. An edge too short for its node
+ * count to grade down to the fine size is left alone: the jump would only
+ * move inside it, between its own cells.
  */
 export function syncSpacings(
   bk: Blocking,
@@ -235,8 +240,9 @@ export function syncSpacings(
 ): { blocking: Blocking; fixed: number; left: number } {
   let out = bk;
   let fixed = 0;
+  const skip = new Set<string>();
   for (let pass = 0; pass < 6; pass++) {
-    const jumps = spacingJumps(out, limit);
+    const jumps = spacingJumps(out, limit).filter((j) => !skip.has(`${j.coarse}@${j.vid}`));
     if (!jumps.length) break;
     const cells = endCells(out);
     for (const j of jumps) {
@@ -245,14 +251,34 @@ export function syncSpacings(
       if (!coarse || !fine) continue;
       const fc = cells.get(fine.id)!;
       const size = Number((fine.v0 === j.vid ? fc.at0 : fc.at1).toPrecision(3));
-      out = setEdgeParams(out, coarse.id, {
+      const trial = setEdgeParams(out, coarse.id, {
         law: coarse.law === 'tanh' || coarse.law === 'bigeometric' ? coarse.law : 'bigeometric',
         [coarse.v0 === j.vid ? 'spacing1' : 'spacing2']: size,
       });
+      if (growthWithin(trial, coarse.id) > SYNC_MAX_GROWTH) {
+        skip.add(`${j.coarse}@${j.vid}`);
+        continue;
+      }
+      out = trial;
       fixed++;
     }
   }
   return { blocking: out, fixed, left: spacingJumps(out, limit).length };
+}
+
+/** Largest size ratio between neighbouring cells along one edge. */
+function growthWithin(bk: Blocking, edgeId: string): number {
+  const e = bk.edges.find((x) => x.id === edgeId)!;
+  const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
+  const em = new Map(bk.edges.map((x) => [x.id, x] as const));
+  const st = edgeStations(bk, e, Infinity, vm, em);
+  let worst = 1;
+  for (let k = 1; k + 1 < st.length; k++) {
+    const a = st[k] - st[k - 1],
+      b = st[k + 1] - st[k];
+    if (a > 0 && b > 0) worst = Math.max(worst, a / b, b / a);
+  }
+  return worst;
 }
 
 /**
