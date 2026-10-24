@@ -753,31 +753,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   const [isLoading, setIsLoading] = useState(false);
   const [cmdText, setCmdText] = useState('Pick a tool or press L / P / R / C to start drawing.');
-  const [meshToastVisible, setMeshToastVisible] = useState(false);
-  const [meshProgress, setMeshProgress] = useState(0);
-  const meshWasActiveRef = useRef(false);
-
-  useEffect(() => {
-    if (isMeshing) {
-      meshWasActiveRef.current = true;
-      setMeshToastVisible(true);
-      setMeshProgress((value) => Math.max(value, 8));
-      const progressTimer = window.setInterval(() => {
-        setMeshProgress((value) => Math.min(94, value + Math.max(0.5, (94 - value) * 0.06)));
-      }, 140);
-      return () => window.clearInterval(progressTimer);
-    }
-
-    if (meshWasActiveRef.current) {
-      setMeshProgress(100);
-      const fadeTimer = window.setTimeout(() => {
-        setMeshToastVisible(false);
-        setMeshProgress(0);
-        meshWasActiveRef.current = false;
-      }, 2000);
-      return () => window.clearTimeout(fadeTimer);
-    }
-  }, [isMeshing]);
 
   // ── HUD ─────────────────────────────────────────────────────────────────────
   const [hud, setHud] = useState({ length: '0.000', angle: '0.0', x: '0.0000', y: '0.0000' });
@@ -2039,7 +2014,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setCmdText(
         'DOMAIN: Select the loop (or all its segments) first, then click "Use selected loop as the domain".',
       );
-      toast('Select the boundary loop on the canvas first.', 'info');
+      toast.info('Select the boundary loop on the canvas first');
       return;
     }
     const updated = cadState.entities.map((e) => {
@@ -2059,7 +2034,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     setCmdText(
       `DOMAIN: ${selIds.size} ${selIds.size === 1 ? 'edge' : 'edges'} set as the fluid domain boundary.`,
     );
-    toast('Fluid domain defined.', 'success');
+    toast.success('Fluid domain defined');
   }, [cadState.entities]);
 
   const handleSetSelectedAsGeometry = useCallback(() => {
@@ -2525,25 +2500,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           hoveredVertex,
         }}
       />
-
-      {meshToastVisible && (
-        <div className="absolute right-4 bottom-10 z-40 w-72 rounded border border-accent-line bg-surface px-3.5 py-3 pointer-events-none">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-fg">
-              {meshProgress >= 100 ? 'Mesh complete' : 'Generating mesh'}
-            </span>
-            <span className="text-xs font-mono font-semibold text-accent">
-              {Math.round(meshProgress)}%
-            </span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-accent-soft">
-            <div
-              className="h-full rounded-full bg-accent transition-[width] duration-150 ease-out"
-              style={{ width: `${meshProgress}%` }}
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -19,7 +19,10 @@ export function scheduleAutosave(wb: AutosaveContext) {
         console.warn('Project autosave note:', err);
         if (!saveWarned.current) {
           saveWarned.current = true;
-          toast('Could not autosave - check the backend connection.', 'error', 6000);
+          toast.error('Autosave failed', {
+            id: 'autosave',
+            description: 'Check the backend connection. Your work is kept in this window.',
+          });
         }
       });
   }, delay);

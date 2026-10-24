@@ -218,7 +218,7 @@ export function useSolverRun(params: {
         setCaseFiles(dicts);
       }
     } catch (e: any) {
-      toast(`Could not write the case files: ${e?.message ?? e}`, 'error');
+      toast.error('Could not write the case files', { description: String(e?.message ?? e) });
     }
 
     // The backend reads the mesh from the project instead of receiving it in
@@ -307,7 +307,7 @@ export function useSolverRun(params: {
             `[OpenFOAM] Run finished (${msg.iterations ?? '-'} iterations).`,
           ],
         }));
-        toast('Solver run finished.', 'success');
+        toast.success('Solver run finished', { id: 'solver-run' });
         void loadResults(true);
       } else if (msg.type === 'error') {
         finalizeRun('error');
@@ -316,12 +316,14 @@ export function useSolverRun(params: {
           executionStatus: 'error',
           terminalLogs: [...prev.terminalLogs, `[Error] ${msg.message}`],
         }));
-        toast(msg.message, 'error');
+        toast.error('Solver run failed', { id: 'solver-run', description: msg.message });
         // A diverged / stopped run still wrote partial fields - refresh the
         // Results tab from them instead of leaving the previous run's data.
         if (msg.results_available) {
           void loadResults(true);
-          toast('Loaded the partial fields from the last written step.', 'info', 6000);
+          toast.info('Partial results loaded', {
+            description: 'From the last time step the solver wrote.',
+          });
         }
       }
     };
@@ -336,7 +338,10 @@ export function useSolverRun(params: {
           '[Error] Could not reach the solver stream (backend down?).',
         ],
       }));
-      toast('Could not reach the solver stream.', 'error');
+      toast.error('Lost the solver connection', {
+        id: 'solver-run',
+        description: 'Check that the backend is running.',
+      });
     };
     // Deliberately narrow deps: this recreates the closure each render like the
     // original inline handler did (it always reads the latest `state` etc. via

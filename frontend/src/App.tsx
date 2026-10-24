@@ -488,7 +488,10 @@ export function App({
         console.warn('Project autosave note:', err);
         if (!saveWarned.current) {
           saveWarned.current = true;
-          toast('Could not autosave - check the backend connection.', 'error', 6000);
+          toast.error('Autosave failed', {
+            id: 'autosave',
+            description: 'Check the backend connection. Your work is kept in this window.',
+          });
         }
       });
     }, 600);
@@ -560,19 +563,21 @@ export function App({
     if (notice && notice !== lastEditNoticeRef.current) {
       lastEditNoticeRef.current = notice;
       if (notice === 'both')
-        toast(
-          'Domain boundary broke and the mesh is now out of date. Reselect the outline in the Domain step, then regenerate the mesh.',
-          'error',
-          8000,
-        );
+        toast.error('Domain boundary broke', {
+          id: 'edit-notice',
+          description:
+            'An edge changed and the mesh is out of date. Reselect the outline in the Domain step, then regenerate the mesh.',
+        });
       else if (notice === 'domain')
-        toast(
-          'Domain boundary broke - an edge changed. Reselect the outline in the Domain step and redefine it.',
-          'error',
-          8000,
-        );
+        toast.error('Domain boundary broke', {
+          id: 'edit-notice',
+          description: 'An edge changed. Reselect the outline in the Domain step and redefine it.',
+        });
       else
-        toast('Geometry changed since the mesh was made - regenerate to update it.', 'info', 5000);
+        toast.warning('Mesh is out of date', {
+          id: 'edit-notice',
+          description: 'The geometry changed since it was made. Regenerate to update it.',
+        });
     }
     if (!notice) lastEditNoticeRef.current = '';
   }, [domainState, meshData, geomSigCore]);
@@ -653,12 +658,12 @@ export function App({
   const handleInitializeBlocking = () => {
     const bk = initializeBlocking(cadEntities);
     if (!bk) {
-      toast('No geometry to block.', 'error');
+      toast.error('Nothing to block', { description: 'Draw or import geometry first.' });
       return;
     }
     setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
     setBlocking(bk);
-    toast('Initialized 1 block.', 'success');
+    toast.success('Created 1 block');
   };
 
   const ogridBodies = useMemo(
@@ -675,18 +680,15 @@ export function App({
       ...ogridParams,
     });
     if (!next) {
-      toast(
-        'Could not wrap that body. Make sure it sits well inside the domain, clear of the edges.',
-        'error',
-        7000,
-      );
+      toast.error('Could not wrap that body', {
+        description: 'It needs to sit well inside the domain, clear of the edges.',
+      });
       return;
     }
     setBlocking(propagateNodeCounts(next));
-    toast(
-      'O-grid ring built around the body. Set the ring and wall-normal counts below.',
-      'success',
-    );
+    toast.success('O-grid ring built', {
+      description: 'Set the ring and wall-normal counts in the panel.',
+    });
   };
 
   const handleUpdateOgridParams = (p: Partial<typeof ogridParams>) => {
@@ -718,7 +720,7 @@ export function App({
     }
     bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
     setBlocking(bk);
-    toast('Rebuilt the O-grid ring.', 'info');
+    toast.success('O-grid ring rebuilt');
   };
 
   const handleGenerateStructuredMesh = async () =>
@@ -875,7 +877,9 @@ export function App({
       if (projectId) {
         const res = await deleteSolverRun(projectId, id);
         if (!res.success) {
-          toast(`Failed to delete run on server: ${res.detail || 'unknown error'}`, 'error');
+          toast.error('Could not delete the run', {
+            description: res.detail || 'The server did not say why.',
+          });
         }
       }
     },

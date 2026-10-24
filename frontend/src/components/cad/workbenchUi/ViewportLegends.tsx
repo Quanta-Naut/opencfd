@@ -36,7 +36,7 @@ export function ViewportLegends(p: ViewportLegendsProps) {
           return (
             <div
               className="absolute right-3 w-fit bg-surface/95 border border-line rounded p-1.5 pr-2 text-[10px] font-mono text-fg-2 pointer-events-none"
-              style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+              style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 44px)' }}
             >
               <div className="mb-1 text-right text-fg font-semibold whitespace-nowrap">
                 {fieldLabel.name} {fieldLabel.unit}
@@ -65,7 +65,7 @@ export function ViewportLegends(p: ViewportLegendsProps) {
         meshSkewStats && (
           <div
             className="absolute right-3 z-20 w-fit bg-surface/95 border border-line rounded p-2 text-[10px] font-mono text-fg-2 pointer-events-none"
-            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+            style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 44px)' }}
           >
             <div className="mb-1 text-right text-fg font-semibold whitespace-nowrap">
               Cell skewness
@@ -104,7 +104,7 @@ export function ViewportLegends(p: ViewportLegendsProps) {
       {liveVals && (
         <div
           className="absolute right-3 z-20 w-fit bg-surface/95 border border-line rounded p-2 text-[10px] font-mono text-fg-2 pointer-events-none"
-          style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+          style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 44px)' }}
         >
           <div className="mb-1 text-right text-fg font-semibold whitespace-nowrap">
             {liveField === 'U_mag' ? '[U] m/s' : liveField === 'p' ? 'p Pa' : 'k m²/s²'}

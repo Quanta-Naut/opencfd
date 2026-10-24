@@ -19,6 +19,16 @@ import {
   autoCellSize,
 } from '../types/blocking';
 
+const fmtCount = (n: number) => (n ?? 0).toLocaleString();
+
+/** Mesher warnings worth acting on, as one toast rather than one each. */
+function warnAbout(warnings: string[]) {
+  if (!warnings.length) return;
+  toast.warning(warnings.length === 1 ? 'Mesh warning' : `${warnings.length} mesh warnings`, {
+    description: warnings.length === 1 ? warnings[0] : warnings.map((w) => `• ${w}`).join('\n'),
+  });
+}
+
 /** Generate the unstructured mesh from the sketch and the current sizing. */
 export async function runGenerateMesh(wb: GenerateMeshContext) {
   const {
@@ -49,6 +59,7 @@ export async function runGenerateMesh(wb: GenerateMeshContext) {
     }));
     return;
   }
+  const progress = toast.task('Generating mesh');
   setIsMeshing(true);
   // A failed regeneration must not leave an old or placeholder mesh visible.
   setMeshData(null);
@@ -98,12 +109,16 @@ export async function runGenerateMesh(wb: GenerateMeshContext) {
     meshSigRef.current = geomSignature;
     meshCoreSigRef.current = geomSigCore;
 
-    toast(`Mesh ready: ${mesh.num_nodes} nodes, ${mesh.num_elements} cells.`, 'success');
+    progress.success('Mesh ready', {
+      description: `${fmtCount(mesh.num_nodes)} nodes, ${fmtCount(mesh.num_elements)} cells`,
+    });
     // Only surface warnings the user can act on. Routine internal fallbacks
     // (boundary layer dropped, MeshAdapt fallback, prism-to-graded) are noise.
-    (mesh.warnings || [])
-      .filter((w: string) => /coarsen|too aggressive|cell sizes|closed loop|inlet|outlet/i.test(w))
-      .forEach((w: string) => toast(w, 'info', 7000));
+    warnAbout(
+      (mesh.warnings || []).filter((w: string) =>
+        /coarsen|too aggressive|cell sizes|closed loop|inlet|outlet/i.test(w),
+      ),
+    );
 
     // Mesh generation succeeded independently of optional post-processing.
     setState((prev) => ({
@@ -127,13 +142,14 @@ export async function runGenerateMesh(wb: GenerateMeshContext) {
   } catch (err: any) {
     const msg = err?.message || 'Mesh generation failed.';
     setMeshError(msg);
-    toast(msg, 'error', 8000);
+    progress.error('Mesh generation failed', { description: msg });
     setState((prev) => ({
       ...prev,
       executionStatus: 'error',
       terminalLogs: [...prev.terminalLogs, `[Error] ${msg}`],
     }));
   } finally {
+    progress.cancel();
     setIsMeshing(false);
   }
 }
@@ -171,7 +187,9 @@ export function runBuildBlocks(
     const domEnts = cadEntities.filter((e) => e.role === 'domain_boundary');
     const domain = outlineRing(domEnts);
     if (!af || domain.length < 3) {
-      toast('C-grid needs an elongated body (airfoil) inside a closed domain.', 'error', 7000);
+      toast.error('C-grid needs an airfoil', {
+        description: 'Place an elongated body inside a closed domain.',
+      });
       return;
     }
     const ent = cadEntities[af.index];
@@ -184,50 +202,52 @@ export function runBuildBlocks(
           );
     const raw = cGridFromAirfoil(entityRing(ent), domain, bodyPatchFor(ent.id), ent.id, domEnt?.id);
     if (!raw) {
-      toast(
-        'Could not build a C-grid. Give the airfoil more room downstream of the trailing edge.',
-        'error',
-        7000,
-      );
+      toast.error('Could not build a C-grid', {
+        description: 'Give the airfoil more room downstream of the trailing edge.',
+      });
       return;
     }
     const bk = applyTargetCellSize(raw, autoCellSize(raw));
     setBlocking(bk);
-    toast(`Built a ${bk.blocks.length}-block C-grid around the airfoil.`, 'success');
+    toast.success(`C-grid built: ${bk.blocks.length} blocks`);
     return;
   }
   if (kind === 'cgrid_closed') {
     const af = airfoilsForCGrid(cadEntities)[0];
     if (!af) {
-      toast('Closed O-grid needs an elongated body (airfoil) in the domain.', 'error', 7000);
+      toast.error('Closed O-grid needs an airfoil', {
+        description: 'Place an elongated body inside the domain.',
+      });
       return;
     }
     const ent = cadEntities[af.index];
     const base = autoBlockingFromOutline(cadEntities, edgeTagMap);
     if (!base) {
-      toast('Could not auto-block this outline. Define a closed domain first.', 'error', 7000);
+      toast.error('Could not auto-block this outline', {
+        description: 'Define a closed domain first.',
+      });
       return;
     }
     const raw = wrapAirfoilOgrid(base, entityRing(ent), bodyPatchFor(ent.id), {
       airfoilEntityId: ent.id,
     });
     if (!raw) {
-      toast(
-        'Could not wrap a closed O-grid around this airfoil - it may need more clearance from the domain edges.',
-        'error',
-        7000,
-      );
+      toast.error('Could not wrap a closed O-grid', {
+        description: 'The airfoil may need more clearance from the domain edges.',
+      });
       return;
     }
     const bk = applyTargetCellSize(propagateNodeCounts(raw), autoCellSize(raw));
     setBlocking(bk);
-    toast(`Built a ${bk.blocks.length}-block closed O-grid around the airfoil.`, 'success');
+    toast.success(`Closed O-grid built: ${bk.blocks.length} blocks`);
     return;
   }
 
   let bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
   if (!bk) {
-    toast('Could not auto-block this outline. Define a closed domain first.', 'error', 7000);
+    toast.error('Could not auto-block this outline', {
+      description: 'Define a closed domain first.',
+    });
     return;
   }
   let wrapped = 0;
@@ -247,18 +267,15 @@ export function runBuildBlocks(
   bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
   setBlocking(bk);
   if (kind === 'ogrid' && wrapped === 0) {
-    toast(
-      'Built blocks, but no body could be wrapped - it must sit clear of the domain edges.',
-      'info',
-      7000,
-    );
+    toast.warning(`Built ${bk.blocks.length} blocks without an O-grid`, {
+      description: 'No body could be wrapped. It must sit clear of the domain edges.',
+    });
   } else if (wrapped > 0) {
-    toast(
-      `Built ${bk.blocks.length} blocks with an O-grid around ${wrapped} bod${wrapped > 1 ? 'ies' : 'y'}.`,
-      'success',
-    );
+    toast.success(`Built ${bk.blocks.length} blocks`, {
+      description: `O-grid around ${wrapped} bod${wrapped > 1 ? 'ies' : 'y'}`,
+    });
   } else {
-    toast(`Built ${bk.blocks.length} block${bk.blocks.length > 1 ? 's' : ''}.`, 'success');
+    toast.success(`Built ${bk.blocks.length} block${bk.blocks.length > 1 ? 's' : ''}`);
   }
 }
 
@@ -290,9 +307,10 @@ export async function runGenerateStructuredMesh(wb: GenerateStructuredMeshContex
     setCaseFiles,
   } = wb;
   if (!blocking) {
-    toast('Build the block topology first.', 'info');
+    toast.info('Build the block topology first');
     return;
   }
+  const progress = toast.task('Generating structured mesh');
   setIsMeshing(true);
   setMeshData(null);
   setMeshError(null);
@@ -308,10 +326,14 @@ export async function runGenerateStructuredMesh(wb: GenerateStructuredMeshContex
     setMeshData(mesh);
     meshSigRef.current = geomSignature;
     meshCoreSigRef.current = geomSigCore;
-    toast(`Structured mesh: ${mesh.num_nodes} nodes, ${mesh.num_elements} quads.`, 'success');
-    (mesh.warnings || [])
-      .filter((w: string) => /coarsen|too aggressive|cell sizes|tris|non-quad/i.test(w))
-      .forEach((w: string) => toast(w, 'info', 7000));
+    progress.success('Structured mesh ready', {
+      description: `${fmtCount(mesh.num_nodes)} nodes, ${fmtCount(mesh.num_elements)} quads`,
+    });
+    warnAbout(
+      (mesh.warnings || []).filter((w: string) =>
+        /coarsen|too aggressive|cell sizes|tris|non-quad/i.test(w),
+      ),
+    );
     setState((prev) => ({
       ...prev,
       executionStatus: 'idle',
@@ -332,13 +354,14 @@ export async function runGenerateStructuredMesh(wb: GenerateStructuredMeshContex
   } catch (err: any) {
     const msg = err?.message || 'Structured meshing failed.';
     setMeshError(msg);
-    toast(msg, 'error', 8000);
+    progress.error('Structured meshing failed', { description: msg });
     setState((prev) => ({
       ...prev,
       executionStatus: 'error',
       terminalLogs: [...prev.terminalLogs, `[Error] ${msg}`],
     }));
   } finally {
+    progress.cancel();
     setIsMeshing(false);
   }
 }

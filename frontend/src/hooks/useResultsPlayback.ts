@@ -19,9 +19,11 @@ export function useResultsPlayback(params: {
   const [resultsLoading, setResultsLoading] = useState(false);
 
   // Live cell-based field streamed from the solver while it runs (Solver stage).
-  const [livePreview, setLivePreview] = useState<
-    { time: string; fields: Record<string, number[]>; ranges: Record<string, [number, number]> } | null
-  >(null);
+  const [livePreview, setLivePreview] = useState<{
+    time: string;
+    fields: Record<string, number[]>;
+    ranges: Record<string, [number, number]>;
+  } | null>(null);
   const [transientFrameIndex, setTransientFrameIndex] = useState(0);
   const [transientPlaying, setTransientPlaying] = useState(false);
   const [transientSpeed, setTransientSpeed] = useState<number>(1.0);
@@ -141,7 +143,7 @@ export function useResultsPlayback(params: {
   const loadResults = async (fromRun = false, time?: number, silent = false, frameIdx?: number) => {
     const mesh = meshDataRef.current;
     if (!mesh?.nodes?.length) {
-      if (!silent) toast('Generate a mesh first.', 'error');
+      if (!silent) toast.info('Generate a mesh first');
       return;
     }
 
@@ -192,11 +194,12 @@ export function useResultsPlayback(params: {
         ...prev,
         terminalLogs: [...prev.terminalLogs, `[Results] Loaded fields from time ${data.time}.`],
       }));
-      if (!silent) toast('Results loaded - open the Results tab.', 'success');
+      if (!silent)
+        toast.success('Results loaded', { description: 'Open the Results tab to view them.' });
     } else {
       const msg = detail || 'no solver output found';
       setState((prev) => ({ ...prev, terminalLogs: [...prev.terminalLogs, `[Results] ${msg}`] }));
-      if (!fromRun && !silent) toast(`Could not load results: ${msg}`, 'error', 6000);
+      if (!fromRun && !silent) toast.error('Could not load results', { description: msg });
     }
   };
 

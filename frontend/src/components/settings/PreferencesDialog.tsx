@@ -153,8 +153,8 @@ export const PreferencesDialog: React.FC<PreferencesDialogProps> = ({ open, onCl
       await refreshEnv();
       toast(
         res.data.foam_bashrc
-          ? 'OpenFOAM environment script updated.'
-          : 'OpenFOAM environment set back to auto-detect.',
+          ? 'OpenFOAM environment script updated'
+          : 'OpenFOAM environment set back to auto-detect',
         'success',
       );
     } else {
