@@ -24,6 +24,7 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
   const {
     C,
     blockVertexKinds,
+    blocksLayer,
     badBlockIds,
     blockCursor,
     blockDrag,
@@ -47,12 +48,7 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     toolPicks,
     unpatchedEdgeIds,
   } = scene;
-  if (
-    !showBlocking ||
-    !blocking ||
-    blocking.edges.length === 0 ||
-    (showMesh && canvasMode === 'mesh')
-  )
+  if (!showBlocking || !blocking || blocking.edges.length === 0 || (showMesh && !blocksLayer))
     return;
   const editing = canvasMode === 'cad';
   ctx.save();

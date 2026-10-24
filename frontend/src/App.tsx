@@ -146,6 +146,8 @@ export function App({
   );
   const [blocking, setBlocking] = useState<Blocking | null>(() => savedSession?.blocking ?? null);
   const [directionColors, setDirectionColors] = useState<Record<string, string> | null>(null);
+  // Which structured-meshing section is open: it picks what the canvas shows.
+  const [structuredStep, setStructuredStep] = useState<'blocking' | 'sizing'>('blocking');
   const [structuredSmooth, setStructuredSmooth] = useState<boolean>(true);
   const [meshTopology, setMeshTopology] = useState<'unstructured' | 'structured'>(
     () => savedSession?.meshTopology ?? 'unstructured',
@@ -1144,6 +1146,7 @@ export function App({
             }}
             onApplyYPlusToMesh={handleApplyYPlusToMesh}
             onDirectionColors={setDirectionColors}
+            onStructuredStep={setStructuredStep}
             meshData={meshData}
             meshError={meshError}
             meshStale={meshStale}
@@ -1250,6 +1253,7 @@ export function App({
                 onUpdateBlocking={handleUpdateBlocking}
                 showBlocking={activeStage === 'mesh' && meshTopology === 'structured'}
                 directionColors={directionColors}
+                structuredStep={structuredStep}
                 domainBroken={domainState === 'broken'}
                 isMeshing={isMeshing}
                 showMesh={

@@ -9,7 +9,6 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
     activeField,
     blocking,
     C,
-    canvasMode,
     colormap,
     directionColors,
     displayOnly,
@@ -27,6 +26,7 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
     pan,
     showField,
     showMesh,
+    meshLayer,
     showMeshQuality,
     showMeshWireframe,
     showResultsStreamlines,
@@ -39,7 +39,7 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
     displayOnly &&
     showMesh &&
     liveHasContent &&
-    canvasMode === 'mesh' &&
+    meshLayer &&
     meshData?.nodes?.length &&
     meshData?.elements?.length
   ) {

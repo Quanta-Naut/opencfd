@@ -63,6 +63,8 @@ export const StructuredMeshPanel: React.FC<{
    * canvas can paint each block edge the same color as its direction card
    * (null when that step isn't open, so the canvas falls back to patch colors). */
   onDirectionColors?: (colors: Record<string, string> | null) => void;
+  /** The open section, so the canvas can show blocks or the mesh. */
+  onStep?: (step: 'blocking' | 'sizing') => void;
 }> = ({
   blocking,
   onInitializeBlocking,
@@ -73,11 +75,15 @@ export const StructuredMeshPanel: React.FC<{
   state,
   updateYPlus,
   onDirectionColors,
+  onStep,
 }) => {
   const hasBlocks = !!blocking && blocking.blocks.length > 0;
   const [openStep, setOpenStep] = useState<1 | 2>(1);
   const [showRules, setShowRules] = useState(false);
   const [openDir, setOpenDir] = useState<string | null>(null);
+  useEffect(() => {
+    onStep?.(openStep === 2 ? 'sizing' : 'blocking');
+  }, [openStep, onStep]);
 
   // Tell the canvas which color each block edge's direction group should draw
   // as, only while the Mesh sizing step (where "Direction A/B/C" live) is open.

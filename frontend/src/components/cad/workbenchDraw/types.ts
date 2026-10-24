@@ -45,6 +45,9 @@ export interface DrawScene {
   C: CanvasPalette;
   cadState: { entities: CadEntity[] };
   canvasMode: 'cad' | 'mesh';
+  /** Which layers are visible: the mesh, and the block topology. */
+  meshLayer: boolean;
+  blocksLayer: boolean;
   colormap: string;
   currentStep: CadWorkflowStep;
   directionColors: Record<string, string>;

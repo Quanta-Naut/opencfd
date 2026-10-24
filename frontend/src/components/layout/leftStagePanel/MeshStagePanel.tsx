@@ -26,6 +26,7 @@ export function MeshStagePanel(p: MeshStagePanelProps) {
     updateYPlus,
     onApplyYPlusToMesh,
     onDirectionColors,
+    onStructuredStep,
     yplusDraft,
     commitYplusDraft,
     normalizeYplusDraft,
@@ -111,6 +112,7 @@ export function MeshStagePanel(p: MeshStagePanelProps) {
                     updateYPlus={updateYPlus}
                     onApplyYPlusToMesh={onApplyYPlusToMesh}
                     onDirectionColors={onDirectionColors}
+                    onStep={onStructuredStep}
                   />
                 ) : (
                   <>
@@ -458,6 +460,7 @@ export interface MeshStagePanelProps {
   updateYPlus: (p: any) => void;
   onApplyYPlusToMesh: () => void;
   onDirectionColors: (colors: Record<string, string> | null) => void;
+  onStructuredStep?: (step: 'blocking' | 'sizing') => void;
   yplusDraft: string;
   commitYplusDraft: (raw: string) => void;
   normalizeYplusDraft: () => void;

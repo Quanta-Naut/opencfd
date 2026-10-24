@@ -31,6 +31,7 @@ interface LeftStagePanelProps {
   onGenerateMesh: () => void;
   onApplyYPlusToMesh: () => void;
   onDirectionColors?: (colors: Record<string, string> | null) => void;
+  onStructuredStep?: (step: 'blocking' | 'sizing') => void;
   meshData?: any;
   meshError?: string | null;
   meshStale?: boolean;
@@ -125,6 +126,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   onGenerateMesh,
   onApplyYPlusToMesh,
   onDirectionColors,
+  onStructuredStep,
   meshData,
   meshError,
   meshStale,
@@ -388,6 +390,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           updateYPlus,
           onApplyYPlusToMesh,
           onDirectionColors,
+          onStructuredStep,
           yplusDraft,
           commitYplusDraft,
           normalizeYplusDraft,

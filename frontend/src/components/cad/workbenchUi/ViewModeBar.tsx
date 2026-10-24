@@ -1,4 +1,5 @@
 import React from 'react';
+import { Check } from 'lucide-react';
 
 /** Mesh / Results view toggles (blocks, mesh, quality, field, wireframe, streamlines), shown only when there are controls. */
 export function ViewModeBar(p: ViewModeBarProps) {
@@ -6,9 +7,13 @@ export function ViewModeBar(p: ViewModeBarProps) {
     displayOnly,
     meshOnly,
     showField,
-    showBlocking,
     canvasMode,
     setCanvasMode,
+    structuredView,
+    blocksOn,
+    setBlocksOn,
+    setMeshOn,
+    meshLayer,
     showMesh,
     showMeshQuality,
     meshData,
@@ -28,57 +33,83 @@ export function ViewModeBar(p: ViewModeBarProps) {
         <div className="absolute top-3 left-3 z-20 flex items-center gap-1.5 bg-surface border border-line rounded px-2 py-1 text-xs select-none">
           {!meshOnly ? (
             <>
-              {[
-                // "Blocks" only exists for structured meshing (showBlocking).
-                ...(showBlocking
-                  ? [
-                      {
-                        id: 'blocks',
-                        label: 'Blocks',
-                        active: canvasMode === 'cad',
-                        disabled: false,
-                        title: undefined as string | undefined,
-                        onClick: () => setCanvasMode('cad'),
+              {(structuredView
+                ? [
+                    // Structured: blocks and mesh are layers, each on or off.
+                    {
+                      id: 'blocks',
+                      label: 'Blocks',
+                      on: blocksOn,
+                      disabled: false,
+                      onClick: () => setBlocksOn((v) => !v),
+                    },
+                    {
+                      id: 'mesh',
+                      label: 'Mesh',
+                      on: meshLayer,
+                      disabled: !meshData,
+                      onClick: () => setMeshOn((v) => !v),
+                    },
+                    {
+                      id: 'quality',
+                      label: 'Quality',
+                      on: meshLayer && showMeshQuality,
+                      disabled: !meshLayer,
+                      title: 'Colour each cell by skewness',
+                      onClick: () => setShowMeshQuality((v) => !v),
+                    },
+                  ]
+                : [
+                    {
+                      id: 'mesh',
+                      label: 'Mesh',
+                      on: canvasMode === 'mesh' && !showMeshQuality,
+                      disabled: !meshData || meshStale,
+                      onClick: () => {
+                        setCanvasMode('mesh');
+                        setShowMeshQuality(false);
                       },
-                    ]
-                  : []),
-                {
-                  id: 'mesh',
-                  label: 'Mesh',
-                  active: canvasMode === 'mesh' && !showMeshQuality,
-                  disabled: !meshData || meshStale,
-                  title: undefined as string | undefined,
-                  onClick: () => {
-                    setCanvasMode('mesh');
-                    setShowMeshQuality(false);
-                  },
-                },
-                {
-                  id: 'quality',
-                  label: 'Quality',
-                  active: canvasMode === 'mesh' && showMeshQuality,
-                  disabled: !meshData || meshStale,
-                  title: 'Colour each cell by skewness - spot bad cells before solving',
-                  onClick: () => {
-                    setCanvasMode('mesh');
-                    setShowMeshQuality(true);
-                  },
-                },
-              ].map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => !m.disabled && m.onClick()}
-                  disabled={m.disabled}
-                  title={m.title || (m.disabled ? 'Generate a mesh first' : undefined)}
-                  className={`px-2 py-0.5 rounded text-[11px] font-medium ${
-                    m.active
-                      ? 'bg-app text-fg font-semibold'
-                      : 'text-fg-2 hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed'
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
+                    },
+                    {
+                      id: 'quality',
+                      label: 'Quality',
+                      on: canvasMode === 'mesh' && showMeshQuality,
+                      disabled: !meshData || meshStale,
+                      title: 'Colour each cell by skewness',
+                      onClick: () => {
+                        setCanvasMode('mesh');
+                        setShowMeshQuality(true);
+                      },
+                    },
+                  ]
+              ).map(
+                (m: {
+                  id: string;
+                  label: string;
+                  on: boolean;
+                  disabled: boolean;
+                  title?: string;
+                  onClick: () => void;
+                }) => (
+                  <button
+                    key={m.id}
+                    onClick={() => !m.disabled && m.onClick()}
+                    disabled={m.disabled}
+                    aria-pressed={m.on}
+                    title={m.title || (m.disabled ? 'Generate a mesh first' : undefined)}
+                    className="flex items-center gap-1.5 px-1.5 py-0.5 rounded text-[11px] font-medium text-fg-2 hover:text-fg disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <span
+                      className={`w-3 h-3 rounded-sm border flex items-center justify-center ${
+                        m.on ? 'border-fg-2 bg-fg-2' : 'border-line-strong'
+                      }`}
+                    >
+                      {m.on && <Check className="w-2.5 h-2.5 text-surface" strokeWidth={3} />}
+                    </span>
+                    <span className={m.on ? 'text-fg' : ''}>{m.label}</span>
+                  </button>
+                ),
+              )}
               {meshStale && showMesh && (
                 <span className="ml-1 text-[10px] text-warning font-medium">
                   stale - regenerate
@@ -127,6 +158,13 @@ export interface ViewModeBarProps {
   showBlocking: boolean;
   canvasMode: 'cad' | 'mesh';
   setCanvasMode: React.Dispatch<React.SetStateAction<'cad' | 'mesh'>>;
+  /** Structured meshing: blocks and mesh are independent layers. */
+  structuredView: boolean;
+  blocksOn: boolean;
+  setBlocksOn: React.Dispatch<React.SetStateAction<boolean>>;
+  meshOn: boolean;
+  setMeshOn: React.Dispatch<React.SetStateAction<boolean>>;
+  meshLayer: boolean;
   showMesh: boolean;
   showMeshQuality: boolean;
   meshData: any;

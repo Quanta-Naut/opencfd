@@ -149,6 +149,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   showBlocking = false,
   blocksBuiltTick = 0,
   directionColors = null,
+  structuredStep = 'blocking',
   isTransient = false,
   transientTimes = [],
   transientFrameIndex = 0,
@@ -266,7 +267,21 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [viewport, setViewport] = useState({ w: 0, h: 0 });
   // 'cad' shows CAD entities / structured blocks, 'mesh' shows the generated mesh.
   // Declared early - the fit / render logic reads it.
-  const [canvasMode, setCanvasMode] = useState<'cad' | 'mesh'>('cad');
+  const [canvasModeRaw, setCanvasMode] = useState<'cad' | 'mesh'>('cad');
+  // Structured meshing shows two layers, each a toggle: the blocks and the
+  // mesh. The open panel section sets the defaults (Blocking: blocks, Mesh
+  // sizing: the mesh) and decides what is edited: blocks only in Blocking.
+  const [blocksOn, setBlocksOn] = useState(true);
+  const [meshOn, setMeshOn] = useState(false);
+  const structuredView = showBlocking && showMesh && !meshOnly;
+  const meshAvail = !!(meshData?.nodes?.length && meshData?.elements?.length);
+  const canvasMode: 'cad' | 'mesh' = !structuredView
+    ? canvasModeRaw
+    : structuredStep === 'blocking' && blocksOn
+      ? 'cad'
+      : 'mesh';
+  const meshLayer = structuredView ? meshOn && meshAvail : canvasMode === 'mesh';
+  const blocksLayer = structuredView ? blocksOn : canvasMode === 'cad';
   const panning = useRef(false);
   const panRafRef = useRef<number | null>(null);
   const pendingPanRef = useRef<Point2D | null>(null);
@@ -400,7 +415,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   const fitCurrentContent = useCallback(() => {
     if (blockDrag.current || panning.current) return;
-    const useMesh = (canvasMode === 'mesh' || meshOnly) && meshData?.nodes?.length;
+    const useMesh = (meshLayer || meshOnly) && meshData?.nodes?.length;
     const ents = cadState.entities.filter((e) => e.layer !== 'construction');
     let minX = Infinity,
       maxX = -Infinity,
@@ -423,7 +438,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         }
     }
     if (minX !== Infinity) fitBoundingBox({ minX, maxX, minY, maxY }, 0.75);
-  }, [cadState.entities, meshData, canvasMode, meshOnly, fitBoundingBox]);
+  }, [cadState.entities, meshData, meshLayer, meshOnly, fitBoundingBox]);
 
   // Keep the latest fit fn in a ref so the framing effects can call it without
   // taking it as a dependency (which would re-fire on every entity edit).
@@ -549,9 +564,24 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     else setCanvasMode(meshData?.nodes?.length && meshData?.elements?.length ? 'mesh' : 'cad');
   }, [meshOnly, showMesh, showBlocking, meshData]);
 
+  // Opening a structured section turns its own layer on.
+  useEffect(() => {
+    if (!structuredView) return;
+    if (structuredStep === 'blocking') {
+      setBlocksOn(true);
+      setMeshOn(false);
+    } else {
+      setMeshOn(true);
+      setBlocksOn(!meshAvail);
+    }
+  }, [structuredStep, structuredView]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Building / rebuilding blocks jumps to the Blocks view.
   useEffect(() => {
-    if (blocksBuiltTick > 0 && showBlocking && !meshOnly) setCanvasMode('cad');
+    if (blocksBuiltTick > 0 && showBlocking && !meshOnly) {
+      setCanvasMode('cad');
+      setBlocksOn(true);
+    }
   }, [blocksBuiltTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When a mesh is freshly generated, jump to the mesh view to show it.
@@ -560,7 +590,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     const c = meshData?.nodes?.length ?? 0;
     const wasEmpty = prevMeshCountRef.current === 0;
     prevMeshCountRef.current = c;
-    if (c > 0 && wasEmpty && !meshOnly && showMesh) setCanvasMode('mesh');
+    if (c > 0 && wasEmpty && !meshOnly && showMesh) {
+      setCanvasMode('mesh');
+      setMeshOn(true);
+    }
   }, [meshData, meshOnly, showMesh]);
 
   const [showMeshWireframe, setShowMeshWireframe] = useState(false); // toggle mesh overlay in Results
@@ -578,7 +611,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       lastMiddleClickRef.current = now;
       if (!isDoubleMiddleClick) return;
 
-      if (showMesh && canvasMode === 'mesh' && meshData?.nodes?.length) {
+      if (showMesh && meshLayer && meshData?.nodes?.length) {
         fitBoundingBox(nodesBBox(meshData.nodes), 0.72);
         return;
       }
@@ -600,7 +633,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         setPan({ x: 0, y: 0 });
       }
     },
-    [cadState.entities, canvasMode, fitBoundingBox, meshData, showMesh],
+    [cadState.entities, meshLayer, fitBoundingBox, meshData, showMesh],
   );
   const [showConstruction, setShowConstruction] = useState(true);
   const [constructionMode, setConstructionMode] = useState(false); // draw to construction layer
@@ -679,7 +712,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         showMesh,
         liveHasContent,
         C,
-        canvasMode,
+        canvasMode: meshLayer ? 'mesh' : 'cad',
         showField,
         fieldData,
         activeField,
@@ -700,7 +733,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       displayOnly,
       showMesh,
       liveHasContent,
-      canvasMode,
+      meshLayer,
       showField,
       fieldData,
       activeField,
@@ -1408,6 +1441,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       C,
       cadState,
       canvasMode,
+      meshLayer,
+      blocksLayer,
       colormap,
       currentStep,
       directionColors,
@@ -1506,6 +1541,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     blockSpacingJumps,
     toolPicks,
     toolField,
+    meshLayer,
+    blocksLayer,
     selectedVertexId,
     hoveredBlockIdx,
     hoveredVertex,
@@ -2491,6 +2528,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             showBlocking,
             canvasMode,
             setCanvasMode,
+            structuredView,
+            blocksOn,
+            setBlocksOn,
+            meshOn,
+            setMeshOn,
+            meshLayer,
             showMesh,
             showMeshQuality,
             meshData,
@@ -2583,7 +2626,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             activeField,
             colormap,
             meshOnly,
-            canvasMode,
+            canvasMode: meshLayer ? 'mesh' : 'cad',
             showMeshQuality,
             meshSkew,
             meshSkewStats,

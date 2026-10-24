@@ -165,6 +165,8 @@ export interface CadWorkbenchProps {
    * cards are open. Overrides the usual patch coloring so an edge reads as
    * the same color as the card that controls it. */
   directionColors?: Record<string, string> | null;
+  /** Open structured-meshing section: Blocking shows the blocks, Mesh sizing the mesh. */
+  structuredStep?: 'blocking' | 'sizing';
   isTransient?: boolean;
   transientTimes?: number[];
   transientFrameIndex?: number;
