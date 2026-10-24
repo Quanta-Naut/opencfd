@@ -13,7 +13,7 @@ import type {
   GeometryBBox,
 } from '../../../types/cadWorkflow';
 import type { Blocking, BlockPremesh, SpacingJump, VertexKind } from '../../../types/blocking';
-import type { CadTool, CanvasPalette, Snap } from '../workbenchCore';
+import type { CadTool, CanvasPalette, Snap, GizmoKind, GizmoHandle } from '../workbenchCore';
 
 /** Per-frame drawing context shared by every pass. */
 export interface DrawFrame {
@@ -112,7 +112,15 @@ export interface DrawScene {
   /** Move / Scale / Rotate / Mirror: where the shapes would go, and the
    *  command's reference points (base, mirror line). */
   xformGhost: CadEntity[] | null;
-  xformMarks: { pts: Point2D[]; line: [Point2D, Point2D] | null };
+  xformMarks: {
+    pts: Point2D[];
+    line: [Point2D, Point2D] | null;
+    /** Single vertices picked for the command. */
+    picked: Point2D[];
+    gizmo: { at: Point2D; kind: GizmoKind; hot: GizmoHandle | null } | null;
+  };
+  /** Selecting inside a command: no snap marker or guide lines. */
+  hideSnap: boolean;
   unpatchedEdgeIds: Set<string>;
   upstreamChordFactor: number;
   zoom: number;

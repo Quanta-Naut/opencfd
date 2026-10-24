@@ -29,6 +29,7 @@ import {
   dist,
   pointInPolygon,
   getTrimTarget,
+  editPoints,
 } from '../workbenchCore';
 
 /** Canvas mouse move: hover state, drags (vertex, selection, block vertex, domain handle), marquee, panning and the live snap. */
@@ -62,6 +63,7 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
     setHoveredBlockIdx,
     computeSnap,
     snapAnchor,
+    selecting,
     isDrawing,
     dimPrompt,
     manualDim,
@@ -390,13 +392,13 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
 
   // Hover: mark the single nearest entity vertex (Select tool) so you can see
   // exactly which point a click / drag will grab.
-  if (tool === 'select' && !displayOnly && !isDrawing && !editDrag.current) {
+  if ((tool === 'select' || selecting) && !displayOnly && !isDrawing && !editDrag.current) {
     const r = 11 / zoom;
     let best: Point2D | null = null;
     let bd = r;
     for (const en of cadState.entities) {
       if (en.layer === 'construction' && !showConstruction) continue;
-      for (const p of en.pts) {
+      for (const p of editPoints(en)) {
         const d = Math.hypot(p.x - raw.x, p.y - raw.y);
         if (d < bd) {
           bd = d;
@@ -507,6 +509,8 @@ export interface MouseMoveContext {
   setHoveredBlockIdx: React.Dispatch<React.SetStateAction<number>>;
   computeSnap: (raw: Point2D, anchor?: Point2D) => Snap;
   snapAnchor: Point2D | null;
+  /** A transform command is selecting (not picking a point). */
+  selecting: boolean;
   isDrawing: boolean;
   dimPrompt: DynamicDimPrompt;
   manualDim: boolean;

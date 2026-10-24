@@ -1,5 +1,5 @@
 import { Point2D, CadEntity } from '../../../types/cadWorkflow';
-import { dist, sampleSpline } from '../workbenchCore';
+import { dist, sampleSpline, GIZMO } from '../workbenchCore';
 import type { DrawFrame, DrawScene } from './types';
 
 /** The entity being drawn, before it is committed. */
@@ -240,5 +240,76 @@ export function drawTransformPreview(f: DrawFrame, scene: DrawScene): void {
     ctx.arc(p.x, p.y, 3.5, 0, 2 * Math.PI);
     ctx.fill();
   }
+  // Picked vertices: filled squares in the selection colour.
+  ctx.fillStyle = '#E05A00';
+  for (const q of xformMarks.picked) {
+    const p = ws(q.x, q.y);
+    ctx.fillRect(p.x - 3.5, p.y - 3.5, 7, 7);
+  }
+  if (xformMarks.gizmo) drawGizmo(ctx, ws, xformMarks.gizmo);
   ctx.restore();
+}
+
+const AXIS_X = '#DC2626';
+const AXIS_Y = '#16A34A';
+const HOT = '#F59E0B';
+
+/** The Move / Scale / Rotate handles at the selection (Fusion 360 style):
+ *  red X and green Y arms (arrow tips to move, square tips to scale), a
+ *  centre square, or a ring to turn. */
+function drawGizmo(
+  ctx: CanvasRenderingContext2D,
+  ws: DrawFrame['ws'],
+  g: NonNullable<DrawScene['xformMarks']['gizmo']>,
+): void {
+  const o = ws(g.at.x, g.at.y);
+  const { arm, head, box, ring } = GIZMO;
+  ctx.setLineDash([]);
+  if (g.kind === 'rotate') {
+    ctx.strokeStyle = g.hot === 'rot' ? HOT : '#2563EB';
+    ctx.lineWidth = g.hot === 'rot' ? 4 : 2.5;
+    ctx.beginPath();
+    ctx.arc(o.x, o.y, ring, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.beginPath();
+    ctx.arc(o.x + ring, o.y, 5, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(o.x, o.y, 3, 0, 2 * Math.PI);
+    ctx.fill();
+    return;
+  }
+  const armTo = (dx: number, dy: number, color: string, hot: boolean) => {
+    const tip = { x: o.x + dx * arm, y: o.y + dy * arm };
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = hot ? 3.5 : 2;
+    ctx.beginPath();
+    ctx.moveTo(o.x + dx * box, o.y + dy * box);
+    ctx.lineTo(
+      tip.x - dx * (g.kind === 'move' ? head : 0),
+      tip.y - dy * (g.kind === 'move' ? head : 0),
+    );
+    ctx.stroke();
+    ctx.beginPath();
+    if (g.kind === 'move') {
+      // Arrow head along (dx, dy).
+      const w = head * 0.55;
+      ctx.moveTo(tip.x + dx * 2, tip.y + dy * 2);
+      ctx.lineTo(tip.x - dx * head - dy * w, tip.y - dy * head + dx * w);
+      ctx.lineTo(tip.x - dx * head + dy * w, tip.y - dy * head - dx * w);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillRect(tip.x - 5, tip.y - 5, 10, 10);
+    }
+  };
+  armTo(1, 0, g.hot === 'x' ? HOT : AXIS_X, g.hot === 'x');
+  armTo(0, -1, g.hot === 'y' ? HOT : AXIS_Y, g.hot === 'y');
+  ctx.fillStyle = g.hot === 'xy' ? HOT : 'rgba(37, 99, 235, 0.25)';
+  ctx.strokeStyle = g.hot === 'xy' ? HOT : '#2563EB';
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(o.x - box, o.y - box, box * 2, box * 2);
+  ctx.strokeRect(o.x - box, o.y - box, box * 2, box * 2);
 }

@@ -73,8 +73,12 @@ export {
   rotation,
   mirroring,
   transformEntity,
+  transformVertices,
+  pointwise,
   entitiesCenter,
 } from './transform';
+export type { GizmoKind, GizmoHandle } from './gizmo';
+export { GIZMO, hitGizmo } from './gizmo';
 
 export type { TrimTarget } from './trim';
 export { getTrimTarget } from './trim';

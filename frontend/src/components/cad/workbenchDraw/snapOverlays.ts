@@ -4,8 +4,8 @@ import type { DrawFrame, DrawScene } from './types';
 /** Assist, alignment and tracking guide lines. */
 export function drawSnapGuides(f: DrawFrame, scene: DrawScene): void {
   const { ctx, ws } = f;
-  const { C, snap, tool } = scene;
-  if (tool !== 'select' && snap.guides && snap.guides.length > 0) {
+  const { C, snap, tool, hideSnap } = scene;
+  if (tool !== 'select' && !hideSnap && snap.guides && snap.guides.length > 0) {
     for (const g of snap.guides) {
       if (g.type === 'origin') continue;
       const p1 = ws(g.from.x, g.from.y);
@@ -66,8 +66,8 @@ export function drawSnapGuides(f: DrawFrame, scene: DrawScene): void {
 /** The active snap marker and its label. */
 export function drawSnapMarker(f: DrawFrame, scene: DrawScene): void {
   const { ctx, ws } = f;
-  const { C, snap, tool } = scene;
-  if (tool !== 'select' && snap.type !== 'grid') {
+  const { C, snap, tool, hideSnap } = scene;
+  if (tool !== 'select' && !hideSnap && snap.type !== 'grid') {
     const sp = ws(snap.pt.x, snap.pt.y);
     ctx.setLineDash([]);
     const GREEN = '#16A34A';
@@ -164,8 +164,8 @@ export function drawSnapMarker(f: DrawFrame, scene: DrawScene): void {
 /** Cursor crosshair for the drawing tools. */
 export function drawCrosshair(f: DrawFrame, scene: DrawScene): void {
   const { ctx, ws } = f;
-  const { C, snap, tool } = scene;
-  if (tool !== 'select') {
+  const { C, snap, tool, hideSnap } = scene;
+  if (tool !== 'select' && !hideSnap) {
     const sp = ws(snap.pt.x, snap.pt.y);
     ctx.strokeStyle = C.cursor;
     ctx.lineWidth = 1;

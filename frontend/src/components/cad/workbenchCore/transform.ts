@@ -198,9 +198,28 @@ export function transformEntity(e: CadEntity, m: Affine): CadEntity {
   }
 }
 
+/** Circles, ellipses and arcs move as a whole; every other shape can have
+ *  single vertices picked and transformed. */
+export const pointwise = (e: CadEntity) =>
+  e.type !== 'circle' && e.type !== 'ellipse' && e.type !== 'arc';
+
+/** `e` with only the grips in `idxs` (see editPoints) mapped by `m`. A
+ *  rectangle with some corners moved is no longer a rectangle, so it becomes
+ *  a closed polyline. */
+export function transformVertices(e: CadEntity, idxs: Set<number>, m: Affine): CadEntity {
+  const map = (ps: Point2D[]) => ps.map((p, i) => (idxs.has(i) ? apply(m, p) : { ...p }));
+  if (!pointwise(e) || !idxs.size) return e;
+  if (e.type === 'spline' && e.ctrl) {
+    const ctrl = map(e.ctrl);
+    return { ...e, ctrl, pts: sampleSpline(ctrl, !!e.isClosed) };
+  }
+  if (e.type === 'rectangle') return { ...e, type: 'polyline', isClosed: true, pts: map(e.pts) };
+  return { ...e, pts: map(e.pts) };
+}
+
 /** Centre of the bounding box of some entities (circles and ellipses by
- *  their full extent). */
-export function entitiesCenter(es: CadEntity[]): Point2D | null {
+ *  their full extent) and some loose points. */
+export function entitiesCenter(es: CadEntity[], extra: Point2D[] = []): Point2D | null {
   let x0 = Infinity,
     x1 = -Infinity,
     y0 = Infinity,
@@ -223,5 +242,6 @@ export function entitiesCenter(es: CadEntity[]): Point2D | null {
       add({ x: c.x + r, y: c.y + r });
     } else e.pts.forEach(add);
   }
+  extra.forEach(add);
   return x0 <= x1 ? { x: (x0 + x1) / 2, y: (y0 + y1) / 2 } : null;
 }

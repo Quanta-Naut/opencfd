@@ -87,7 +87,7 @@ import { BlockEditorTools } from './workbenchUi/BlockEditorTools';
 import { ViewModeBar } from './workbenchUi/ViewModeBar';
 import { DraftingStrip } from './workbenchUi/DraftingStrip';
 import { ToolRail } from './workbenchUi/ToolRail';
-import { TransformDialog } from './workbenchUi/TransformDialog';
+import { TransformDialog, GizmoValues } from './workbenchUi/TransformDialog';
 import { useTransformCommand, isTransformTool } from './workbenchUi/useTransformCommand';
 import { autoCenterInitialGeometry } from './workbenchView/camera';
 import { buildGlScene } from './workbenchView/meshScene';
@@ -793,29 +793,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   const [isLoading, setIsLoading] = useState(false);
   const [cmdText, setCmdText] = useState('Pick a tool or press L / P / R / C to start drawing.');
-  // Move / Scale / Rotate / Mirror: one command at a time, with a live ghost.
-  const xform = useTransformCommand({
-    tool,
-    setTool,
-    entities: cadState.entities,
-    dispatch,
-    setCmdText,
-  });
-  const xformGhost = useMemo(
-    () => (xform.active ? xform.preview(snap.pt) : null),
-    [xform.active, xform.preview, snap.pt],
-  );
-  const xformMarks = useMemo(() => {
-    if (!xform.active) return { pts: [], line: null };
-    const { base, m1, m2, pick } = xform.xf;
-    const pts = [base ?? (tool === 'scale' || tool === 'rotate' ? xform.pivot : null), m1, m2];
-    const end = m2 ?? (pick === 'm2' ? snap.pt : null);
-    return {
-      pts: pts.filter((q): q is Point2D => !!q),
-      line: m1 && end ? ([m1, end] as [Point2D, Point2D]) : null,
-    };
-  }, [xform.active, xform.xf, xform.pivot, tool, snap.pt]);
-
   // Say what a drafting toggle does when it is switched, from the strip or
   // its F-key, so a mode that only acts mid-command is never silent.
   const draftingFlags = {
@@ -1510,6 +1487,35 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [origin, zoom],
   );
 
+  // Move / Scale / Rotate / Mirror: one command at a time, with a live ghost.
+  const xform = useTransformCommand({
+    tool,
+    setTool,
+    entities: cadState.entities,
+    dispatch,
+    setCmdText,
+    zoom,
+    toWorld,
+    toScreen,
+    setMarquee,
+  });
+  const xformGhost = useMemo(
+    () => (xform.active ? xform.preview(snap.pt) : null),
+    [xform.active, xform.preview, snap.pt],
+  );
+  const xformMarks = useMemo(() => {
+    if (!xform.active) return { pts: [], line: null, picked: [], gizmo: null };
+    const { base, m1, m2, pick } = xform.xf;
+    const pts = [tool === 'move' ? base : null, m1, m2];
+    const end = m2 ?? (pick === 'm2' ? snap.pt : null);
+    return {
+      pts: pts.filter((q): q is Point2D => !!q),
+      line: m1 && end ? ([m1, end] as [Point2D, Point2D]) : null,
+      picked: xform.pickedPts,
+      gizmo: xform.gizmo,
+    };
+  }, [xform.active, xform.xf, xform.pickedPts, xform.gizmo, tool, snap.pt]);
+
   // ── Snap / inferencing ─────────────────────────────────────────────────────
   // All the Onshape/Fusion-style logic (vertex, midpoint, centre, quadrant,
   // edge-intersection, perpendicular/parallel, polar angle tracking, same-axis
@@ -1613,6 +1619,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       upstreamChordFactor,
       xformGhost,
       xformMarks,
+      hideSnap: xform.active && !xform.pickingPoint,
       zoom,
     });
   }, [
@@ -1696,7 +1703,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [cadState.entities, zoom],
   );
 
-  const handleMouseMove = useCallback(
+  const baseMouseMove = useCallback(
     (e: React.MouseEvent) =>
       onMouseMove(e, {
         toWorld,
@@ -1727,6 +1734,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         setHoveredBlockIdx,
         computeSnap,
         snapAnchor: xform.anchor,
+        selecting: xform.active && !xform.pickingPoint,
         isDrawing,
         dimPrompt,
         manualDim,
@@ -1805,10 +1813,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       hoverCurveId,
       hoverEdgeId,
       xform.anchor,
+      xform.active,
+      xform.pickingPoint,
     ],
   );
 
-  const handleMouseDown = useCallback(
+  const baseMouseDown = useCallback(
     (e: React.MouseEvent) =>
       onMouseDown(e, {
         blockOutlines,
@@ -1892,7 +1902,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     ],
   );
 
-  const handleMouseUp = useCallback(
+  const baseMouseUp = useCallback(
     (e: React.MouseEvent) =>
       onMouseUp(e, {
         panning,
@@ -2111,6 +2121,27 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         inputVal2,
       }),
     [tool, isDrawing, tempPts, zoom, constructionMode, dimPrompt],
+  );
+
+  // A transform command takes the left button first: its handles, its
+  // selection box and its picks.
+  const handleMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (!xform.pointerDown(e)) baseMouseDown(e);
+    },
+    [xform.pointerDown, baseMouseDown],
+  );
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!xform.pointerMove(e)) baseMouseMove(e);
+    },
+    [xform.pointerMove, baseMouseMove],
+  );
+  const handleMouseUp = useCallback(
+    (e: React.MouseEvent) => {
+      if (!xform.pointerUp(e)) baseMouseUp(e);
+    },
+    [xform.pointerUp, baseMouseUp],
   );
 
   const handleCanvasClick = useCallback(
@@ -2594,8 +2625,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
                     ? blockTool === 'delete'
                       ? 'pointer'
                       : 'crosshair'
-                    : tool === 'select'
-                      ? 'default'
+                    : tool === 'select' || (xform.active && !xform.pickingPoint)
+                      ? xform.gizmo?.hot === 'rot'
+                        ? 'grab'
+                        : xform.gizmo?.hot
+                          ? 'move'
+                          : 'default'
                       : 'crosshair',
         }}
       >
@@ -2647,9 +2682,15 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           <TransformDialog
             tool={tool}
             cmd={xform}
-            clearSelection={() => dispatch({ type: 'SELECT_ENTITY', id: null })}
             addPoint={(pt) => commitPoint(pt)}
             done={() => setTool('select')}
+          />
+        )}
+        {!displayOnly && xform.gizmo && (
+          <GizmoValues
+            tool={tool}
+            cmd={xform}
+            at={toScreen(xform.gizmo.at.x, xform.gizmo.at.y)}
           />
         )}
 
@@ -2813,7 +2854,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           showMesh,
           hud,
           scaleInfo,
-          tool,
+          // Selecting inside a command shows no snap tag.
+          tool: xform.active && !xform.pickingPoint ? 'select' : tool,
           snap,
           meshData,
           meshCellCounts,

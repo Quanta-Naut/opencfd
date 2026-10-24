@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { Point2D } from '../../../types/cadWorkflow';
 import type { CadTool } from '../workbenchCore';
+import { GIZMO } from '../workbenchCore';
 import { card, Field, smallBtn } from './blockEditor/shared';
 import type { TransformCommand, XformPick } from './useTransformCommand';
 
@@ -17,22 +18,22 @@ const HEAD: Record<string, { label: string; icon: React.ElementType; hint: strin
   move: {
     label: 'Move',
     icon: Move,
-    hint: 'Click a base point, then where it goes. Or type the offset.',
+    hint: 'Click vertices or shapes, or drag a box round them. Drag an arrow or the centre square, or type the offset. From / To puts one point on another.',
   },
   scale: {
     label: 'Scale',
     icon: Scaling,
-    hint: 'Scales about the base point (the centre of the shapes until you pick one). Uneven X and Y turn circles into ellipses.',
+    hint: 'Click vertices or shapes, or drag a box. Drag a square tip for one axis or the centre for both, or type the factors. Scales about the base point (the centre of the selection until you pick one).',
   },
   rotate: {
     label: 'Rotate',
     icon: RotateCw,
-    hint: 'Turns about the centre point, counter-clockwise for a positive angle.',
+    hint: 'Click vertices or shapes, or drag a box. Drag the ring (Shift for 15° steps) or type the angle; positive turns counter-clockwise.',
   },
   mirror: {
     label: 'Mirror',
     icon: FlipHorizontal2,
-    hint: 'Click two points on the mirror line, or use a horizontal or vertical line through the centre.',
+    hint: 'Click vertices or shapes, or drag a box. Then click Line and two points on the mirror line, or use a horizontal or vertical line through the centre.',
   },
   point: {
     label: 'Point',
@@ -93,24 +94,88 @@ function NumRow(p: { label: string; value: number; onCommit: (v: number) => void
   );
 }
 
+/** The values of the active command, shared by the dialog and the box
+ *  beside the handles. */
+function useValues(cmd: TransformCommand) {
+  const { xf, setXf } = cmd;
+  const set = (patch: Partial<typeof xf>) => setXf((s) => ({ ...s, ...patch }));
+  return {
+    set,
+    move: [
+      { label: 'X', value: xf.dx, commit: (dx: number) => set({ dx, pick: 'objects' }) },
+      { label: 'Y', value: xf.dy, commit: (dy: number) => set({ dy, pick: 'objects' }) },
+    ],
+    scale: xf.uniform
+      ? [{ label: 'Factor', value: xf.sx, commit: (v: number) => v > 0 && set({ sx: v, sy: v }) }]
+      : [
+          { label: 'X', value: xf.sx, commit: (v: number) => v > 0 && set({ sx: v }) },
+          { label: 'Y', value: xf.sy, commit: (v: number) => v > 0 && set({ sy: v }) },
+        ],
+    rotate: [{ label: 'Angle', value: xf.angle, commit: (angle: number) => set({ angle }) }],
+  };
+}
+
+/** The value box that rides with the on-canvas handles: type a distance,
+ *  factor or angle right where you are dragging. */
+export function GizmoValues(p: { tool: CadTool; cmd: TransformCommand; at: Point2D }) {
+  const vals = useValues(p.cmd);
+  const rows =
+    p.tool === 'move'
+      ? vals.move
+      : p.tool === 'scale'
+        ? vals.scale
+        : p.tool === 'rotate'
+          ? vals.rotate
+          : null;
+  if (!rows) return null;
+  return (
+    <div
+      className={`${card} absolute z-20 flex items-center gap-1.5 px-1.5 py-1 select-none`}
+      style={
+        p.tool === 'rotate'
+          ? { left: p.at.x + GIZMO.ring + 14, top: p.at.y + 10 }
+          : { left: p.at.x + 16, top: p.at.y + 16 }
+      }
+      onMouseDown={(ev) => ev.stopPropagation()}
+    >
+      {rows.map((r) => (
+        <label key={r.label} className="flex items-center gap-1">
+          <span className="text-fg-2">{r.label}</span>
+          <span className="w-[64px]">
+            <Field value={+r.value.toFixed(6)} onCommit={(v) => v !== undefined && r.commit(v)} />
+          </span>
+          {p.tool === 'rotate' && <span className="text-fg-3">°</span>}
+        </label>
+      ))}
+    </div>
+  );
+}
+
 /** The Move / Scale / Rotate / Mirror command dialog, and the Point tool's
  *  coordinate entry. OK (Enter) applies, Cancel (Esc) leaves. */
 export function TransformDialog(p: {
   tool: CadTool;
   cmd: TransformCommand;
-  clearSelection: () => void;
   addPoint: (pt: Point2D) => void;
   done: () => void;
 }) {
   const { tool, cmd } = p;
   const [px, setPx] = useState(0);
   const [py, setPy] = useState(0);
+  const vals = useValues(cmd);
   const head = HEAD[tool];
   if (!head) return null;
-  const { xf, setXf } = cmd;
-  const set = (patch: Partial<typeof xf>) => setXf((s) => ({ ...s, ...patch }));
-  const pickTo = (pick: XformPick) => () => set({ pick });
-  const n = cmd.selected.length;
+  const { xf } = cmd;
+  const set = vals.set;
+  // Clicking an active point field again goes back to selecting.
+  const pickTo = (pick: XformPick) => () => set({ pick: xf.pick === pick ? 'objects' : pick });
+  const { shapes, points } = cmd.count;
+  const selText = [
+    shapes ? `${shapes} shape${shapes > 1 ? 's' : ''}` : '',
+    points ? `${points} point${points > 1 ? 's' : ''}` : '',
+  ]
+    .filter(Boolean)
+    .join(', ');
   const Icon = head.icon;
 
   const body =
@@ -127,47 +192,40 @@ export function TransformDialog(p: {
     ) : (
       <>
         <PickField
-          label="Objects"
+          label="Select"
           active={xf.pick === 'objects'}
-          text={n ? `${n} shape${n > 1 ? 's' : ''}` : null}
-          empty="Select shapes"
-          onClick={pickTo('objects')}
-          onClear={() => {
-            p.clearSelection();
-            set({ pick: 'objects' });
-          }}
+          text={selText || null}
+          empty="Click or drag a box"
+          onClick={() => set({ pick: 'objects' })}
+          onClear={cmd.clearSelection}
         />
         {tool === 'move' && (
           <>
+            {vals.move.map((r) => (
+              <NumRow
+                key={r.label}
+                label={`${r.label} offset`}
+                value={r.value}
+                onCommit={r.commit}
+              />
+            ))}
             <PickField
               label="From"
               active={xf.pick === 'base'}
               text={fmt(xf.base)}
-              empty="Pick base point"
+              empty="Pick a point (optional)"
               onClick={pickTo('base')}
-              onClear={() => set({ base: null, pick: 'base' })}
+              onClear={() => set({ base: null, pick: 'objects' })}
             />
-            <PickField
-              label="To"
-              active={xf.pick === 'target'}
-              text={
-                xf.base && (xf.dx || xf.dy)
-                  ? fmt({ x: xf.base.x + xf.dx, y: xf.base.y + xf.dy })
-                  : null
-              }
-              empty="Pick target point"
-              onClick={() => set({ pick: xf.base ? 'target' : 'base' })}
-            />
-            <NumRow
-              label="X offset"
-              value={+xf.dx.toFixed(6)}
-              onCommit={(dx) => set({ dx, pick: null })}
-            />
-            <NumRow
-              label="Y offset"
-              value={+xf.dy.toFixed(6)}
-              onCommit={(dy) => set({ dy, pick: null })}
-            />
+            {xf.base && (
+              <PickField
+                label="To"
+                active={xf.pick === 'target'}
+                text={xf.dx || xf.dy ? fmt({ x: xf.base.x + xf.dx, y: xf.base.y + xf.dy }) : null}
+                empty="Pick the target point"
+                onClick={pickTo('target')}
+              />
+            )}
           </>
         )}
         {(tool === 'scale' || tool === 'rotate') && (
@@ -175,9 +233,9 @@ export function TransformDialog(p: {
             label={tool === 'scale' ? 'Base' : 'Centre'}
             active={xf.pick === 'base'}
             text={xf.base ? fmt(xf.base) : cmd.pivot ? `centre (${fmt(cmd.pivot)})` : null}
-            empty="Pick point"
+            empty="Pick a point"
             onClick={pickTo('base')}
-            onClear={xf.base ? () => set({ base: null }) : undefined}
+            onClear={xf.base ? () => set({ base: null, pick: 'objects' }) : undefined}
           />
         )}
         {tool === 'scale' && (
@@ -193,18 +251,18 @@ export function TransformDialog(p: {
               />
               Same factor for X and Y
             </label>
-            {xf.uniform ? (
-              <NumRow label="Factor" value={xf.sx} onCommit={(v) => v && set({ sx: v, sy: v })} />
-            ) : (
-              <>
-                <NumRow label="X factor" value={xf.sx} onCommit={(v) => v && set({ sx: v })} />
-                <NumRow label="Y factor" value={xf.sy} onCommit={(v) => v && set({ sy: v })} />
-              </>
-            )}
+            {vals.scale.map((r) => (
+              <NumRow
+                key={r.label}
+                label={r.label === 'Factor' ? 'Factor' : `${r.label} factor`}
+                value={r.value}
+                onCommit={r.commit}
+              />
+            ))}
           </>
         )}
         {tool === 'rotate' && (
-          <NumRow label="Angle" value={xf.angle} onCommit={(angle) => set({ angle })} unit="°" />
+          <NumRow label="Angle" value={xf.angle} onCommit={vals.rotate[0].commit} unit="°" />
         )}
         {tool === 'mirror' && (
           <>
@@ -212,10 +270,20 @@ export function TransformDialog(p: {
               label="Line"
               active={xf.pick === 'm1' || xf.pick === 'm2'}
               text={
-                xf.m1 && xf.m2 ? `${fmt(xf.m1)} → ${fmt(xf.m2)}` : xf.m1 ? 'Pick 2nd point' : null
+                xf.m1 && xf.m2
+                  ? `${fmt(xf.m1)} to ${fmt(xf.m2)}`
+                  : xf.pick === 'm2'
+                    ? 'Pick the 2nd point'
+                    : null
               }
               empty="Pick 2 points"
-              onClick={() => set({ m1: null, m2: null, pick: 'm1' })}
+              onClick={() =>
+                set(
+                  xf.pick === 'm1' || xf.pick === 'm2'
+                    ? { pick: 'objects' }
+                    : { m1: null, m2: null, pick: 'm1' },
+                )
+              }
             />
             <div className="flex gap-1.5 pl-[72px]">
               {(
@@ -230,7 +298,7 @@ export function TransformDialog(p: {
                   disabled={!cmd.pivot}
                   onClick={() => {
                     const c = cmd.pivot!;
-                    set({ m1: c, m2: { x: c.x + ux, y: c.y + uy }, pick: null });
+                    set({ m1: c, m2: { x: c.x + ux, y: c.y + uy }, pick: 'objects' });
                   }}
                 >
                   {lbl}
@@ -239,10 +307,16 @@ export function TransformDialog(p: {
             </div>
           </>
         )}
-        <label className="flex items-center gap-1.5 text-fg-2">
+        <label
+          className={`flex items-center gap-1.5 text-fg-2 ${cmd.partial ? 'opacity-50' : ''}`}
+          title={
+            cmd.partial ? 'Picked vertices always move; copies are of whole shapes.' : undefined
+          }
+        >
           <input
             type="checkbox"
-            checked={xf.copy}
+            checked={xf.copy && !cmd.partial}
+            disabled={cmd.partial}
             onChange={(ev) => set({ copy: ev.target.checked })}
             className="accent-accent"
           />
@@ -252,7 +326,7 @@ export function TransformDialog(p: {
     );
 
   return (
-    <div className={`${card} absolute top-3 right-3 z-20 w-[260px] select-none`}>
+    <div className={`${card} absolute top-3 right-3 z-20 w-[268px] select-none`}>
       <div className="flex items-center gap-2 px-2 py-1.5 border-b border-line">
         <Icon className="w-3.5 h-3.5 text-accent-fg" />
         <span className="font-semibold uppercase tracking-wide text-[10px]">{head.label}</span>

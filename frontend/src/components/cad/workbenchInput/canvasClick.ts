@@ -59,7 +59,7 @@ export function onCanvasClick(e: React.MouseEvent, wb: CanvasClickContext) {
 
   // Move / Scale / Rotate / Mirror take objects and points from the canvas.
   if (transformPick) {
-    transformPick(snapPt, findEntityAt(rawPt), e.shiftKey);
+    transformPick(snapPt, rawPt, findEntityAt(rawPt));
     return;
   }
 
@@ -161,5 +161,5 @@ export interface CanvasClickContext {
     React.SetStateAction<{ p0: Point2D; p1: Point2D; polyline?: Point2D[] }>
   >;
   commitPoint: (pt: Point2D) => void;
-  transformPick: ((pt: Point2D, hitId: string | null, shift: boolean) => void) | null;
+  transformPick: ((pt: Point2D, raw: Point2D, hitId: string | null) => void) | null;
 }
