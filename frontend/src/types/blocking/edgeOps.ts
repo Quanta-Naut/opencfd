@@ -94,7 +94,7 @@ export function applyVertexMove(
     if (old && (e.v0 === vertexId || e.v1 === vertexId)) {
       const path =
         associatedEdgePath(e, vmap.get(e.v0)!, vmap.get(e.v1)!, entities) ??
-        movedEdgePath(e.path, omap.get(e.v0)!, omap.get(e.v1)!, vmap.get(e.v0)!, vmap.get(e.v1)!, outlines);
+        movedEdgePath(e.path, omap.get(e.v0)!, omap.get(e.v1)!, vmap.get(e.v0)!, vmap.get(e.v1)!, outlines, e.curveId);
       return { ...e, path };
     }
     return { ...e, path: e.path.map((p) => ({ ...p })) };

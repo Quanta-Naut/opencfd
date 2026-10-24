@@ -1,3 +1,4 @@
+import type { BlockDragState } from '../../../types/blocking';
 import React from 'react';
 import { Point2D, CadEntity, getGeometryBBox } from '../../../types/cadWorkflow';
 
@@ -93,7 +94,7 @@ export interface DomainHandleDragContext {
   setUpstreamChordFactor: (f: number) => void;
   setDownstreamChordFactor: (f: number) => void;
   setLateralHeightFactor: (f: number) => void;
-  blockDrag: React.RefObject<{ vid: string; origin: Point2D; recorded?: boolean }>;
+  blockDrag: React.RefObject<BlockDragState>;
   editDrag: React.RefObject<
     | {
         mode: 'vertex';

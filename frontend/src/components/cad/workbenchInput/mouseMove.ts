@@ -1,3 +1,5 @@
+import { constrainToHome, vertexMoveKeepsBlocksValid } from '../../../types/blocking';
+import type { BlockDragState } from '../../../types/blocking';
 import React from 'react';
 import {
   CadWorkflowStep,
@@ -144,10 +146,14 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
   // Structured block-vertex drag / hover (mesh stage).
   if (showBlocking && blocking) {
     if (blockDrag.current && onUpdateBlocking) {
-      const vid = blockDrag.current.vid;
-      const { pt, guides } = snapBlockVertex(raw, vid);
+      const { vid, home } = blockDrag.current;
+      const held = home ? constrainToHome(home, raw) : null;
+      const { pt, guides } = held ? { pt: held, guides: [] } : snapBlockVertex(raw, vid);
       blockSnapGuides.current = guides;
-      onUpdateBlocking(applyVertexMove(blocking, vid, pt, cadState.entities));
+      const next = applyVertexMove(blocking, vid, pt, cadState.entities);
+      // Refuse a position that would fold a block inside out; the vertex
+      // stays at its last good spot until the cursor comes back.
+      if (vertexMoveKeepsBlocksValid(blocking, next, vid)) onUpdateBlocking(next);
       return;
     }
     const vHit = 12 / zoom;
@@ -470,7 +476,7 @@ export interface MouseMoveContext {
   pickCurve: (p: Point2D, radius: number) => string | null;
   hoverCurveId: string;
   setHoverCurveId: React.Dispatch<React.SetStateAction<string>>;
-  blockDrag: React.RefObject<{ vid: string; origin: Point2D; recorded?: boolean }>;
+  blockDrag: React.RefObject<BlockDragState>;
   hoverEdgeId: string;
   setHoverEdgeId: React.Dispatch<React.SetStateAction<string>>;
   onUpdateBlocking: (bk: Blocking | null) => void;

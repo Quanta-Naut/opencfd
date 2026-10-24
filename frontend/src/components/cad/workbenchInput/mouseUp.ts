@@ -1,3 +1,4 @@
+import type { BlockDragState } from '../../../types/blocking';
 import type { CadAction } from '../workbenchCore';
 import React from 'react';
 import { Point2D, CadEntity } from '../../../types/cadWorkflow';
@@ -129,7 +130,7 @@ export interface MouseUpContext {
   panRafRef: React.RefObject<number>;
   pendingPanRef: React.RefObject<Point2D>;
   setPan: React.Dispatch<React.SetStateAction<Point2D>>;
-  blockDrag: React.RefObject<{ vid: string; origin: Point2D; recorded?: boolean }>;
+  blockDrag: React.RefObject<BlockDragState>;
   blockSnapGuides: React.RefObject<{ a: Point2D; b: Point2D }[]>;
   blocking: Blocking;
   onUpdateBlocking: (bk: Blocking | null) => void;

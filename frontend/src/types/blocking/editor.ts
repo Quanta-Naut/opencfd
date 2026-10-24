@@ -126,24 +126,39 @@ function outlineUnder(chain: Point2D[], outlines: Outline[]): number {
   for (let k = 0; k < outlines.length; k++) {
     const tol = scaleOf(outlines[k].pts) * 1e-4;
     // Segment midpoints too: an internal edge can have both ENDS on the outline
-    // (a cut from floor to ceiling) without running along it.
-    const probes = chain.flatMap((p, i) => (i ? [p, { x: (p.x + chain[i - 1].x) / 2, y: (p.y + chain[i - 1].y) / 2 }] : [p]));
-    if (probes.every((p) => projectOnRing(outlines[k].pts, p).d <= tol)) return k;
+    // (a cut from floor to ceiling) without running along it. Such a cut's
+    // midpoint is about half a chord off the outline; a chord of a curved
+    // edge that straddles an outline vertex only sags by a sliver of its
+    // length, so the midpoint tolerance scales with the chord.
+    const ring = outlines[k].pts;
+    const on = chain.every((p, i) => {
+      if (projectOnRing(ring, p).d > tol) return false;
+      if (!i) return true;
+      const q = chain[i - 1];
+      const mid = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+      return projectOnRing(ring, mid).d <= tol + 0.1 * Math.hypot(p.x - q.x, p.y - q.y);
+    });
+    if (on) return k;
   }
   return -1;
 }
 
 /**
  * New interior path for an edge whose endpoints moved from (o0, o1) to (n0, n1).
- * An edge that ran along an outline and still has both ends on it is re-traced
- * along it, the same way round as before. Anything else keeps its shape: each
+ * An edge that ran along an outline (or is associated with its entity through
+ * `curveId`) and still has both ends on it is re-traced along it, the same
+ * way round as before. Anything else keeps its shape: each
  * interior point moves by a blend of the two end displacements.
  */
 export function movedEdgePath(
   path: Point2D[], o0: Point2D, o1: Point2D, n0: Point2D, n1: Point2D, outlines: Outline[],
+  curveId?: string,
 ): Point2D[] {
   const chain = [o0, ...path, o1];
-  const k = outlineUnder(chain, outlines);
+  // An edge associated with an outline's entity follows it even where its
+  // stored samples cut a corner (a coarse edge across a trailing edge).
+  const assoc = curveId ? outlines.findIndex((o) => o.entityId === curveId) : -1;
+  const k = assoc >= 0 ? assoc : outlineUnder(chain, outlines);
   if (k >= 0) {
     const mid = chain[Math.floor(chain.length / 2)];
     const hint = path.length ? mid : { x: (o0.x + o1.x) / 2, y: (o0.y + o1.y) / 2 };

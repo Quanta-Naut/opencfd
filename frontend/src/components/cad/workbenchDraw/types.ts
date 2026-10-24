@@ -1,3 +1,4 @@
+import type { BlockDragState } from '../../../types/blocking';
 import type React from 'react';
 import type {
   CadWorkflowStep,
@@ -34,7 +35,7 @@ export interface DrawScene {
   assocEdges: string[];
   badBlockIds: Set<string>;
   blockCursor: Point2D;
-  blockDrag: React.RefObject<{ vid: string; origin: Point2D; recorded?: boolean }>;
+  blockDrag: React.RefObject<BlockDragState>;
   blockDrawPts: Point2D[];
   blocking: Blocking;
   blockPick: string;

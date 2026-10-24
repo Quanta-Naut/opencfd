@@ -1,3 +1,4 @@
+import type { BlockDragState } from '../../types/blocking';
 import React, { useState, useRef, useEffect, useCallback, useReducer, useMemo } from 'react';
 import { requestOffset, requestFillet } from '../../utils/api';
 import { toast } from '../ui/Toast';
@@ -187,7 +188,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const historyIdxRef = useRef<number>(-1);
   // Structured block-vertex drag state + blocking undo history (declared here so
   // the fit logic and the CAD-history effect can both see them).
-  const blockDrag = useRef<{ vid: string; origin: Point2D; recorded?: boolean } | null>(null);
+  const blockDrag = useRef<BlockDragState | null>(null);
   const blockSnapGuides = useRef<{ a: Point2D; b: Point2D }[]>([]);
   const blockUndoRef = useRef<(Blocking | null)[]>([]);
   const blockRedoRef = useRef<(Blocking | null)[]>([]);
@@ -1527,6 +1528,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) =>
       onMouseDown(e, {
+        blockOutlines,
+        blockTag,
+        setCmdText,
         userInteractedRef,
         displayOnly,
         currentStep,
@@ -1580,6 +1584,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         setMarquee,
       }),
     [
+      blockOutlines,
+      blockTag,
       pan,
       tool,
       currentStep,

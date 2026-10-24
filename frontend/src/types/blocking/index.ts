@@ -55,6 +55,14 @@ export {
   addBlockFromCorners,
 } from './editor';
 
+export type { VertexHome, BlockDragState } from './vertexHome';
+export {
+  vertexHome,
+  constrainToHome,
+  outlineBreaks,
+  vertexMoveKeepsBlocksValid,
+} from './vertexHome';
+
 export type { Curve, BlockingCheck } from './hexa';
 export {
   curveOf,

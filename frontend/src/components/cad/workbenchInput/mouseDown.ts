@@ -1,3 +1,7 @@
+import type { BoundaryTag } from '../../../types/cadWorkflow';
+import { vertexHome } from '../../../types/blocking';
+import type { Outline } from '../../../types/blocking';
+import type { BlockDragState } from '../../../types/blocking';
 import type { CadAction } from '../workbenchCore';
 import React from 'react';
 import {
@@ -73,6 +77,9 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
     findEntityAt,
     dragSelecting,
     setMarquee,
+    blockOutlines,
+    blockTag,
+    setCmdText,
   } = wb;
   userInteractedRef.current = true;
   // Step 2: Domain Handle Drag start
@@ -183,7 +190,15 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
     }
     if (best) {
       const bv = blocking.vertices.find((v) => v.id === best)!;
-      blockDrag.current = { vid: best, origin: { ...bv.pt }, recorded: false };
+      // A vertex on the geometry stays on it (slides along its curve, or stays
+      // put at a corner); Alt detaches it for this drag.
+      const home =
+        e.altKey || bv.curves?.length ? undefined : vertexHome(bv.pt, blockOutlines, blockTag);
+      blockDrag.current = { vid: best, origin: { ...bv.pt }, recorded: false, home };
+      if (home?.kind === 'point')
+        setCmdText('This vertex is pinned to a geometry corner. Hold Alt and drag to detach it.');
+      else if (home?.kind === 'curve' || home?.kind === 'ring')
+        setCmdText('Sliding along the geometry. Hold Alt and drag to detach.');
       blockSnapGuides.current = [];
       e.preventDefault();
       return;
@@ -277,6 +292,9 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
 
 /** What onMouseDown reads from the workbench component. */
 export interface MouseDownContext {
+  blockOutlines: Outline[];
+  blockTag: (a: Point2D, b: Point2D) => BoundaryTag | undefined;
+  setCmdText: React.Dispatch<React.SetStateAction<string>>;
   userInteractedRef: React.RefObject<boolean>;
   displayOnly: boolean;
   currentStep: CadWorkflowStep;
@@ -321,7 +339,7 @@ export interface MouseDownContext {
   setAssocEdges: React.Dispatch<React.SetStateAction<string[]>>;
   pickCurve: (p: Point2D, radius: number) => string | null;
   associateTo: (curveId: string) => void;
-  blockDrag: React.RefObject<{ vid: string; origin: Point2D; recorded?: boolean }>;
+  blockDrag: React.RefObject<BlockDragState>;
   blockSnapGuides: React.RefObject<{ a: Point2D; b: Point2D }[]>;
   setSelectedEdgeId: React.Dispatch<React.SetStateAction<string>>;
   setSelectedBlockId: React.Dispatch<React.SetStateAction<string>>;
