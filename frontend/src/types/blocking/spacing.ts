@@ -230,40 +230,69 @@ export function cellsToFill(
  * Pointwise "Sync Spacings" over the whole blocking: wherever a grid line
  * jumps in cell size across a block join, the coarse edge takes the fine
  * edge's cell size at that end. Repeats, since one fix can shift a jump
- * along the line, and reports what is left. An edge too short for its node
- * count to grade down to the fine size is left alone: the jump would only
- * move inside it, between its own cells.
+ * along the line, and reports what is left. An edge with too few nodes to
+ * grade down to the fine size smoothly gets more (its parallel edges follow);
+ * past `maxNodes` it is left alone, since the jump would only move inside it.
  */
 export function syncSpacings(
   bk: Blocking,
   limit = SPACING_JUMP_LIMIT,
-): { blocking: Blocking; fixed: number; left: number } {
+  maxNodes = 300,
+): { blocking: Blocking; fixed: number; left: number; refined: number } {
   let out = bk;
-  let fixed = 0;
+  const before = spacingJumps(bk, limit).length;
+  const refined = new Set<string>();
   const skip = new Set<string>();
   for (let pass = 0; pass < 6; pass++) {
-    const jumps = spacingJumps(out, limit).filter((j) => !skip.has(`${j.coarse}@${j.vid}`));
+    const jumps = spacingJumps(out, limit).filter((j) => !skip.has(j.coarse));
     if (!jumps.length) break;
     const cells = endCells(out);
-    for (const j of jumps) {
-      const coarse = out.edges.find((e) => e.id === j.coarse);
-      const fine = out.edges.find((e) => e.id === j.fine);
-      if (!coarse || !fine) continue;
-      const fc = cells.get(fine.id)!;
-      const size = Number((fine.v0 === j.vid ? fc.at0 : fc.at1).toPrecision(3));
-      const trial = setEdgeParams(out, coarse.id, {
+    // Both ends of an edge at once: a short edge between two fine joins
+    // (a blunt trailing edge) can only grade when both sizes are known.
+    const byEdge = new Map<string, SpacingJump[]>();
+    for (const j of jumps) byEdge.set(j.coarse, [...(byEdge.get(j.coarse) ?? []), j]);
+    for (const [id, js] of byEdge) {
+      const coarse = out.edges.find((e) => e.id === id);
+      if (!coarse) continue;
+      const patch: Parameters<typeof setEdgeParams>[2] = {
         law: coarse.law === 'tanh' || coarse.law === 'bigeometric' ? coarse.law : 'bigeometric',
-        [coarse.v0 === j.vid ? 'spacing1' : 'spacing2']: size,
-      });
-      if (growthWithin(trial, coarse.id) > SYNC_MAX_GROWTH) {
-        skip.add(`${j.coarse}@${j.vid}`);
+      };
+      const want: { at0?: number; at1?: number } = {};
+      for (const j of js) {
+        const fine = out.edges.find((e) => e.id === j.fine);
+        if (!fine) continue;
+        const fc = cells.get(fine.id)!;
+        const size = Number((fine.v0 === j.vid ? fc.at0 : fc.at1).toPrecision(3));
+        const at0 = coarse.v0 === j.vid;
+        patch[at0 ? 'spacing1' : 'spacing2'] = size;
+        want[at0 ? 'at0' : 'at1'] = size;
+      }
+      // Smooth inside, and the end cells really reach the sizes asked for (a
+      // law can't put a small cell at both ends of a two-cell edge).
+      const ok = (b: Blocking) => {
+        const got = endCells(b).get(id)!;
+        return (
+          growthWithin(b, id) <= SYNC_MAX_GROWTH &&
+          (want.at0 === undefined || got.at0 <= want.at0 * SYNC_MAX_GROWTH) &&
+          (want.at1 === undefined || got.at1 <= want.at1 * SYNC_MAX_GROWTH)
+        );
+      };
+      let nodes = coarse.nodes;
+      let trial = setEdgeParams(out, id, patch);
+      while (!ok(trial) && nodes < maxNodes) {
+        nodes = Math.min(maxNodes, Math.ceil(nodes * 1.25) + 1);
+        trial = setEdgeParams(out, id, { ...patch, nodes });
+      }
+      if (!ok(trial)) {
+        skip.add(id);
         continue;
       }
+      if (nodes !== coarse.nodes) refined.add(id);
       out = trial;
-      fixed++;
     }
   }
-  return { blocking: out, fixed, left: spacingJumps(out, limit).length };
+  const left = spacingJumps(out, limit).length;
+  return { blocking: out, fixed: Math.max(0, before - left), left, refined: refined.size };
 }
 
 /** Largest size ratio between neighbouring cells along one edge. */

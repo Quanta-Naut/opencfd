@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
+import { toast } from '../../ui/Toast';
 import { CFDProjectState } from '../../../types/cfd';
 import {
   Blocking,
@@ -352,7 +353,23 @@ export const StructuredMeshPanel: React.FC<{
           )}
           <Tooltip content="Match the cell size on both sides of every block join.">
             <button
-              onClick={() => onUpdateBlocking?.(syncSpacings(bkNow).blocking)}
+              onClick={() => {
+                const r = syncSpacings(bkNow);
+                onUpdateBlocking?.(r.blocking);
+                const added = r.refined
+                  ? ` Added nodes to ${r.refined} edge group${r.refined > 1 ? 's' : ''} so ${r.refined > 1 ? 'they' : 'it'} could grade.`
+                  : '';
+                if (!r.left)
+                  toast.success('Spacings synced', {
+                    id: 'sync-spacings',
+                    description: `Fixed ${r.fixed} join${r.fixed > 1 ? 's' : ''}.${added}`,
+                  });
+                else
+                  toast.warning(`${r.left} join${r.left > 1 ? 's' : ''} left`, {
+                    id: 'sync-spacings',
+                    description: `Fixed ${r.fixed}.${added} The rest need more nodes than allowed (300) to grade smoothly; coarsen the fine side or set the edge by hand.`,
+                  });
+              }}
               disabled={!jumps.length}
               className={`${btn} disabled:opacity-40 disabled:pointer-events-none`}
             >
