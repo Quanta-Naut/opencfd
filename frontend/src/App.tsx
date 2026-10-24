@@ -19,12 +19,13 @@ import {
   uploadAndParseAirfoil,
   fetchAndParseAirfoilFromUrl,
   deleteSolverRun,
+  fetchRunField,
 } from './utils/api';
 import { saveProjectSession, saveProjectBlob, renameProject } from './utils/projectsApi';
 import { buildInitialCFDState } from './hooks/appInitialState';
 import { useHistoricalRunField } from './hooks/useHistoricalRunField';
 import { useResultsPlayback } from './hooks/useResultsPlayback';
-import { useResultsView } from './hooks/useResultsView';
+import { useResultsView, type DiffSource } from './hooks/useResultsView';
 import { fieldDef, fieldValues, type ResultFieldId } from './utils/resultFields';
 import { patchSamples, snapshotBoundaries } from './utils/boundaryData';
 import { exportViewImage } from './utils/exportView';
@@ -997,11 +998,45 @@ export function App({
   }, [activeStage, activeDialogPlot, selectedPlotId, state.plots]);
 
   // ── Results post-processing (contours, overlays, probes, reports) ────────
+  // Difference view: the other run's field, fetched when picked.
+  const diffRunId =
+    activeStage === 'results' && state.postprocess.diffRunId !== targetRunForPlot.id
+      ? state.postprocess.diffRunId
+      : null;
+  const [diffSource, setDiffSource] = useState<DiffSource | null>(null);
+  const [diffStatus, setDiffStatus] = useState<{ loading: boolean; error: string | null }>({
+    loading: false,
+    error: null,
+  });
+  useEffect(() => {
+    setDiffSource(null);
+    if (!diffRunId) {
+      setDiffStatus({ loading: false, error: null });
+      return;
+    }
+    const ctrl = new AbortController();
+    setDiffStatus({ loading: true, error: null });
+    fetchRunField(projectId, diffRunId, ctrl.signal).then((res) => {
+      if (ctrl.signal.aborted) return;
+      if (res.data?.mesh?.nodes?.length) {
+        const label = (state.solverRuns ?? []).find((r) => r.id === diffRunId)?.label ?? 'run';
+        setDiffSource({ label, fields: res.data.fields, mesh: res.data.mesh });
+        setDiffStatus({ loading: false, error: null });
+      } else {
+        setDiffStatus({ loading: false, error: res.detail || 'No stored field for that run' });
+      }
+    });
+    return () => ctrl.abort();
+    // The label is looked up once; relabelling a run need not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diffRunId, projectId]);
+
   const resultsView = useResultsView(
     effectiveFieldData,
     effectiveMesh,
     state.postprocess,
     state.physics,
+    diffSource,
   );
   const [probePicking, setProbePicking] = useState(false);
   // Clip box picking: null when off, then the first corner once clicked.
@@ -1110,7 +1145,7 @@ export function App({
       root,
       r
         ? {
-            title: def.short,
+            title: resultsView.overlay.legend.title,
             unit: def.unit,
             lo: r[0],
             hi: r[1],
@@ -1118,9 +1153,9 @@ export function App({
             levels: state.postprocess.levels,
           }
         : null,
-      `${projectName || 'results'}-${state.postprocess.activeField}`,
+      `${projectName || 'results'}-${def.short.replace(/[^\w.-]+/g, '_')}`,
     );
-  }, [projectName, state.postprocess, resultsView.range]);
+  }, [projectName, state.postprocess, resultsView.range, resultsView.overlay.legend.title]);
 
   const { handleRunSolver, handleStopSolver } = useSolverRun({
     state,
@@ -1455,6 +1490,12 @@ export function App({
                       setProbePicking((v) => !v);
                     },
                     clipPicking: !!clipPicking,
+                    diffRuns: (state.solverRuns ?? [])
+                      .filter((r) => r.status !== 'running' && r.status !== 'error')
+                      .filter((r) => r.id !== targetRunForPlot.id)
+                      .map((r) => ({ id: r.id, label: r.label })),
+                    viewedRunLabel: targetRunForPlot.label ?? 'this run',
+                    diffStatus,
                     onToggleClipPicking: () => {
                       setPickingPointsState(null);
                       setProbePicking(false);

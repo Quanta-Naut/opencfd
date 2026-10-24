@@ -27,6 +27,13 @@ interface MeshLike {
   boundaries?: Record<string, number[]>;
 }
 
+/** Another run's field, for a difference view. */
+export interface DiffSource {
+  label: string;
+  fields: Record<string, ArrayLike<number>>;
+  mesh: { nodes: number[][]; elements: number[][] };
+}
+
 export interface ProbeRow {
   id: string;
   x: number;
@@ -46,6 +53,7 @@ export function useResultsView(
   mesh: MeshLike | null | undefined,
   pp: PostProcessConfig,
   physics: PhysicsConfig,
+  diff: DiffSource | null = null,
 ) {
   const custom = pp.customFields;
   const ref = useMemo<FlowReference>(() => {
@@ -90,7 +98,41 @@ export function useResultsView(
     [fields, ref],
   );
 
-  const activeVals = useMemo(() => fieldValues(fields, active, ref), [fields, active, ref]);
+  // The other run's fields at this mesh's nodes: as they are on the same
+  // mesh, interpolated when the meshes differ (NaN outside its domain).
+  const diffFields = useMemo(() => {
+    const nodes = mesh?.nodes;
+    if (!diff || !nodes?.length) return null;
+    const xy = { x: nodes.map((n) => n[0]), y: nodes.map((n) => n[1]) };
+    if (diff.mesh.nodes.length === nodes.length) return { ...diff.fields, ...xy };
+    const loc = buildMeshLocator(diff.mesh.nodes, diff.mesh.elements);
+    const out: Record<string, ArrayLike<number>> = { ...xy };
+    const hits = nodes.map((n) => loc.locate(n[0], n[1]));
+    for (const [k, v] of Object.entries(diff.fields)) {
+      if (!v || v.length !== diff.mesh.nodes.length) continue;
+      const a = new Float64Array(nodes.length);
+      hits.forEach((h, i) => {
+        a[i] = h ? h.w[0] * v[h.nodes[0]] + h.w[1] * v[h.nodes[1]] + h.w[2] * v[h.nodes[2]] : NaN;
+      });
+      out[k] = a;
+    }
+    return out;
+  }, [diff, mesh?.nodes]);
+
+  const ownVals = useMemo(() => fieldValues(fields, active, ref), [fields, active, ref]);
+  const activeVals = useMemo(() => {
+    if (!diffFields || !ownVals) return ownVals;
+    const other = fieldValues(diffFields, active, ref);
+    if (!other || other.length !== ownVals.length) return null;
+    const d = new Float64Array(ownVals.length);
+    // Where the other run has no value, show no difference.
+    for (let i = 0; i < d.length; i++) {
+      const v = ownVals[i] - other[i];
+      d[i] = Number.isFinite(v) ? v : 0;
+    }
+    return d;
+  }, [ownVals, diffFields, active, ref]);
+  const diffing = !!diffFields;
 
   const autoRange = useMemo<[number, number] | null>(
     () =>
@@ -98,10 +140,11 @@ export function useResultsView(
         ? valueRange(
             activeVals,
             pp.rangeMode === 'full' ? 'full' : 'auto',
-            fieldDef(active).symmetric,
+            // A difference is signed: centre it on zero.
+            diffing || fieldDef(active).symmetric,
           )
         : null,
-    [activeVals, active, pp.rangeMode],
+    [activeVals, active, pp.rangeMode, diffing],
   );
 
   const range = useMemo<[number, number] | null>(() => {
@@ -198,12 +241,12 @@ export function useResultsView(
         y: r.y,
         label: r.values?.[active] !== undefined ? fmtValue(r.values[active]!) : 'outside',
       })),
-      legend: { title: def.short, unit: def.unit },
+      legend: { title: diffing ? `Δ${def.short}` : def.short, unit: def.unit },
       clipOutside: pp.clipOutside ?? false,
       clipBox: pp.clipBox ?? null,
       isoLines,
     }),
-    [pp, available, probeRows, active, def, isoLines],
+    [pp, available, probeRows, active, def, isoLines, diffing],
   );
 
   return {
@@ -217,5 +260,7 @@ export function useResultsView(
     overlay,
     probeRows,
     reports,
+    /** Showing this run minus another. */
+    diffing,
   };
 }

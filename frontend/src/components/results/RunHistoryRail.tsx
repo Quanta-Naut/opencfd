@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ChevronDown, History, X, Loader2 } from 'lucide-react';
 import { SolverRunRecord } from '../../types/cfd';
+import { RunCompareTable } from './RunCompareTable';
 import { CanvasChart, ChartSeries } from '../solver/CanvasChart';
 
 export interface RunHistoryRailProps {
@@ -293,7 +294,8 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
               Pick 2+ runs to compare
             </div>
           ) : (
-            <div className="p-2 space-y-2 max-h-[320px] overflow-y-auto">
+            <div className="p-2 space-y-2 max-h-[420px] overflow-y-auto">
+              <RunCompareTable runs={pinnedRuns} />
               <div className="bg-surface border border-line-soft rounded p-1.5">
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-fg-3 mb-1">
                   Cd vs iteration

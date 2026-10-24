@@ -222,6 +222,43 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
             </select>
           </div>
 
+          {p.diffRuns.length > 0 && (
+            <div>
+              <Tooltip
+                content="Colour by this run's value minus another run's, to see what a change did."
+                delay={300}
+              >
+                <span className={`${lbl} block mb-1 cursor-help`}>Subtract run</span>
+              </Tooltip>
+              <select
+                aria-label="Subtract run"
+                value={pp.diffRunId ?? ''}
+                onChange={(e) => set({ diffRunId: e.target.value || null })}
+                className={select}
+              >
+                <option value="">None</option>
+                {p.diffRuns.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+              {pp.diffRunId && p.diffRuns.some((r) => r.id === pp.diffRunId) && (
+                <p
+                  className={`mt-1 text-[10px] leading-snug ${p.diffStatus.error ? 'text-danger' : 'text-fg-2'}`}
+                >
+                  {p.diffStatus.loading
+                    ? 'Loading that run...'
+                    : p.diffStatus.error
+                      ? p.diffStatus.error
+                      : `Showing ${p.viewedRunLabel} minus ${
+                          p.diffRuns.find((r) => r.id === pp.diffRunId)?.label
+                        }.`}
+                </p>
+              )}
+            </div>
+          )}
+
           <div>
             <span className={`${lbl} block mb-1`}>Colormap</span>
             <div className="grid grid-cols-5 gap-1">
@@ -883,6 +920,10 @@ export interface ResultsStagePanelProps {
   onToggleProbePicking: () => void;
   clipPicking: boolean;
   onToggleClipPicking: () => void;
+  /** Runs that can be subtracted from the viewed one. */
+  diffRuns: { id: string; label: string }[];
+  viewedRunLabel: string;
+  diffStatus: { loading: boolean; error: string | null };
   /** Returns false when the patch has no edges to plot. */
   onAddBoundaryPlot: (patch: string, variable: ResultFieldId, axis: 'x' | 'y' | 's') => boolean;
   runForces: { label: string; cd?: number; cl?: number } | null;

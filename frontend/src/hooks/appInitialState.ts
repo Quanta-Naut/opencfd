@@ -159,6 +159,7 @@ export function buildInitialCFDState(savedState: Partial<CFDProjectState> | unde
       isoValues: {},
       clipOutside: false,
       clipBox: null,
+      diffRunId: null,
       ...(savedState?.postprocess || {}),
     },
     executionStatus: savedState?.executionStatus === 'completed' ? 'completed' : 'idle',

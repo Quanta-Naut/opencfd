@@ -220,6 +220,8 @@ export interface PostProcessConfig {
   clipOutside: boolean;
   /** Show results only inside this box [x0, y0, x1, y1], model units. */
   clipBox: [number, number, number, number] | null;
+  /** Show the viewed run minus this run (null = off). */
+  diffRunId: string | null;
 }
 
 export interface SolverRunRecord {
