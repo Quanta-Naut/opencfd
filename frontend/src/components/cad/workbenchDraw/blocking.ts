@@ -25,6 +25,7 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     C,
     blockVertexKinds,
     blocksLayer,
+    meshLayer,
     badBlockIds,
     blockCursor,
     blockDrag,
@@ -166,7 +167,8 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     ctx.setLineDash([]);
     tracePath(chain);
     ctx.stroke();
-    if (showPremesh || !editing) continue;
+    // Node ticks show where the cells go; over the mesh it shows them itself.
+    if (showPremesh || (!editing && meshLayer)) continue;
     // Capped by on-screen length so a short edge zoomed out never smears
     // its ticks into a solid line.
     let screenLen = 0;

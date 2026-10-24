@@ -46,7 +46,14 @@ export function drawScene(canvas: HTMLCanvasElement | null, scene: DrawScene): v
   const f = { ctx, cw, ch, o, ws, SCALE };
 
   drawGrid(f, scene);
-  if (drawMeshView(f, scene)) return;
+  if (drawMeshView(f, scene)) {
+    // The block layer goes over the mesh when both are on (Mesh tab).
+    if (!meshOnly) {
+      drawBlockTopology(f, scene);
+      drawBlockEditor(f, scene);
+    }
+    return;
+  }
 
   // Solver / Results: mesh only. If the mesh is not shown above, draw nothing
   // else (no CAD geometry, no domain handles, no blocking).
