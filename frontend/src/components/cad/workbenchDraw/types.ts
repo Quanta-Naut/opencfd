@@ -1,3 +1,5 @@
+import type { ToolPicks } from '../workbenchUi/blockEditor/toolFields';
+import type { BlockTool } from '../workbenchUi/blockEditor/shared';
 import type { BlockDragState } from '../../../types/blocking';
 import type React from 'react';
 import type {
@@ -32,15 +34,13 @@ export interface DrawScene {
   activeField: string;
   activePlotLine: { p1: [number, number]; p2: [number, number]; label?: string };
   activeTagTool: BoundaryTag;
-  assocEdges: string[];
   badBlockIds: Set<string>;
   blockCursor: Point2D;
   blockDrag: React.RefObject<BlockDragState>;
   blockDrawPts: Point2D[];
   blocking: Blocking;
-  blockPick: string;
   blockSnapGuides: React.RefObject<{ a: Point2D; b: Point2D }[]>;
-  blockTool: 'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc';
+  blockTool: BlockTool;
   boundaryEdges: BoundaryEdge[];
   C: CanvasPalette;
   cadState: { entities: CadEntity[] };
@@ -68,9 +68,9 @@ export interface DrawScene {
   showPremesh: boolean;
   /** Vertices where cell size jumps across a block join. */
   blockSpacingJumps: SpacingJump[];
-  /** O-grid tool picks: blocks to wrap and outline edges to pass through. */
-  ogridSel: string[];
-  ogridPass: string[];
+  /** What the active tool's dialog fields hold (blocks, edges, vertices, curves). */
+  toolPicks: ToolPicks;
+  toolField: string;
   selectedVertexId: string | null;
   /** Drag behaviour per block vertex, for its marker. */
   blockVertexKinds: Map<string, VertexKind>;

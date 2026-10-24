@@ -156,7 +156,8 @@ export function applyTargetCellSize(bk: Blocking, cellSize: number): Blocking {
   // count already set rather than deriving it from the target cell size.
   const wallNormal = new Set<string>();
   for (const e of bk.edges)
-    if (e.law === 'geometric' || e.law === 'bump' || e.law === 'tanh') wallNormal.add(find(e.id));
+    if (e.law === 'geometric' || e.law === 'bump' || e.law === 'tanh' || e.law === 'bigeometric')
+      wallNormal.add(find(e.id));
 
   const groupNodes = new Map<string, number>();
   groupLens.forEach((lens, g) => {

@@ -8,7 +8,9 @@ export type BlockTool =
   | 'ogrid'
   | 'mergeV'
   | 'mergeB'
-  | 'assoc';
+  | 'assoc'
+  | 'params'
+  | 'match';
 
 export type BlockMsg = { text: string; error: boolean } | null;
 

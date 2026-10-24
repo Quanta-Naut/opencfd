@@ -8,6 +8,8 @@ import {
   Merge,
   MousePointer2,
   Redo2,
+  Ruler,
+  SlidersHorizontal,
   Spline,
   Square,
   SquarePlus,
@@ -21,12 +23,14 @@ import type { BlockTool } from './shared';
 
 // The block editor's tools, in the order an ICEM CFD blocking is built:
 // shape the topology, wrap bodies, attach it to the geometry, tidy up.
-const TOOLS: { id: BlockTool; icon: React.ElementType; label: string; key: string }[] = [
-  { id: 'select', icon: MousePointer2, label: 'Select and move', key: 'V' },
-  { id: 'split', icon: SquareSplitHorizontal, label: 'Split block', key: 'K' },
+export const TOOLS: { id: BlockTool; icon: React.ElementType; label: string; key: string }[] = [
+  { id: 'select', icon: MousePointer2, label: 'Select', key: 'V' },
+  { id: 'split', icon: SquareSplitHorizontal, label: 'Split', key: 'K' },
   { id: 'draw', icon: SquarePlus, label: 'Create block', key: 'B' },
   { id: 'ogrid', icon: Frame, label: 'O-grid', key: 'O' },
-  { id: 'assoc', icon: Spline, label: 'Associate edges to curves', key: 'A' },
+  { id: 'assoc', icon: Spline, label: 'Associate', key: 'A' },
+  { id: 'params', icon: SlidersHorizontal, label: 'Edge params', key: 'E' },
+  { id: 'match', icon: Ruler, label: 'Match edge spacing', key: 'T' },
   { id: 'mergeV', icon: Merge, label: 'Merge vertices', key: 'M' },
   { id: 'mergeB', icon: Combine, label: 'Merge blocks', key: 'J' },
   { id: 'delete', icon: Trash2, label: 'Delete block', key: 'X' },

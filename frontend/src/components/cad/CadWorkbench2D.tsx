@@ -1,3 +1,4 @@
+import type { BlockTool } from './workbenchUi/blockEditor/shared';
 import type { BlockDragState } from '../../types/blocking';
 import React, { useState, useRef, useEffect, useCallback, useReducer, useMemo } from 'react';
 import { requestOffset, requestFillet } from '../../utils/api';
@@ -42,7 +43,12 @@ import {
   vertexHome,
   constrainToHome,
   vertexMoveKeepsBlocksValid,
+  matchEdgeSpacing,
+  mergeVertices,
+  mergeBlocks,
 } from '../../types/blocking';
+import { TOOL_FIELDS } from './workbenchUi/blockEditor/toolFields';
+import type { ToolPicks } from './workbenchUi/blockEditor/toolFields';
 import { useMeshGL, type MeshGLScene } from './useMeshGL';
 import { useResolvedTheme } from '../../utils/theme';
 import { Tooltip } from '../ui/Tooltip';
@@ -792,22 +798,24 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [hoveredBlockIdx, setHoveredBlockIdx] = useState<number | null>(null);
 
   // ── Block editor (Blocks view): select / draw / split / delete tools ───────
-  const [blockTool, setBlockTool] = useState<
-    'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc'
-  >('select');
-  // ICEM-style tools: the first pick of a two-pick tool (merge vertices /
-  // blocks), the edge selection + stage of Associate, the curve under the
-  // cursor, the edge whose params are being edited, and the O-grid size.
-  const [blockPick, setBlockPick] = useState<string | null>(null);
-  const [assocEdges, setAssocEdges] = useState<string[]>([]);
-  const [assocStage, setAssocStage] = useState<'edges' | 'curve'>('edges');
+  const [blockTool, setBlockTool] = useState<BlockTool>('select');
+  // Each tool is a command with a dialog (Fusion 360 style): its selection
+  // fields, the active one, the blocking when it started (Esc restores it),
+  // and the options of O-grid and Match spacing.
+  const [toolPicks, setToolPicks] = useState<ToolPicks>({});
+  const [toolField, setToolField] = useState('');
+  const toolStartRef = useRef<Blocking | null>(null);
+  const toolSeedRef = useRef<{ picks: ToolPicks; field?: string } | null>(null);
+  // Latest blocking and edge selection, for the tool-start effect.
+  const blockingRef = useRef(blocking);
+  blockingRef.current = blocking;
+  const selectedEdgeIdRef = useRef<string | null>(null);
+  const [matchCopy, setMatchCopy] = useState(false);
   const [hoverCurveId, setHoverCurveId] = useState<string | null>(null);
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  selectedEdgeIdRef.current = selectedEdgeId;
   const [ogridScale, setOgridScale] = useState(0.5);
-  // O-grid tool: the blocks it wraps and the outline edges it passes through.
-  const [ogridSel, setOgridSel] = useState<string[]>([]);
-  const [ogridPass, setOgridPass] = useState<string[]>([]);
   const [selectedVertexId, setSelectedVertexId] = useState<string | null>(null);
   // ICEM "Pre-Mesh": the grid each block will produce, drawn over the blocks.
   const [showPremesh, setShowPremesh] = useState(false);
@@ -876,13 +884,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setBlockDrawPts([]);
       setSelectedBlockId(null);
       setSplitHover(null);
-      setBlockPick(null);
-      setAssocEdges([]);
-      setAssocStage('edges');
+      setToolPicks({});
       setSelectedEdgeId(null);
       setSelectedVertexId(null);
-      setOgridSel([]);
-      setOgridPass([]);
     }
   }, [showBlocking]);
   useEffect(() => {
@@ -892,31 +896,41 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setSelectedEdgeId(null);
     if (selectedVertexId && !blocking?.vertices.some((v) => v.id === selectedVertexId))
       setSelectedVertexId(null);
-    if (ogridSel.some((id) => !blocking?.blocks.some((b) => b.id === id))) {
-      setOgridSel([]);
-      setOgridPass([]);
+    // Picks of blocks, edges or vertices that an edit removed.
+    const fields = TOOL_FIELDS[blockTool];
+    if (fields.length && blocking) {
+      const ids = {
+        block: new Set(blocking.blocks.map((b) => b.id)),
+        edge: new Set(blocking.edges.map((e) => e.id)),
+        vertex: new Set(blocking.vertices.map((v) => v.id)),
+      };
+      let stale = false;
+      const next: ToolPicks = {};
+      for (const f of fields) {
+        const cur = toolPicks[f.key] ?? [];
+        const live = f.kind === 'curve' ? cur : cur.filter((id) => ids[f.kind as 'block'].has(id));
+        if (live.length !== cur.length) stale = true;
+        next[f.key] = live;
+      }
+      if (stale) setToolPicks(next);
     }
-    if (assocEdges.length && blocking) {
-      const live = assocEdges.filter((id) => blocking.edges.some((e) => e.id === id));
-      if (live.length !== assocEdges.length) setAssocEdges(live);
-    }
-  }, [blocking, selectedBlockId, selectedEdgeId, selectedVertexId, assocEdges, ogridSel]);
+  }, [blocking, selectedBlockId, selectedEdgeId, selectedVertexId, blockTool, toolPicks]);
   // Switching tools drops any half-finished pick.
+  // Starting a tool: empty fields, the first one active, and a snapshot to
+  // restore on cancel. Edge params starts from the selected edge, if any.
   useEffect(() => {
-    setBlockPick(null);
     setHoverCurveId(null);
     setHoverEdgeId(null);
-    if (blockTool !== 'assoc') {
-      setAssocEdges([]);
-      setAssocStage('edges');
-    }
+    const seed = toolSeedRef.current;
+    toolSeedRef.current = null;
+    const edge = selectedEdgeIdRef.current;
+    setToolField(seed?.field ?? TOOL_FIELDS[blockTool][0]?.key ?? '');
+    setToolPicks(seed?.picks ?? (blockTool === 'params' && edge ? { edges: [edge] } : {}));
+    toolStartRef.current = blockingRef.current;
     if (blockTool !== 'select') {
       setSelectedEdgeId(null);
       setSelectedVertexId(null);
-    }
-    if (blockTool !== 'ogrid') {
-      setOgridSel([]);
-      setOgridPass([]);
+      setSelectedBlockId(null);
     }
   }, [blockTool]);
 
@@ -927,6 +941,30 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [blocking, showBlocking],
   );
   const premeshQ = useMemo(() => premeshQuality(blockPremesh), [blockPremesh]);
+  // Cells the blocking will make (the pre-mesh may be thinned for drawing),
+  // and edges with nodes but next to no length: a block collapsed onto a
+  // point there fans its grid lines out of it (a sharp trailing edge).
+  const blockCellCount = useMemo(() => {
+    if (!blocking) return 0;
+    const em = new Map(blocking.edges.map((e) => [e.id, e] as const));
+    return blocking.blocks.reduce(
+      (n, b) => n + ((em.get(b.edges[0])?.nodes ?? 2) - 1) * ((em.get(b.edges[1])?.nodes ?? 2) - 1),
+      0,
+    );
+  }, [blocking]);
+  const blockTinyEdges = useMemo(() => {
+    if (!blocking?.edges.length) return 0;
+    const vm = new Map(blocking.vertices.map((v) => [v.id, v.pt] as const));
+    const xs = blocking.vertices.map((v) => v.pt.x);
+    const ys = blocking.vertices.map((v) => v.pt.y);
+    const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    return blocking.edges.filter((e) => {
+      const pts = [vm.get(e.v0)!, ...e.path, vm.get(e.v1)!];
+      let L = 0;
+      for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      return e.nodes > 2 && L < size * 2e-4;
+    }).length;
+  }, [blocking]);
   const blockSpacingJumps = useMemo(
     () => (blocking?.blocks.length && showBlocking ? spacingJumps(blocking) : []),
     [blocking, showBlocking],
@@ -1072,30 +1110,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [edgeTagMap, cadState.entities],
   );
 
-  const associateTo = useCallback(
-    (curveId: string) => {
-      if (!blocking || !assocEdges.length) return;
-      const res = associateEdges(
-        blocking,
-        assocEdges,
-        [curveId],
-        cadState.entities,
-        blockTag,
-        curvePatch,
-      );
-      if (
-        applyBlockOp(
-          res,
-          `${assocEdges.length} edge${assocEdges.length > 1 ? 's' : ''} associated.`,
-        )
-      ) {
-        setAssocEdges([]);
-        setAssocStage('edges');
-      }
-    },
-    [blocking, assocEdges, cadState.entities, blockTag, curvePatch, applyBlockOp],
-  );
-
   const initializeBlocks = useCallback(() => {
     const bk = initializeBlocking(cadState.entities);
     if (!bk) {
@@ -1129,22 +1143,89 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [blocking, onUpdateBlocking],
   );
 
-  /** O-grid tool: wrap the picked blocks, passing through the picked edges. */
-  const applyOgrid = useCallback(() => {
-    if (!blocking || !ogridSel.length) return;
-    const res = ogridBlocks(
-      blocking,
-      ogridSel,
-      ogridPass,
-      ogridScale,
-      blocking.edges.length ? currentCellSize(blocking) : undefined,
-    );
-    const kind = !ogridPass.length ? 'O-grid' : ogridPass.length === 1 ? 'C-grid' : 'O-grid';
-    if (applyBlockOp(res, `${kind} built around ${ogridSel.length} block${ogridSel.length > 1 ? 's' : ''}.`)) {
-      setOgridSel([]);
-      setOgridPass([]);
+  /** OK / Enter: run the active tool on its picks, then back to Select. */
+  const commitTool = useCallback(() => {
+    if (!blocking) return;
+    const pk = (k: string) => toolPicks[k] ?? [];
+    const n = (k: string, what: string) => `${pk(k).length} ${what}${pk(k).length === 1 ? '' : 's'}`;
+    let ok = true;
+    switch (blockTool) {
+      case 'ogrid': {
+        if (!pk('blocks').length) return;
+        const res = ogridBlocks(
+          blocking,
+          pk('blocks'),
+          pk('pass'),
+          ogridScale,
+          blocking.edges.length ? currentCellSize(blocking) : undefined,
+        );
+        ok = applyBlockOp(res, `${pk('pass').length ? 'C-grid' : 'O-grid'} built around ${n('blocks', 'block')}.`);
+        break;
+      }
+      case 'assoc':
+        if (!pk('edges').length || !pk('curves').length) return;
+        ok = applyBlockOp(
+          associateEdges(blocking, pk('edges'), pk('curves'), cadState.entities, blockTag, curvePatch),
+          `${n('edges', 'edge')} associated.`,
+        );
+        break;
+      case 'match':
+        if (!pk('ref').length || !pk('targets').length) return;
+        ok = applyBlockOp(
+          matchEdgeSpacing(blocking, pk('ref')[0], pk('targets'), matchCopy),
+          `Spacing matched on ${n('targets', 'edge')}.`,
+        );
+        break;
+      case 'mergeV':
+        if (!pk('keep').length || !pk('merge').length) return;
+        ok = applyBlockOp(mergeVertices(blocking, pk('keep')[0], pk('merge')[0]), 'Vertices merged.');
+        break;
+      case 'mergeB':
+        if (!pk('a').length || !pk('b').length) return;
+        ok = applyBlockOp(mergeBlocks(blocking, pk('a')[0], pk('b')[0]), 'Blocks merged.');
+        break;
+      case 'delete': {
+        if (!pk('blocks').length) return;
+        let next = blocking;
+        for (const id of pk('blocks')) next = deleteBlock(next, id);
+        ok = applyBlockOp(propagateNodeCounts(next), `${n('blocks', 'block')} deleted.`);
+        break;
+      }
     }
-  }, [blocking, ogridSel, ogridPass, ogridScale, applyBlockOp]);
+    if (ok) {
+      setBlockDrawPts([]);
+      setBlockTool('select');
+    }
+  }, [blocking, blockTool, toolPicks, ogridScale, matchCopy, cadState.entities, blockTag, curvePatch, applyBlockOp]);
+
+  /** Cancel / Esc: undo what the tool changed and go back to Select. Under
+   *  Select it just clears the selection. */
+  const cancelTool = useCallback(() => {
+    if (blockTool === 'select') {
+      setSelectedEdgeId(null);
+      setSelectedVertexId(null);
+      setSelectedBlockId(null);
+      return;
+    }
+    if (toolStartRef.current !== blocking) onUpdateBlocking?.(toolStartRef.current);
+    setBlockDrawPts([]);
+    setBlockTool('select');
+  }, [blockTool, blocking, onUpdateBlocking]);
+
+  const startTool = useCallback((t: BlockTool, picks: ToolPicks, field?: string) => {
+    toolSeedRef.current = { picks, field };
+    setBlockTool(t);
+  }, []);
+
+  const cycleField = useCallback(
+    (dir: number) => {
+      const fields = TOOL_FIELDS[blockTool];
+      if (!fields.length) return;
+      const i = Math.max(0, fields.findIndex((f) => f.key === toolField));
+      setToolField(fields[(i + dir + fields.length) % fields.length].key);
+    },
+    [blockTool, toolField],
+  );
 
   /** ICEM "Move Vertices > Set Location": put a vertex at typed coordinates,
    *  kept on the geometry it is attached to. */
@@ -1358,13 +1439,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       activeField,
       activePlotLine,
       activeTagTool,
-      assocEdges,
       badBlockIds,
       blockCursor,
       blockDrag,
       blockDrawPts,
       blocking,
-      blockPick,
       blockSnapGuides,
       blockTool,
       boundaryEdges,
@@ -1393,8 +1472,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       blockPremesh,
       showPremesh,
       blockSpacingJumps,
-      ogridSel,
-      ogridPass,
+      toolPicks,
+      toolField,
       selectedVertexId,
       hoveredDomainHandle,
       hoveredEdgeKey,
@@ -1467,8 +1546,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     blockPremesh,
     showPremesh,
     blockSpacingJumps,
-    ogridSel,
-    ogridPass,
+    toolPicks,
+    toolField,
     selectedVertexId,
     hoveredBlockIdx,
     hoveredVertex,
@@ -1482,9 +1561,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     outsideBlockIds,
     unpatchedEdgeIds,
     hoverEdgeId,
-    assocEdges,
     selectedEdgeId,
-    blockPick,
     hoverCurveId,
     showField,
     fieldData,
@@ -1528,7 +1605,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         zoom,
         splitHover,
         setSplitHover,
-        assocStage,
+        toolField,
         pickCurve,
         hoverCurveId,
         setHoverCurveId,
@@ -1615,7 +1692,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       blockCursor,
       splitHover,
       snapBlockVertex,
-      assocStage,
+      toolField,
       pickCurve,
       hoverCurveId,
       hoverEdgeId,
@@ -1656,20 +1733,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         splitHover,
         splitAtHover,
         blocking,
-        deleteBlockById,
-        applyBlockOp,
-        ogridSel,
-        setOgridSel,
-        setOgridPass,
         setSelectedVertexId,
         zoom,
-        blockPick,
-        setBlockPick,
-        assocStage,
-        assocEdges,
-        setAssocEdges,
         pickCurve,
-        associateTo,
+        toolPicks,
+        setToolPicks,
+        toolField,
+        setToolField,
+        setBlockMsg,
         blockDrag,
         blockSnapGuides,
         setSelectedEdgeId,
@@ -1706,14 +1777,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       snapBlockVertex,
       splitHover,
       splitAtHover,
-      deleteBlockById,
-      applyBlockOp,
-      ogridSel,
-      blockPick,
-      assocStage,
-      assocEdges,
       pickCurve,
-      associateTo,
+      toolPicks,
+      toolField,
     ],
   );
 
@@ -1972,21 +2038,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         canvasMode,
         blockDrawPts,
         setBlockDrawPts,
-        blockPick,
-        setBlockPick,
-        assocStage,
-        setAssocStage,
-        assocEdges,
-        setAssocEdges,
         setBlockTool,
         setBlockMsg,
         blockTool,
         selectedBlockId,
         deleteBlockById,
-        ogridSel,
-        setOgridSel,
-        setOgridPass,
-        applyOgrid,
+        commitTool,
+        cancelTool,
+        cycleField,
         setShowPremesh,
         isDrawing,
         tempPts,
@@ -2024,12 +2083,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       blockDrawPts,
       selectedBlockId,
       deleteBlockById,
-      blockPick,
-      assocStage,
-      assocEdges,
       blockTool,
-      ogridSel,
-      applyOgrid,
+      commitTool,
+      cancelTool,
+      cycleField,
     ],
   );
 
@@ -2500,7 +2557,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             setBlockTool,
             setBlockDrawPts,
             blockDrawCount: blockDrawPts.length,
-            blockPick,
             blockMsg,
             setBlockMsg,
             initializeBlocks,
@@ -2509,17 +2565,19 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             redo: () => void redoBlocking(),
             showPremesh,
             setShowPremesh,
-            ogridSel,
-            setOgridSel,
-            ogridPass,
-            setOgridPass,
+            toolPicks,
+            setToolPicks,
+            toolField,
+            setToolField,
             ogridScale,
             setOgridScale,
-            applyOgrid,
-            assocStage,
-            setAssocStage,
-            assocEdges,
-            setAssocEdges,
+            matchCopy,
+            setMatchCopy,
+            commitTool,
+            cancelTool,
+            startTool,
+            cellCount: blockCellCount,
+            tinyEdges: blockTinyEdges,
             selectedEdgeId,
             selectedVertexId,
             selectedBlockId,

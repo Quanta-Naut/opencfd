@@ -1,3 +1,4 @@
+import type { BlockTool } from '../workbenchUi/blockEditor/shared';
 import type { CadAction } from '../workbenchCore';
 import React from 'react';
 import { Point2D } from '../../../types/cadWorkflow';
@@ -14,23 +15,15 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
     displayOnly,
     showBlocking,
     canvasMode,
-    blockDrawPts,
     setBlockDrawPts,
-    blockPick,
-    setBlockPick,
-    assocStage,
-    setAssocStage,
-    assocEdges,
-    setAssocEdges,
     setBlockTool,
     setBlockMsg,
     blockTool,
     selectedBlockId,
     deleteBlockById,
-    ogridSel,
-    setOgridSel,
-    setOgridPass,
-    applyOgrid,
+    commitTool,
+    cancelTool,
+    cycleField,
     setShowPremesh,
     isDrawing,
     tempPts,
@@ -72,25 +65,17 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
   if (displayOnly && !e.ctrlKey && !e.metaKey) {
     if (showBlocking && canvasMode === 'cad') {
       const k = e.key.toLowerCase();
+      // Each tool is a command: Enter finishes it, Esc cancels it (undoing
+      // what it changed) and goes back to Select, Tab moves between its fields.
       if (e.key === 'Escape') {
-        if (blockDrawPts.length) setBlockDrawPts([]);
-        else if (blockPick) setBlockPick(null);
-        else if (ogridSel.length) {
-          setOgridSel([]);
-          setOgridPass([]);
-        } else if (assocStage === 'curve') setAssocStage('edges');
-        else if (assocEdges.length) setAssocEdges([]);
-        else setBlockTool('select');
+        cancelTool();
         setBlockMsg(null);
-      } else if (e.key === 'Enter' && blockTool === 'ogrid' && ogridSel.length) {
-        applyOgrid();
-      } else if (
-        e.key === 'Enter' &&
-        blockTool === 'assoc' &&
-        assocStage === 'edges' &&
-        assocEdges.length
-      ) {
-        setAssocStage('curve');
+      } else if (e.key === 'Enter' && blockTool !== 'select') {
+        e.preventDefault();
+        commitTool();
+      } else if (e.key === 'Tab' && blockTool !== 'select') {
+        e.preventDefault();
+        cycleField(e.shiftKey ? -1 : 1);
       } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedBlockId) {
         e.preventDefault();
         deleteBlockById(selectedBlockId);
@@ -104,6 +89,8 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
       else if (k === 'm') setBlockTool('mergeV');
       else if (k === 'j') setBlockTool('mergeB');
       else if (k === 'a') setBlockTool('assoc');
+      else if (k === 'e') setBlockTool('params');
+      else if (k === 't') setBlockTool('match');
       else if (k === 'p') setShowPremesh((v) => !v);
     }
     return;
@@ -225,25 +212,14 @@ export interface KeyDownContext {
   canvasMode: 'cad' | 'mesh';
   blockDrawPts: Point2D[];
   setBlockDrawPts: React.Dispatch<React.SetStateAction<Point2D[]>>;
-  blockPick: string;
-  setBlockPick: React.Dispatch<React.SetStateAction<string>>;
-  assocStage: 'edges' | 'curve';
-  setAssocStage: React.Dispatch<React.SetStateAction<'edges' | 'curve'>>;
-  assocEdges: string[];
-  setAssocEdges: React.Dispatch<React.SetStateAction<string[]>>;
-  setBlockTool: React.Dispatch<
-    React.SetStateAction<
-      'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc'
-    >
-  >;
+  setBlockTool: React.Dispatch<React.SetStateAction<BlockTool>>;
   setBlockMsg: React.Dispatch<React.SetStateAction<{ text: string; error: boolean }>>;
-  blockTool: 'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc';
+  blockTool: BlockTool;
   selectedBlockId: string;
   deleteBlockById: (id: string) => void;
-  ogridSel: string[];
-  setOgridSel: React.Dispatch<React.SetStateAction<string[]>>;
-  setOgridPass: React.Dispatch<React.SetStateAction<string[]>>;
-  applyOgrid: () => void;
+  commitTool: () => void;
+  cancelTool: () => void;
+  cycleField: (dir: number) => void;
   setShowPremesh: React.Dispatch<React.SetStateAction<boolean>>;
   isDrawing: boolean;
   tempPts: Point2D[];

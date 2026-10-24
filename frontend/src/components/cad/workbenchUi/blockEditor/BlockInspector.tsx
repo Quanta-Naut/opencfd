@@ -2,7 +2,6 @@ import { useMemo } from 'react';
 import { Point2D, CadEntity } from '../../../../types/cadWorkflow';
 import {
   Blocking,
-  BlockEdge,
   BlockPremesh,
   EdgeLaw,
   SpacingJump,
@@ -48,7 +47,7 @@ export function BlockInspector(p: {
   const blockIdx = p.selectedBlockId
     ? blocking.blocks.findIndex((b) => b.id === p.selectedBlockId)
     : -1;
-  if (edge) return <EdgeCard {...p} edge={edge} />;
+  if (edge) return <EdgeParams {...p} edgeIds={[edge.id]} />;
   if (vertex) {
     const kind = p.blockVertexKinds.get(vertex.id) ?? 'free';
     const [name, desc] = KIND_TEXT[kind];
@@ -149,25 +148,34 @@ function Metric(p: { label: string; v: number; ok: boolean; unit?: string }) {
 }
 
 const LAWS: [EdgeLaw, string][] = [
+  ['bigeometric', 'BiGeometric'],
+  ['tanh', 'Hyperbolic (tanh)'],
   ['uniform', 'Uniform'],
-  ['tanh', 'Spacing (tanh)'],
-  ['geometric', 'Geometric ratio'],
-  ['bump', 'Bump (both ends)'],
+  ['geometric', 'Geometric'],
+  ['bump', 'Bump'],
 ];
 
-function EdgeCard(p: {
+/** ICEM "Edge Params" for one or more edges: the first is shown, every
+ *  change applies to all of them (and their parallels when `copyParallel`). */
+export function EdgeParams(p: {
   blocking: Blocking;
   onUpdateBlocking: (bk: Blocking | null) => void;
   entities: CadEntity[];
-  edge: BlockEdge;
+  edgeIds: string[];
   blockSpacingJumps: SpacingJump[];
+  /** When given, a checkbox replaces the Copy to parallel button. */
+  copyParallel?: { on: boolean; set: (v: boolean) => void };
+  bare?: boolean;
 }) {
-  const { blocking, edge } = p;
-  const set = (q: Parameters<typeof setEdgeParams>[2]) =>
-    p.onUpdateBlocking(setEdgeParams(blocking, edge.id, q));
-  const parallel = useMemo(() => edgeGroup(blocking, edge.id).length - 1, [blocking, edge.id]);
+  const { blocking } = p;
+  const edge = blocking.edges.find((e) => e.id === p.edgeIds[0]);
+  const parallel = useMemo(
+    () => (edge ? edgeGroup(blocking, edge.id).length - 1 : 0),
+    [blocking, edge],
+  );
   // What the law actually gives: end cells and the worst growth between cells.
   const actual = useMemo(() => {
+    if (!edge) return null;
     const vm = new Map(blocking.vertices.map((v) => [v.id, v.pt] as const));
     const pts = [vm.get(edge.v0)!, ...edge.path, vm.get(edge.v1)!];
     let L = 0;
@@ -183,6 +191,13 @@ function EdgeCard(p: {
     const n = st.length - 1;
     return { L, first: (st[1] - st[0]) * L, last: (st[n] - st[n - 1]) * L, growth };
   }, [blocking, edge]);
+  if (!edge || !actual) return null;
+  const set = (q: Parameters<typeof setEdgeParams>[2]) => {
+    let bk = blocking;
+    for (const id of p.edgeIds)
+      bk = setEdgeParams(bk, id, { ...q, copyParallel: q.copyParallel ?? p.copyParallel?.on });
+    p.onUpdateBlocking(bk);
+  };
   // A cell-size jump at one of this edge's ends (Pointwise "Sync Spacings").
   const jump = p.blockSpacingJumps.find(
     (j) => j.coarse === edge.id && (j.vid === edge.v0 || j.vid === edge.v1),
@@ -194,20 +209,45 @@ function EdgeCard(p: {
     const cells = endCells(blocking).get(fine.id)!;
     const target = fine.v0 === jump.vid ? cells.at0 : cells.at1;
     const end = edge.v0 === jump.vid ? 'spacing1' : 'spacing2';
-    set({ law: 'tanh', [end]: Number(target.toPrecision(3)) });
+    set({
+      law: edge.law === 'tanh' ? 'tanh' : 'bigeometric',
+      [end]: Number(target.toPrecision(3)),
+    });
   };
+  const spaced = edge.law === 'tanh' || edge.law === 'bigeometric';
   const curveNames = (edge.curves ?? [])
     .map((id) => p.entities.find((x) => x.id === id))
     .map((ent) =>
       ent ? `${ent.type}${ent.role === 'domain_boundary' ? ' (domain)' : ''}` : 'missing',
     )
     .join(', ');
+  const spacingField = (k: 'spacing1' | 'spacing2', label: string) => (
+    <Labeled label={label} hint="First cell length at this end of the arrow. Empty leaves it free.">
+      <Field
+        value={edge[k]}
+        optional
+        min={0}
+        placeholder="free"
+        onCommit={(v) => set({ [k]: v ?? 0 })}
+      />
+    </Labeled>
+  );
+  const ratioField = (k: 'ratio1' | 'ratio2', label: string) => (
+    <Labeled
+      label={label}
+      hint="Growth from one cell to the next away from this end. 1.1 to 1.3 is usual."
+    >
+      <Field value={edge[k] ?? 1.2} min={1} onCommit={(v) => v && set({ [k]: v })} />
+    </Labeled>
+  );
   return (
-    <div className={`${card} p-2 space-y-2 w-[268px]`}>
+    <div className={p.bare ? 'space-y-2' : `${card} p-2 space-y-2 w-[268px]`}>
       <div className="flex items-center justify-between">
-        <span className="font-semibold">Edge</span>
+        <span className="font-semibold">
+          {p.edgeIds.length > 1 ? `${p.edgeIds.length} edges` : 'Edge'}
+        </span>
         <span className="text-fg-2">
-          {edge.patch ?? 'interior'} · {fmtLen(actual.L)} long
+          {edge.patch ?? 'interior'} · {fmtLen(actual.L)}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-1.5">
@@ -217,7 +257,7 @@ function EdgeCard(p: {
         >
           <Field value={edge.nodes} integer min={2} onCommit={(v) => v && set({ nodes: v })} />
         </Labeled>
-        <Labeled label="Law">
+        <Labeled label="Mesh law">
           <select
             value={edge.law}
             onChange={(ev) => set({ law: ev.target.value as EdgeLaw })}
@@ -230,27 +270,24 @@ function EdgeCard(p: {
             ))}
           </select>
         </Labeled>
-        {edge.law === 'tanh' && (
+        {spaced && (
           <>
-            <Labeled label="Spacing 1" hint="First cell at the arrow's tail (end 1). Empty = free.">
-              <Field
-                value={edge.spacing1}
-                optional
-                min={0}
-                placeholder="free"
-                onCommit={(v) => set({ spacing1: v ?? 0 })}
-              />
-            </Labeled>
-            <Labeled label="Spacing 2" hint="First cell at the arrow's head (end 2). Empty = free.">
-              <Field
-                value={edge.spacing2}
-                optional
-                min={0}
-                placeholder="free"
-                onCommit={(v) => set({ spacing2: v ?? 0 })}
-              />
-            </Labeled>
+            {spacingField('spacing1', 'Spacing 1')}
+            {edge.law === 'bigeometric' ? ratioField('ratio1', 'Ratio 1') : <span />}
+            {spacingField('spacing2', 'Spacing 2')}
+            {edge.law === 'bigeometric' ? ratioField('ratio2', 'Ratio 2') : <span />}
           </>
+        )}
+        {edge.law === 'bigeometric' && (
+          <Labeled label="Max space" hint="Largest cell allowed. Empty = no limit.">
+            <Field
+              value={edge.maxSpace}
+              optional
+              min={0}
+              placeholder="none"
+              onCommit={(v) => set({ maxSpace: v ?? 0 })}
+            />
+          </Labeled>
         )}
         {(edge.law === 'geometric' || edge.law === 'bump') && (
           <Labeled
@@ -262,8 +299,8 @@ function EdgeCard(p: {
         )}
       </div>
       <div className="flex items-center justify-between font-mono text-[10px] text-fg-2 bg-app border border-line rounded-sm px-1.5 py-1">
-        <span>1: {fmtLen(actual.first)}</span>
-        <span>2: {fmtLen(actual.last)}</span>
+        <span title="Actual first cell at end 1">1: {fmtLen(actual.first)}</span>
+        <span title="Actual first cell at end 2">2: {fmtLen(actual.last)}</span>
         <span
           className={actual.growth > 1.3 ? 'text-warning' : ''}
           title="Largest size change between neighbouring cells. Keep it under about 1.2 to 1.3."
@@ -274,8 +311,7 @@ function EdgeCard(p: {
       {jump && (
         <div className="flex items-center justify-between gap-2 text-[10px] text-warning">
           <span>
-            Cells jump {jump.ratio.toFixed(1)}x into the next edge at end{' '}
-            {edge.v0 === jump.vid ? 1 : 2}.
+            {jump.ratio.toFixed(1)}x jump at end {edge.v0 === jump.vid ? 1 : 2}
           </span>
           <button className={smallBtn} onClick={matchJump}>
             Match
@@ -283,35 +319,52 @@ function EdgeCard(p: {
         </div>
       )}
       <div className="flex items-center gap-1.5 flex-wrap">
+        {p.copyParallel ? (
+          <label className="flex items-center gap-1.5 text-fg-2 mr-auto">
+            <input
+              type="checkbox"
+              checked={p.copyParallel.on}
+              onChange={(ev) => p.copyParallel!.set(ev.target.checked)}
+              className="accent-accent"
+            />
+            Copy to parallel edges
+          </label>
+        ) : (
+          <button
+            className={smallBtn}
+            title="Copy this distribution to every parallel edge, keeping the fine end on the same side"
+            onClick={() =>
+              set({
+                law: edge.law,
+                ratio: edge.ratio,
+                spacing1: edge.spacing1 ?? 0,
+                spacing2: edge.spacing2 ?? 0,
+                ratio1: edge.ratio1 ?? 0,
+                ratio2: edge.ratio2 ?? 0,
+                maxSpace: edge.maxSpace ?? 0,
+                copyParallel: true,
+              })
+            }
+          >
+            Copy to parallel
+          </button>
+        )}
         <button
           className={smallBtn}
-          title="Copy this distribution to every parallel edge, keeping the fine end on the same side"
-          onClick={() =>
-            set({
-              law: edge.law,
-              ratio: edge.ratio,
-              spacing1: edge.spacing1 ?? 0,
-              spacing2: edge.spacing2 ?? 0,
-              copyParallel: true,
-            })
-          }
-        >
-          Copy to parallel
-        </button>
-        <button
-          className={smallBtn}
-          title="Swap the two ends' spacings"
+          title="Swap the two ends"
           onClick={() =>
             set({
               ratio: edge.ratio ? 1 / edge.ratio : 1,
               spacing1: edge.spacing2 ?? 0,
               spacing2: edge.spacing1 ?? 0,
+              ratio1: edge.ratio2 ?? 0,
+              ratio2: edge.ratio1 ?? 0,
             })
           }
         >
           Flip
         </button>
-        {edge.curves?.length ? (
+        {!p.bare && edge.curves?.length ? (
           <button
             className={smallBtn}
             onClick={() => p.onUpdateBlocking(disassociateEdges(blocking, [edge.id]))}
@@ -320,15 +373,17 @@ function EdgeCard(p: {
           </button>
         ) : null}
       </div>
-      <p className="text-[10px] text-fg-2">
-        {edge.curves?.length ? (
-          <span className="text-success">Follows {curveNames}</span>
-        ) : edge.curveId ? (
-          'Follows the outline under it'
-        ) : (
-          'Straight (not associated)'
-        )}
-      </p>
+      {!p.bare && (
+        <p className="text-[10px] text-fg-2">
+          {edge.curves?.length ? (
+            <span className="text-success">On {curveNames}</span>
+          ) : edge.curveId ? (
+            'On the outline under it'
+          ) : (
+            'Straight'
+          )}
+        </p>
+      )}
     </div>
   );
 }

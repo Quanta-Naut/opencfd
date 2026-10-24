@@ -18,6 +18,9 @@ export function BlockChecks(p: {
   jumps: SpacingJump[];
   coverage: number | null;
   showPremesh: boolean;
+  maxAspect: number;
+  cellCount: number;
+  tinyEdges: number;
 }) {
   const q = p.quality;
   const problems: { tone: 'danger' | 'warning'; text: string }[] = [];
@@ -37,6 +40,11 @@ export function BlockChecks(p: {
     problems.push({
       tone: 'danger',
       text: `${p.unpatched} boundary edge${p.unpatched > 1 ? 's' : ''} not associated (dashed red)`,
+    });
+  if (p.tinyEdges)
+    problems.push({
+      tone: 'danger',
+      text: `${p.tinyEdges} edge${p.tinyEdges > 1 ? 's are' : ' is'} almost zero long: the grid fans out of a point there (use a C-grid at a sharp trailing edge)`,
     });
   if (p.coverage !== null && p.coverage < 0.995)
     problems.push({
@@ -59,10 +67,10 @@ export function BlockChecks(p: {
       <div className="flex items-center justify-between">
         <span className="font-semibold">Checks</span>
         <span className="text-fg-2">
-          {p.blockCount} block{p.blockCount > 1 ? 's' : ''} · {q.cells.toLocaleString()} cells
+          {p.blockCount} block{p.blockCount > 1 ? 's' : ''} · {p.cellCount.toLocaleString()} cells
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-1.5 font-mono">
+      <div className="grid grid-cols-3 gap-1.5 font-mono">
         <div
           className="p-1.5 rounded-sm border border-line bg-app"
           title={`ICEM determinant (2x2): 1 is perfect, aim for over ${PREMESH_MIN_DET}`}
@@ -73,7 +81,7 @@ export function BlockChecks(p: {
           >
             {q.minDet.toFixed(2)}
           </span>
-          <span className="text-[10px] text-fg-3"> min, aim {PREMESH_MIN_DET}</span>
+          <span className="text-[10px] text-fg-3"> &gt;{PREMESH_MIN_DET}</span>
         </div>
         <div
           className="p-1.5 rounded-sm border border-line bg-app"
@@ -85,7 +93,17 @@ export function BlockChecks(p: {
           >
             {q.minAngle.toFixed(1)}
           </span>
-          <span className="text-[10px] text-fg-3"> min, aim {PREMESH_MIN_ANGLE}</span>
+          <span className="text-[10px] text-fg-3"> &gt;{PREMESH_MIN_ANGLE}</span>
+        </div>
+        <div
+          className="p-1.5 rounded-sm border border-line bg-app"
+          title="Longest over shortest side of the most stretched cell. Large values are normal in a boundary layer."
+        >
+          <span className="text-[10px] text-fg-2 block font-sans">Aspect</span>
+          <span className="font-semibold text-fg">
+            {p.maxAspect >= 100 ? Math.round(p.maxAspect) : p.maxAspect.toFixed(1)}
+          </span>
+          <span className="text-[10px] text-fg-3"> max</span>
         </div>
       </div>
       {problems.length ? (

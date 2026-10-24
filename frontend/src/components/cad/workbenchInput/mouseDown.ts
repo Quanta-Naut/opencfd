@@ -1,3 +1,4 @@
+import type { BlockTool } from '../workbenchUi/blockEditor/shared';
 import type { BoundaryTag } from '../../../types/cadWorkflow';
 import { vertexHome } from '../../../types/blocking';
 import type { Outline } from '../../../types/blocking';
@@ -12,7 +13,9 @@ import {
   GeometryBBox,
   createDomainEntity,
 } from '../../../types/cadWorkflow';
-import { Blocking, pickEdge, blockAt, mergeVertices, mergeBlocks } from '../../../types/blocking';
+import { Blocking, pickEdge, blockAt } from '../../../types/blocking';
+import { activeFieldOf, pickInto } from '../workbenchUi/blockEditor/toolFields';
+import type { ToolPicks } from '../workbenchUi/blockEditor/toolFields';
 import type { CadTool } from '../workbenchCore';
 
 /** Canvas mouse down: starts pans, drags, marquees and block-editor picks. */
@@ -46,20 +49,14 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
     splitHover,
     splitAtHover,
     blocking,
-    deleteBlockById,
-    applyBlockOp,
-    ogridSel,
-    setOgridSel,
-    setOgridPass,
     setSelectedVertexId,
     zoom,
-    blockPick,
-    setBlockPick,
-    assocStage,
-    assocEdges,
-    setAssocEdges,
     pickCurve,
-    associateTo,
+    toolPicks,
+    setToolPicks,
+    toolField,
+    setToolField,
+    setBlockMsg,
     blockDrag,
     blockSnapGuides,
     setSelectedEdgeId,
@@ -118,64 +115,40 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
       addBlockCorner(snapBlockVertex(raw, '').pt);
     } else if (blockTool === 'split') {
       if (splitHover) splitAtHover();
-    } else if (blockTool === 'delete' && blocking) {
-      const id = blockAt(blocking, raw);
-      if (id) deleteBlockById(id);
-    } else if (blockTool === 'ogrid' && blocking) {
-      // An edge on the outside of the picked blocks toggles pass-through
-      // (ICEM "add faces"); anywhere else toggles the block under the cursor.
-      const uses = new Map<string, number>();
-      for (const b of blocking.blocks)
-        if (ogridSel.includes(b.id))
-          for (const id of b.edges) uses.set(id, (uses.get(id) ?? 0) + 1);
-      const hit = ogridSel.length ? pickEdge(blocking, raw, 7 / zoom) : null;
-      if (hit && uses.get(hit.edgeId) === 1) {
-        setOgridPass((p) =>
-          p.includes(hit.edgeId) ? p.filter((x) => x !== hit.edgeId) : [...p, hit.edgeId],
-        );
-      } else {
-        const id = blockAt(blocking, raw);
+    } else if (blocking) {
+      // Command tools: the click fills the dialog's active selection field.
+      const f = activeFieldOf(blockTool, toolField);
+      let id: string | null = null;
+      if (f?.kind === 'block') id = blockAt(blocking, raw);
+      else if (f?.kind === 'edge') id = pickEdge(blocking, raw, 8 / zoom)?.edgeId ?? null;
+      else if (f?.kind === 'curve') id = pickCurve(raw, 10 / zoom);
+      else if (f?.kind === 'vertex') {
+        let bd = 12 / zoom;
+        for (const v of blocking.vertices) {
+          const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
+          if (d < bd) {
+            bd = d;
+            id = v.id;
+          }
+        }
+      }
+      if (id && f) {
+        // O-grid pass-through edges must lie on the outside of the picked blocks.
+        if (blockTool === 'ogrid' && f.key === 'pass') {
+          const sel = new Set(toolPicks.blocks ?? []);
+          let uses = 0;
+          for (const b of blocking.blocks) if (sel.has(b.id) && b.edges.includes(id)) uses++;
+          if (uses !== 1) {
+            setBlockMsg({ text: 'Pick an edge on the outside of the chosen blocks.', error: true });
+            id = null;
+          }
+        }
         if (id) {
-          setOgridSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
-          setOgridPass([]);
+          const r = pickInto(blockTool, toolPicks, toolField, id);
+          setToolPicks(r.picks);
+          setToolField(r.field);
+          setBlockMsg(null);
         }
-      }
-    } else if (blockTool === 'mergeV' && blocking) {
-      let vid: string | null = null;
-      let bd = 12 / zoom;
-      for (const v of blocking.vertices) {
-        const d = Math.hypot(v.pt.x - raw.x, v.pt.y - raw.y);
-        if (d < bd) {
-          bd = d;
-          vid = v.id;
-        }
-      }
-      if (vid && !blockPick) {
-        setBlockPick(vid);
-      } else if (vid && blockPick) {
-        applyBlockOp(mergeVertices(blocking, blockPick, vid), 'Vertices merged.');
-        setBlockPick(null);
-      }
-    } else if (blockTool === 'mergeB' && blocking) {
-      const id = blockAt(blocking, raw);
-      if (id && !blockPick) {
-        setBlockPick(id);
-      } else if (id && blockPick) {
-        applyBlockOp(mergeBlocks(blocking, blockPick, id), 'Blocks merged.');
-        setBlockPick(null);
-      }
-    } else if (blockTool === 'assoc' && blocking) {
-      if (assocStage === 'edges') {
-        const hit = pickEdge(blocking, raw, 8 / zoom);
-        if (hit) {
-          const next = assocEdges.includes(hit.edgeId)
-            ? assocEdges.filter((x) => x !== hit.edgeId)
-            : [...assocEdges, hit.edgeId];
-          setAssocEdges(next);
-        }
-      } else {
-        const cid = pickCurve(raw, 10 / zoom);
-        if (cid) associateTo(cid);
       }
     }
     e.preventDefault();
@@ -325,7 +298,7 @@ export interface MouseDownContext {
   showBlocking: boolean;
   canvasMode: 'cad' | 'mesh';
   onUpdateBlocking: (bk: Blocking | null) => void;
-  blockTool: 'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc';
+  blockTool: BlockTool;
   toWorld: (sx: number, sy: number) => Point2D;
   addBlockCorner: (pt: Point2D) => void;
   snapBlockVertex: (
@@ -335,20 +308,14 @@ export interface MouseDownContext {
   splitHover: { edgeId: string; pt: Point2D; cut: Point2D[][] };
   splitAtHover: () => void;
   blocking: Blocking;
-  deleteBlockById: (id: string) => void;
-  applyBlockOp: (res: Blocking | { error: string } | null, okText: string) => boolean;
-  ogridSel: string[];
-  setOgridSel: React.Dispatch<React.SetStateAction<string[]>>;
-  setOgridPass: React.Dispatch<React.SetStateAction<string[]>>;
   setSelectedVertexId: React.Dispatch<React.SetStateAction<string | null>>;
   zoom: number;
-  blockPick: string;
-  setBlockPick: React.Dispatch<React.SetStateAction<string>>;
-  assocStage: 'edges' | 'curve';
-  assocEdges: string[];
-  setAssocEdges: React.Dispatch<React.SetStateAction<string[]>>;
   pickCurve: (p: Point2D, radius: number) => string | null;
-  associateTo: (curveId: string) => void;
+  toolPicks: ToolPicks;
+  setToolPicks: React.Dispatch<React.SetStateAction<ToolPicks>>;
+  toolField: string;
+  setToolField: React.Dispatch<React.SetStateAction<string>>;
+  setBlockMsg: React.Dispatch<React.SetStateAction<{ text: string; error: boolean } | null>>;
   blockDrag: React.RefObject<BlockDragState>;
   blockSnapGuides: React.RefObject<{ a: Point2D; b: Point2D }[]>;
   setSelectedEdgeId: React.Dispatch<React.SetStateAction<string>>;

@@ -1,6 +1,7 @@
 import { Point2D } from '../cadWorkflow';
 import { BlockEdge, Blocking } from './types';
 import { edgeStations } from './stations';
+import { setEdgeParams } from './hexa';
 
 // Spacing continuity across block joins (Pointwise "Sync Spacings"). A grid
 // line that runs from one block edge into the next should not jump in cell
@@ -82,5 +83,39 @@ export function spacingJumps(bk: Blocking, limit = SPACING_JUMP_LIMIT): SpacingJ
     }
     if (worst) out.push(worst);
   }
+  return out;
+}
+
+/**
+ * ICEM "Match Edges": each target edge that meets the reference edge takes
+ * the reference's cell size at the shared vertex as its end spacing there, so
+ * the grid line crosses the join without a jump. Targets keep a spacing law
+ * (bi-geometric unless they already use tanh).
+ */
+export function matchEdgeSpacing(
+  bk: Blocking,
+  refId: string,
+  targetIds: string[],
+  copyParallel = false,
+): Blocking | { error: string } {
+  const ref = bk.edges.find((e) => e.id === refId);
+  if (!ref) return { error: 'Pick the reference edge.' };
+  const cells = endCells(bk).get(ref.id)!;
+  let out = bk;
+  let done = 0;
+  for (const id of targetIds) {
+    const t = out.edges.find((e) => e.id === id);
+    if (!t || t.id === ref.id) continue;
+    const shared = [t.v0, t.v1].find((v) => v === ref.v0 || v === ref.v1);
+    if (!shared) continue;
+    const size = Number((shared === ref.v0 ? cells.at0 : cells.at1).toPrecision(3));
+    out = setEdgeParams(out, t.id, {
+      law: t.law === 'tanh' || t.law === 'bigeometric' ? t.law : 'bigeometric',
+      [shared === t.v0 ? 'spacing1' : 'spacing2']: size,
+      copyParallel,
+    });
+    done++;
+  }
+  if (!done) return { error: 'The target edges must meet the reference edge at a vertex.' };
   return out;
 }

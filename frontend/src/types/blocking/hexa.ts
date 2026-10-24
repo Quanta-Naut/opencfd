@@ -616,6 +616,9 @@ export function setEdgeParams(
     ratio?: number;
     spacing1?: number;
     spacing2?: number;
+    ratio1?: number;
+    ratio2?: number;
+    maxSpace?: number;
     copyParallel?: boolean;
   },
 ): Blocking {
@@ -662,14 +665,21 @@ export function setEdgeParams(
         e.id === edgeId || (s !== undefined ? s === e.v0 : d.x * sd.x + d.y * sd.y >= 0);
       if (p.law !== undefined) e.law = p.law;
       if (p.ratio !== undefined && p.ratio > 0) e.ratio = same ? p.ratio : 1 / p.ratio;
-      const set = (k: 'spacing1' | 'spacing2', v: number | undefined) => {
+      const flip = { spacing1: 'spacing2', spacing2: 'spacing1', ratio1: 'ratio2', ratio2: 'ratio1' } as const;
+      const set = (k: keyof typeof flip, v: number | undefined) => {
         if (v === undefined) return;
-        const key = same ? k : k === 'spacing1' ? 'spacing2' : 'spacing1';
+        const key = same ? k : flip[k];
         if (v > 0) e[key] = v;
         else delete e[key];
       };
       set('spacing1', p.spacing1);
       set('spacing2', p.spacing2);
+      set('ratio1', p.ratio1);
+      set('ratio2', p.ratio2);
+      if (p.maxSpace !== undefined) {
+        if (p.maxSpace > 0) e.maxSpace = p.maxSpace;
+        else delete e.maxSpace;
+      }
     }
   }
   return out;

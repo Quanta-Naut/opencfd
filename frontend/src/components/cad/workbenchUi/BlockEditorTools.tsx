@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Point2D, CadEntity } from '../../../types/cadWorkflow';
 import {
   Blocking,
@@ -6,18 +6,18 @@ import {
   PremeshQuality,
   SpacingJump,
   VertexKind,
-  disassociateEdges,
   emptyBlocking,
 } from '../../../types/blocking';
 import { BlockToolRail } from './blockEditor/BlockToolRail';
-import { BlockToolStrip } from './blockEditor/BlockToolStrip';
+import { BlockToolDialog } from './blockEditor/BlockToolDialog';
 import { BlockInspector } from './blockEditor/BlockInspector';
 import { BlockChecks } from './blockEditor/BlockChecks';
 import type { BlockMsg, BlockTool } from './blockEditor/shared';
+import type { ToolPicks } from './blockEditor/toolFields';
 
-/** The block editor (Blocks view): ICEM CFD Hexa style tools on the left, the
- *  active tool's prompt on top, the selection and the live checks on the
- *  right. The geometry is locked here; only the blocks change. */
+/** The block editor (Blocks view): ICEM CFD Hexa style tools on the left; on
+ *  the right the active tool's dialog (or, under Select, the selection's
+ *  parameters) above the live checks. The geometry is locked here. */
 export function BlockEditorTools(p: BlockEditorToolsProps) {
   const {
     displayOnly,
@@ -30,6 +30,15 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
     setBlockMsg,
     blockTool,
   } = p;
+  // Messages fade after a moment; an error stays in the open dialog until the
+  // next pick.
+  const msg = p.blockMsg;
+  const inDialog = blockTool !== 'select';
+  useEffect(() => {
+    if (!msg || (msg.error && inDialog)) return;
+    const t = window.setTimeout(() => setBlockMsg(null), msg.error ? 5000 : 3000);
+    return () => window.clearTimeout(t);
+  }, [msg, inDialog, setBlockMsg]);
   if (!(displayOnly && showBlocking && canvasMode === 'cad' && onUpdateBlocking)) return null;
   const hasBlocks = !!blocking?.blocks.length;
   const pickTool = (t: BlockTool) => {
@@ -56,67 +65,76 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
         undo={p.undo}
         redo={p.redo}
       />
-      <BlockToolStrip
-        blockTool={blockTool}
-        hasBlocks={hasBlocks}
-        blockMsg={p.blockMsg}
-        drawCount={p.blockDrawCount}
-        pickPending={!!p.blockPick}
-        ogridSel={p.ogridSel}
-        ogridPass={p.ogridPass}
-        ogridScale={p.ogridScale}
-        setOgridScale={p.setOgridScale}
-        applyOgrid={p.applyOgrid}
-        clearOgrid={() => {
-          p.setOgridSel([]);
-          p.setOgridPass([]);
-        }}
-        assocStage={p.assocStage}
-        assocCount={p.assocEdges.length}
-        setAssocStage={p.setAssocStage}
-        disassociate={() => {
-          if (!blocking) return;
-          onUpdateBlocking(disassociateEdges(blocking, p.assocEdges));
-          setBlockMsg({
-            text: `${p.assocEdges.length} edge${p.assocEdges.length > 1 ? 's' : ''} disassociated.`,
-            error: false,
-          });
-          p.setAssocEdges([]);
-        }}
-        clearAssoc={() => p.setAssocEdges([])}
-      />
-      {hasBlocks && blocking && (
-        <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1.5 select-none">
-          <BlockInspector
-            blocking={blocking}
-            onUpdateBlocking={onUpdateBlocking}
-            entities={p.cadState.entities}
-            selectedEdgeId={blockTool === 'select' ? p.selectedEdgeId : null}
-            selectedVertexId={blockTool === 'select' ? p.selectedVertexId : null}
-            selectedBlockId={blockTool === 'select' ? p.selectedBlockId : null}
-            blockVertexKinds={p.blockVertexKinds}
-            blockPremesh={p.blockPremesh}
-            blockSpacingJumps={p.blockSpacingJumps}
-            setVertexLocation={p.setVertexLocation}
-            deleteBlockById={p.deleteBlockById}
-            ogridThis={(id) => {
-              setBlockTool('ogrid');
-              p.setOgridSel([id]);
-              p.setOgridPass([]);
-            }}
-          />
-          <BlockChecks
-            blockCount={blocking.blocks.length}
-            quality={p.premeshQ}
-            outside={p.outsideBlockIds.size}
-            overBody={p.badBlockIds.size}
-            unpatched={p.unpatchedEdgeIds.size}
-            jumps={p.blockSpacingJumps}
-            coverage={p.blockCoverage}
-            showPremesh={p.showPremesh}
-          />
+      {msg && (!msg.error || blockTool === 'select') && (
+        <div
+          className={`absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-surface border border-line rounded px-2.5 py-1 text-[11px] select-none ${
+            msg.error ? 'text-danger' : 'text-fg-2'
+          }`}
+        >
+          {msg.text}
         </div>
       )}
+      <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1.5">
+        {blockTool !== 'select' && (
+          <BlockToolDialog
+            blockTool={blockTool}
+            blocking={blocking ?? emptyBlocking()}
+            onUpdateBlocking={onUpdateBlocking}
+            entities={p.cadState.entities}
+            toolPicks={p.toolPicks}
+            setToolPicks={p.setToolPicks}
+            toolField={p.toolField}
+            setToolField={p.setToolField}
+            drawCount={p.blockDrawCount}
+            ogridScale={p.ogridScale}
+            setOgridScale={p.setOgridScale}
+            matchCopy={p.matchCopy}
+            setMatchCopy={p.setMatchCopy}
+            blockSpacingJumps={p.blockSpacingJumps}
+            blockMsg={msg}
+            commitTool={p.commitTool}
+            cancelTool={p.cancelTool}
+          />
+        )}
+        {!hasBlocks && blockTool === 'select' && (
+          <div className="bg-surface border border-line rounded px-2.5 py-1.5 text-[11px] text-fg-2 select-none">
+            Initialize a block, or Create one (B).
+          </div>
+        )}
+        {hasBlocks && blocking && (
+          <>
+            {blockTool === 'select' && (
+              <BlockInspector
+                blocking={blocking}
+                onUpdateBlocking={onUpdateBlocking}
+                entities={p.cadState.entities}
+                selectedEdgeId={blockTool === 'select' ? p.selectedEdgeId : null}
+                selectedVertexId={blockTool === 'select' ? p.selectedVertexId : null}
+                selectedBlockId={blockTool === 'select' ? p.selectedBlockId : null}
+                blockVertexKinds={p.blockVertexKinds}
+                blockPremesh={p.blockPremesh}
+                blockSpacingJumps={p.blockSpacingJumps}
+                setVertexLocation={p.setVertexLocation}
+                deleteBlockById={p.deleteBlockById}
+                ogridThis={(id) => p.startTool('ogrid', { blocks: [id] }, 'pass')}
+              />
+            )}
+            <BlockChecks
+              blockCount={blocking.blocks.length}
+              quality={p.premeshQ}
+              outside={p.outsideBlockIds.size}
+              overBody={p.badBlockIds.size}
+              unpatched={p.unpatchedEdgeIds.size}
+              jumps={p.blockSpacingJumps}
+              coverage={p.blockCoverage}
+              showPremesh={p.showPremesh}
+              maxAspect={p.premeshQ.maxAspect}
+              cellCount={p.cellCount}
+              tinyEdges={p.tinyEdges}
+            />
+          </>
+        )}
+      </div>
     </>
   );
 }
@@ -132,7 +150,6 @@ export interface BlockEditorToolsProps {
   setBlockTool: React.Dispatch<React.SetStateAction<BlockTool>>;
   setBlockDrawPts: React.Dispatch<React.SetStateAction<Point2D[]>>;
   blockDrawCount: number;
-  blockPick: string | null;
   blockMsg: BlockMsg;
   setBlockMsg: React.Dispatch<React.SetStateAction<BlockMsg>>;
   initializeBlocks: () => void;
@@ -141,17 +158,21 @@ export interface BlockEditorToolsProps {
   redo: () => void;
   showPremesh: boolean;
   setShowPremesh: React.Dispatch<React.SetStateAction<boolean>>;
-  ogridSel: string[];
-  setOgridSel: React.Dispatch<React.SetStateAction<string[]>>;
-  ogridPass: string[];
-  setOgridPass: React.Dispatch<React.SetStateAction<string[]>>;
+  toolPicks: ToolPicks;
+  setToolPicks: React.Dispatch<React.SetStateAction<ToolPicks>>;
+  toolField: string;
+  setToolField: React.Dispatch<React.SetStateAction<string>>;
   ogridScale: number;
   setOgridScale: React.Dispatch<React.SetStateAction<number>>;
-  applyOgrid: () => void;
-  assocStage: 'edges' | 'curve';
-  setAssocStage: React.Dispatch<React.SetStateAction<'edges' | 'curve'>>;
-  assocEdges: string[];
-  setAssocEdges: React.Dispatch<React.SetStateAction<string[]>>;
+  matchCopy: boolean;
+  setMatchCopy: React.Dispatch<React.SetStateAction<boolean>>;
+  commitTool: () => void;
+  cancelTool: () => void;
+  /** Open a tool with its fields already filled. */
+  startTool: (t: BlockTool, picks: ToolPicks, field?: string) => void;
+  /** Cells the blocking will make, and edges collapsed to a point. */
+  cellCount: number;
+  tinyEdges: number;
   selectedEdgeId: string | null;
   selectedVertexId: string | null;
   selectedBlockId: string | null;

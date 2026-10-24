@@ -13,13 +13,27 @@ import { BlockEdge, Blocking } from './types';
 
 /** Node stations of an edge under its grading law, from v0. At most `keep`
  *  cells come back, picked so a clustered end stays clustered. `len` is the
- *  edge's length, needed by the 'tanh' law (its spacings are absolute). */
+ *  edge's length, needed by 'tanh' and 'bigeometric' (their spacings are absolute). */
 export function lawStations(e: BlockEdge, keep = Infinity, len = 0): number[] {
   const n = Math.max(1, e.nodes - 1);
   if (e.law === 'tanh') {
     const d0 = e.spacing1 && len > 0 ? e.spacing1 / len : undefined;
     const d1 = e.spacing2 && len > 0 ? e.spacing2 / len : undefined;
     return subsample(tanhStations(n, d0, d1), keep);
+  }
+  if (e.law === 'bigeometric') {
+    const f = (x?: number) => (x && len > 0 ? x / len : undefined);
+    return subsample(
+      biGeometricStations(
+        n,
+        f(e.spacing1),
+        e.ratio1 ?? 1.2,
+        f(e.spacing2),
+        e.ratio2 ?? 1.2,
+        f(e.maxSpace),
+      ),
+      keep,
+    );
   }
   let w: number[];
   if (e.law === 'geometric' && Math.abs(e.ratio - 1) > 1e-6) {
@@ -128,6 +142,66 @@ export function tanhStations(n: number, d0?: number, d1?: number): number[] {
   s[0] = 0;
   s[n] = 1;
   return s;
+}
+
+// ── Bi-geometric law, as ICEM CFD's edge params ─────────────────────────────
+//
+// Cells start at the end spacings and grow by their ratios toward the middle,
+// where they level off at a common size (at most Max space) that makes the
+// node count fill the edge. When the ratios cannot fill it in that many cells
+// they are raised, the way ICEM reports a larger "actual" ratio.
+
+/** Stations for `n` cells; spacings and max space are fractions of the length. */
+export function biGeometricStations(
+  n: number,
+  d0: number | undefined,
+  r0: number,
+  d1: number | undefined,
+  r1: number,
+  cap?: number,
+): number[] {
+  const ok = (d?: number) => (d && d > 0 && d < 1 ? d : undefined);
+  d0 = ok(d0);
+  d1 = ok(d1);
+  if (!d0 && !d1) return Array.from({ length: n + 1 }, (_, k) => k / n);
+  const sizes = (g0: number, g1: number, c: number) =>
+    Array.from({ length: n }, (_, i) =>
+      Math.min(d0 ? d0 * g0 ** i : Infinity, d1 ? d1 * g1 ** (n - 1 - i) : Infinity, c),
+    );
+  const total = (g0: number, g1: number, c: number) => sizes(g0, g1, c).reduce((a, b) => a + b, 0);
+  let g0 = Math.max(1, r0);
+  let g1 = Math.max(1, r1);
+  const top = cap && cap > 0 ? cap : Infinity;
+  // Too few cells to fill the edge at these ratios: steepen both.
+  if (total(g0, g1, top) < 1) {
+    const at = (k: number) => [
+      1 + (Math.max(g0, 1.001) - 1) * k,
+      1 + (Math.max(g1, 1.001) - 1) * k,
+    ];
+    let lo = 1;
+    let hi = 2;
+    while (total(...(at(hi) as [number, number]), top) < 1 && hi < 1e6) hi *= 2;
+    for (let it = 0; it < 60; it++) {
+      const mid = (lo + hi) / 2;
+      if (total(...(at(mid) as [number, number]), top) < 1) lo = mid;
+      else hi = mid;
+    }
+    [g0, g1] = at(hi);
+  }
+  // Level-off size that makes the cells add up to the length.
+  let lo = 0;
+  let hi = Math.min(top, 1);
+  for (let it = 0; it < 80; it++) {
+    const mid = (lo + hi) / 2;
+    if (total(g0, g1, mid) < 1) lo = mid;
+    else hi = mid;
+  }
+  const w = sizes(g0, g1, hi);
+  const sum = w.reduce((a, b) => a + b, 0) || 1;
+  const cum = [0];
+  for (const x of w) cum.push(cum[cum.length - 1] + x / sum);
+  cum[n] = 1;
+  return cum;
 }
 
 function subsample(cum: number[], keep: number): number[] {

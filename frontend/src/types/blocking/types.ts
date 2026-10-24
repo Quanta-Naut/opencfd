@@ -1,9 +1,10 @@
 import { Point2D, BoundaryTag } from '../cadWorkflow';
 
-/** Node distribution along an edge. 'tanh' is the two-sided hyperbolic
- *  tangent law (Vinokur) driven by `spacing1` / `spacing2`, Pointwise's
- *  default: it hits the requested end spacings for any node count. */
-export type EdgeLaw = 'uniform' | 'geometric' | 'bump' | 'tanh';
+/** Node distribution along an edge. 'bigeometric' is ICEM's default: cells
+ *  start at `spacing1` / `spacing2` and grow by `ratio1` / `ratio2` toward
+ *  the middle, capped at `maxSpace`. 'tanh' is the two-sided hyperbolic
+ *  tangent law (Vinokur) driven by the same spacings, Pointwise's default. */
+export type EdgeLaw = 'uniform' | 'geometric' | 'bump' | 'tanh' | 'bigeometric';
 
 export interface BlockVertex {
   id: string;
@@ -25,11 +26,18 @@ export interface BlockEdge {
   law: EdgeLaw;
   /** Growth ratio: last cell / first cell along the edge. 1 = uniform. */
   ratio: number;
-  /** 'tanh' law: first cell length at the v0 end (ICEM "Spacing 1"), in
-   *  model units. Undefined leaves that end free. */
+  /** 'tanh' / 'bigeometric': first cell length at the v0 end (ICEM
+   *  "Spacing 1"), in model units. Undefined leaves that end free. */
   spacing1?: number;
-  /** 'tanh' law: first cell length at the v1 end (ICEM "Spacing 2"). */
+  /** First cell length at the v1 end (ICEM "Spacing 2"). */
   spacing2?: number;
+  /** 'bigeometric': growth from cell to cell away from the v0 end (ICEM
+   *  "Ratio 1"). Undefined = 1.2. */
+  ratio1?: number;
+  /** 'bigeometric': growth away from the v1 end (ICEM "Ratio 2"). */
+  ratio2?: number;
+  /** 'bigeometric': largest cell allowed (ICEM "Max space"). */
+  maxSpace?: number;
   /** CadEntity.id whose closed outline this edge follows. Undefined = straight or unassociated. */
   curveId?: string;
   /** ICEM-style explicit association: CadEntity ids (joined end to end) this

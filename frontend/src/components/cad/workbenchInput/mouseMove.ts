@@ -1,3 +1,5 @@
+import { activeFieldOf } from '../workbenchUi/blockEditor/toolFields';
+import type { BlockTool } from '../workbenchUi/blockEditor/shared';
 import { constrainToHome, vertexMoveKeepsBlocksValid } from '../../../types/blocking';
 import type { BlockDragState } from '../../../types/blocking';
 import React from 'react';
@@ -41,7 +43,7 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
     zoom,
     splitHover,
     setSplitHover,
-    assocStage,
+    toolField,
     pickCurve,
     hoverCurveId,
     setHoverCurveId,
@@ -131,13 +133,13 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
   } else if (splitHover) {
     setSplitHover(null);
   }
-  // Associate: the curve (stage 2) or block edge (stage 1) under the cursor;
-  // Select: the edge a click would pick for its params.
+  // The curve or block edge a click would pick: for the active field of the
+  // tool's dialog, or for its params under Select.
   if (showBlocking && canvasMode === 'cad' && blocking) {
-    const curveStage = blockTool === 'assoc' && assocStage === 'curve';
-    const hc = curveStage ? pickCurve(raw, 10 / zoom) : null;
+    const kind = blockTool === 'select' ? 'edge' : activeFieldOf(blockTool, toolField)?.kind;
+    const hc = kind === 'curve' ? pickCurve(raw, 10 / zoom) : null;
     if (hc !== hoverCurveId) setHoverCurveId(hc);
-    const edgeStage = (blockTool === 'assoc' && assocStage === 'edges') || blockTool === 'select';
+    const edgeStage = kind === 'edge';
     const he =
       edgeStage && !blockDrag.current ? (pickEdge(blocking, raw, 8 / zoom)?.edgeId ?? null) : null;
     if (he !== hoverEdgeId) setHoverEdgeId(he);
@@ -458,7 +460,7 @@ export interface MouseMoveContext {
   tool: CadTool;
   showBlocking: boolean;
   canvasMode: 'cad' | 'mesh';
-  blockTool: 'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc';
+  blockTool: BlockTool;
   snapBlockVertex: (
     raw: Point2D,
     draggedVid: string,
@@ -472,7 +474,7 @@ export interface MouseMoveContext {
   setSplitHover: React.Dispatch<
     React.SetStateAction<{ edgeId: string; pt: Point2D; cut: Point2D[][] }>
   >;
-  assocStage: 'edges' | 'curve';
+  toolField: string;
   pickCurve: (p: Point2D, radius: number) => string | null;
   hoverCurveId: string;
   setHoverCurveId: React.Dispatch<React.SetStateAction<string>>;

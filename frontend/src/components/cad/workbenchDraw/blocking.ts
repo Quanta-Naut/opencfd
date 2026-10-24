@@ -7,6 +7,7 @@ import {
   PREMESH_MIN_DET,
 } from '../../../types/blocking';
 import type { DrawFrame, DrawScene } from './types';
+import { activeFieldOf, pickedOfKind } from '../workbenchUi/blockEditor/toolFields';
 
 /** ICEM CFD vertex colours: how a vertex moves when dragged. */
 export const VERTEX_COLORS = {
@@ -22,13 +23,11 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
   const { ctx, ws } = f;
   const {
     C,
-    assocEdges,
     blockVertexKinds,
     badBlockIds,
     blockCursor,
     blockDrag,
     blocking,
-    blockPick,
     blockPremesh,
     blockSnapGuides,
     blockSpacingJumps,
@@ -38,8 +37,6 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     hoveredBlockIdx,
     hoveredBlockVtx,
     hoverEdgeId,
-    ogridPass,
-    ogridSel,
     outsideBlockIds,
     selectedBlockId,
     selectedEdgeId,
@@ -47,6 +44,7 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     showBlocking,
     showMesh,
     showPremesh,
+    toolPicks,
     unpatchedEdgeIds,
   } = scene;
   if (
@@ -58,6 +56,10 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     return;
   const editing = canvasMode === 'cad';
   ctx.save();
+  const pickedBlocks = pickedOfKind(blockTool, toolPicks, 'block');
+  const pickedEdges = pickedOfKind(blockTool, toolPicks, 'edge');
+  const pickedVerts = pickedOfKind(blockTool, toolPicks, 'vertex');
+  const passEdges = new Set(blockTool === 'ogrid' ? (toolPicks.pass ?? []) : []);
   const vmap = new Map(blocking.vertices.map((v) => [v.id, v.pt] as const));
   const emap = new Map(blocking.edges.map((e) => [e.id, e] as const));
   const chainOf = (id: string) => {
@@ -79,10 +81,8 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     const poly = blockPolygon(blocking, blk);
     if (poly.length < 3) return;
     const hot = hoveredBlockIdx === bi;
-    const inOgrid = editing && blockTool === 'ogrid' && ogridSel.includes(blk.id);
-    const picked =
-      editing &&
-      (selectedBlockId === blk.id || (blockTool === 'mergeB' && blockPick === blk.id) || inOgrid);
+    const inOgrid = editing && pickedBlocks.has(blk.id);
+    const picked = editing && (selectedBlockId === blk.id || inOgrid);
     const bad = badBlockIds.has(blk.id) || outsideBlockIds.has(blk.id);
     const doomed = hot && blockTool === 'delete' && editing;
     const target = hot && editing && (blockTool === 'ogrid' || blockTool === 'mergeB');
@@ -212,11 +212,13 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     };
     // Boundary edges with no patch need associating (dashed red).
     unpatchedEdgeIds.forEach((id) => strokeEdge(id, '#DC2626', 2, [5, 4]));
-    if (hoverEdgeId && !assocEdges.includes(hoverEdgeId) && hoverEdgeId !== selectedEdgeId)
+    if (hoverEdgeId && !pickedEdges.has(hoverEdgeId) && hoverEdgeId !== selectedEdgeId)
       strokeEdge(hoverEdgeId, 'rgba(224, 90, 0, 0.55)', 4);
-    assocEdges.forEach((id) => strokeEdge(id, SELECT, 4));
-    // O-grid pass-through edges: the grid lines run straight through them.
-    if (blockTool === 'ogrid') ogridPass.forEach((id) => strokeEdge(id, SELECT, 4, [7, 4]));
+    // Picked edges; O-grid pass-through edges dashed (the grid runs through them).
+    pickedEdges.forEach((id) => strokeEdge(id, SELECT, 4, passEdges.has(id) ? [7, 4] : []));
+    // Edge params / match: show which way each picked edge runs (end 1 to 2).
+    if (blockTool === 'params' || blockTool === 'match')
+      pickedEdges.forEach((id) => drawEdgeArrow(f, chainOf(id)));
     if (selectedEdgeId) {
       strokeEdge(selectedEdgeId, SELECT, 4);
       drawEdgeArrow(f, chainOf(selectedEdgeId));
@@ -241,7 +243,7 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
   let tip: { x: number; y: number; text: string } | null = null;
   for (const v of blocking.vertices) {
     const q = ws(v.pt.x, v.pt.y);
-    const hot = hoveredBlockVtx === v.id || (blockTool === 'mergeV' && blockPick === v.id);
+    const hot = hoveredBlockVtx === v.id || pickedVerts.has(v.id);
     const sel = selectedVertexId === v.id;
     const kind = blockVertexKinds.get(v.id) ?? 'free';
     ctx.fillStyle = VERTEX_COLORS[kind];
@@ -355,6 +357,8 @@ export function drawBlockEditor(f: DrawFrame, scene: DrawScene): void {
     hoverCurveId,
     showBlocking,
     splitHover,
+    toolPicks,
+    toolField,
   } = scene;
   if (showBlocking && canvasMode === 'cad') {
     ctx.save();
@@ -387,11 +391,17 @@ export function drawBlockEditor(f: DrawFrame, scene: DrawScene): void {
         ctx.stroke();
       });
     }
-    if (blockTool === 'assoc' && hoverCurveId) {
-      const ent = cadState.entities.find((x) => x.id === hoverCurveId);
+    const curveIds = [...pickedOfKind(blockTool, toolPicks, 'curve')];
+    if (hoverCurveId && activeFieldOf(blockTool, toolField)?.kind === 'curve')
+      curveIds.push(hoverCurveId);
+    for (const id of curveIds) {
+      const ent = cadState.entities.find((x) => x.id === id);
       const c = ent ? curveOf(ent) : null;
       if (c) {
-        ctx.strokeStyle = '#059669';
+        ctx.strokeStyle =
+          id === hoverCurveId && !toolPicks.curves?.includes(id)
+            ? 'rgba(5, 150, 105, 0.55)'
+            : '#059669';
         ctx.lineWidth = 4;
         ctx.beginPath();
         c.pts.forEach((p, i) => {

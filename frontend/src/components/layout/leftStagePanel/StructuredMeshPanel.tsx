@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { CFDProjectState } from '../../../types/cfd';
@@ -13,32 +13,20 @@ import {
   edgeLength,
   edgeDirectionGroups,
   DIRECTION_COLORS,
-  premesh,
-  premeshQuality,
-  PREMESH_MIN_ANGLE,
-  PREMESH_MIN_DET,
 } from '../../../types/blocking';
 import { computeFallbackYPlus } from '../../../utils/api';
 import { NumberField } from './NumberField';
 
 // The ICEM CFD Hexa blocking process, done on the canvas with the block tools.
 const WORKFLOW: [string, string][] = [
-  ['Initialize', 'One block around all the geometry (rail, top).'],
-  [
-    'Shape the topology',
-    'Split (K) the block at the geometry features, then Delete (X) the blocks inside bodies.',
-  ],
-  [
-    'Wrap the bodies',
-    'O-grid (O) the blocks around a body. Pass through the outlet edge for a C-grid.',
-  ],
-  [
-    'Associate',
-    'Associate (A) the edges along walls to their curves. Vertices go green and slide on them.',
-  ],
-  ['Move vertices', 'Drag vertices for square, even blocks. Red ones are fixed to the geometry.'],
-  ['Size the edges', 'Click an edge: nodes, law, end spacings. Or use Mesh sizing below.'],
-  ['Check the pre-mesh', 'Show it (P). Aim for determinant over 0.2 and angles over 18 deg.'],
+  ['Initialize', ''],
+  ['Split', 'K'],
+  ['O-grid', 'O'],
+  ['Delete blocks in bodies', 'X'],
+  ['Associate', 'A'],
+  ['Move vertices', 'V'],
+  ['Edge params', 'E'],
+  ['Pre-mesh', 'P'],
 ];
 
 // Rules of thumb from structured meshing practice (ICEM, Pointwise, and the
@@ -106,21 +94,11 @@ export const StructuredMeshPanel: React.FC<{
     return () => onDirectionColors(null);
   }, [blocking, openStep, hasBlocks, onDirectionColors]);
 
-  // Pre-mesh quality of the current blocks (ICEM's determinant and angle).
-  const quality = useMemo(
-    () => (hasBlocks && blocking ? premeshQuality(premesh(blocking, 60)) : null),
-    [blocking, hasBlocks],
-  );
-
   // ── Step 1: Blocking ──
   const step1 = (
     <div className="space-y-2.5">
       {!hasBlocks && (
         <>
-          <p className="text-[10px] text-fg-2 leading-relaxed">
-            Build the blocks by hand on the canvas, the way ANSYS ICEM CFD does: start from one
-            block and split, wrap and associate it to the geometry.
-          </p>
           <div className="grid grid-cols-2 gap-1.5">
             <button
               onClick={() => onInitializeBlocking?.()}
@@ -138,41 +116,12 @@ export const StructuredMeshPanel: React.FC<{
         </>
       )}
 
-      {quality && (
-        <div className="grid grid-cols-3 gap-1.5">
-          {(
-            [
-              ['Blocks', String(blocking!.blocks.length), true],
-              ['Min determinant', quality.minDet.toFixed(2), quality.minDet >= PREMESH_MIN_DET],
-              [
-                'Min angle',
-                `${quality.minAngle.toFixed(1)} deg`,
-                quality.minAngle >= PREMESH_MIN_ANGLE,
-              ],
-            ] as const
-          ).map(([label, v, ok]) => (
-            <div key={label} className="p-1.5 rounded border border-line bg-surface">
-              <span className="text-[10px] text-fg-2 block">{label}</span>
-              <span
-                className={`text-[12px] font-mono font-semibold ${ok ? 'text-fg' : 'text-danger'}`}
-              >
-                {v}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <ol className="space-y-1.5">
-        {WORKFLOW.map(([title, how], i) => (
-          <li key={title} className="flex gap-2 text-[10px] leading-snug">
-            <span className="w-4 h-4 rounded-full bg-surface-3 text-fg-2 flex items-center justify-center text-[9px] font-semibold shrink-0">
-              {i + 1}
-            </span>
-            <span>
-              <span className="text-fg font-semibold">{title}.</span>{' '}
-              <span className="text-fg-2">{how}</span>
-            </span>
+      <ol className="flex flex-wrap items-center gap-x-1 gap-y-1 text-[10px] text-fg-2">
+        {WORKFLOW.map(([title, key], i) => (
+          <li key={title} className="flex items-center gap-1">
+            {i > 0 && <span className="text-fg-3">›</span>}
+            <span className="text-fg">{title}</span>
+            {key && <span className="font-mono text-fg-3">{key}</span>}
           </li>
         ))}
       </ol>

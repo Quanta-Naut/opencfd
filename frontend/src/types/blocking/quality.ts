@@ -25,10 +25,13 @@ export interface BlockPremesh {
   angle: Float32Array;
   minDet: number;
   minAngle: number;
+  /** Longest over shortest side of the most stretched cell. */
+  maxAspect: number;
 }
 
 export interface PremeshQuality {
   cells: number;
+  maxAspect: number;
   minDet: number;
   minAngle: number;
   /** Cells under the ICEM targets. */
@@ -178,6 +181,7 @@ export function premeshBlock(
   const angle = new Float32Array(m * n);
   let minDet = Infinity;
   let minAngle = Infinity;
+  let maxAspect = 1;
   const q: Point2D[] = [grid[0][0], grid[0][0], grid[0][0], grid[0][0]];
   for (let j = 0; j < m; j++) {
     for (let i = 0; i < n; i++) {
@@ -188,6 +192,8 @@ export function premeshBlock(
       let jmin = Infinity;
       let jmax = -Infinity;
       let amin = Math.PI;
+      let smin = Infinity;
+      let smax = 0;
       for (let k = 0; k < 4; k++) {
         const a = q[(k + 3) % 4];
         const p = q[k];
@@ -201,7 +207,11 @@ export function premeshBlock(
         if (cross > jmax) jmax = cross;
         const ang = Math.atan2(Math.abs(cross), ux * vx + uy * vy);
         if (ang < amin) amin = ang;
+        const side = Math.hypot(ux, uy);
+        if (side < smin) smin = side;
+        if (side > smax) smax = side;
       }
+      if (smin > 0 && smax / smin > maxAspect) maxAspect = smax / smin;
       const d = jmax > 0 ? jmin / jmax : -1;
       const a = jmin > 0 ? amin * DEG : 0;
       det[j * n + i] = d;
@@ -210,7 +220,7 @@ export function premeshBlock(
       if (a < minAngle) minAngle = a;
     }
   }
-  return { blockId: blk.id, grid, det, angle, minDet, minAngle };
+  return { blockId: blk.id, grid, det, angle, minDet, minAngle, maxAspect };
 }
 
 /** Pre-mesh every block. */
@@ -233,6 +243,7 @@ export function premeshQuality(blocks: BlockPremesh[]): PremeshQuality {
   let lowDet = 0;
   let lowAngle = 0;
   let folded = 0;
+  let maxAspect = 1;
   let worst = Infinity;
   let worstBlockId: string | null = null;
   for (const b of blocks) {
@@ -245,6 +256,7 @@ export function premeshQuality(blocks: BlockPremesh[]): PremeshQuality {
     }
     if (b.minDet < minDet) minDet = b.minDet;
     if (b.minAngle < minAngle) minAngle = b.minAngle;
+    if (b.maxAspect > maxAspect) maxAspect = b.maxAspect;
     const s = Math.min(b.minDet / PREMESH_MIN_DET, b.minAngle / PREMESH_MIN_ANGLE);
     if (s < worst) {
       worst = s;
@@ -253,6 +265,7 @@ export function premeshQuality(blocks: BlockPremesh[]): PremeshQuality {
   }
   return {
     cells,
+    maxAspect,
     minDet: cells ? minDet : 1,
     minAngle: cells ? minAngle : 90,
     lowDet,
