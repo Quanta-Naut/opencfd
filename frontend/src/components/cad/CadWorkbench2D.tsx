@@ -84,7 +84,6 @@ import { ViewModeBar } from './workbenchUi/ViewModeBar';
 import { DraftingStrip } from './workbenchUi/DraftingStrip';
 import { ToolRail } from './workbenchUi/ToolRail';
 import { autoCenterInitialGeometry } from './workbenchView/camera';
-import { computeElementBlockColor } from './workbenchView/meshScene';
 import { buildGlScene } from './workbenchView/meshScene';
 import { snapBlockVertexImpl } from './workbenchInput/hitTest';
 import { attachDomainHandleDrag } from './workbenchInput/domainHandleDrag';
@@ -273,11 +272,13 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // sizing: the mesh) and decides what is edited: blocks only in Blocking.
   const [blocksOn, setBlocksOn] = useState(true);
   const [meshOn, setMeshOn] = useState(false);
+  const [blockTool, setBlockTool] = useState<BlockTool>('select');
   const structuredView = showBlocking && showMesh && !meshOnly;
   const meshAvail = !!(meshData?.nodes?.length && meshData?.elements?.length);
+  // Blocks are edited in Blocking, or in Mesh sizing while a block tool runs.
   const canvasMode: 'cad' | 'mesh' = !structuredView
     ? canvasModeRaw
-    : structuredStep === 'blocking' && blocksOn
+    : blocksOn && (structuredStep === 'blocking' || blockTool !== 'select')
       ? 'cad'
       : 'mesh';
   const meshLayer = structuredView ? meshOn && meshAvail : canvasMode === 'mesh';
@@ -572,9 +573,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setMeshOn(false);
     } else {
       setMeshOn(true);
-      setBlocksOn(!meshAvail);
+      setBlocksOn(true);
     }
-  }, [structuredStep, structuredView]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [structuredStep, structuredView]);
+
+  // A block tool needs the blocks in view.
+  useEffect(() => {
+    if (blockTool !== 'select') setBlocksOn(true);
+  }, [blockTool]);
 
   // Building / rebuilding blocks jumps to the Blocks view.
   useEffect(() => {
@@ -664,21 +670,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     return meshSkewness(nodes, els);
   }, [meshData?.nodes, meshData?.elements, qualityWanted]);
 
-  // Per-element block-fill color for the direction-coloring overlay: which
-  // block's color each generated cell should fill with, found from the
-  // element's own centroid against the block polygons. Deliberately recolors
-  // the REAL mesh cells (exact, by construction) rather than overlaying a
-  // separate translucent block-shaped polygon on top of them - the latter
-  // was built from the idealized blocking edge path, which can disagree with
-  // where the backend actually put the real mesh nodes by a cell's width at
-  // a wall kink too shallow for the mesh's own corner-preservation to snap
-  // onto exactly, leaving a sliver of the overlay sitting outside the real
-  // mesh (looked like a stray "bevel" at the kink).
-  // Only built while direction colouring is on.
-  const elementBlockColor = useMemo<(string | null)[] | null>(
-    () => computeElementBlockColor({ meshData, directionColors, blocking }),
-    [meshData?.nodes, meshData?.elements, blocking, directionColors],
-  );
+
 
   // Unique + exterior edges, once per mesh. The GPU wireframe draws `all`;
   // the 2D overlay strokes `boundary` (domain outline and holes).
@@ -723,8 +715,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         liveRange,
         liveMeshOn,
         showMeshWireframe,
-        directionColors,
-        elementBlockColor,
         colormap,
       }),
     [
@@ -745,8 +735,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       liveMeshOn,
       colormap,
       showMeshWireframe,
-      directionColors,
-      elementBlockColor,
       C,
     ],
   );
@@ -829,7 +817,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [hoveredBlockIdx, setHoveredBlockIdx] = useState<number | null>(null);
 
   // ── Block editor (Blocks view): select / draw / split / delete tools ───────
-  const [blockTool, setBlockTool] = useState<BlockTool>('select');
   // Each tool is a command with a dialog (Fusion 360 style): its selection
   // fields, the active one, the blocking when it started (Esc restores it),
   // and the options of O-grid and Match spacing.
@@ -1453,7 +1440,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       domainShape,
       downstreamChordFactor,
       draggingDomainHandle,
-      elementBlockColor,
       fieldData,
       flowType,
       geometryBBox,

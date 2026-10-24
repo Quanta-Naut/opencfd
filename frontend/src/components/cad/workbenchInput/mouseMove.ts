@@ -146,7 +146,7 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
   }
 
   // Structured block-vertex drag / hover (mesh stage).
-  if (showBlocking && blocking) {
+  if (showBlocking && canvasMode === 'cad' && blocking) {
     if (blockDrag.current && onUpdateBlocking) {
       const { vid, home } = blockDrag.current;
       const held = home ? constrainToHome(home, raw) : null;

@@ -37,7 +37,10 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
     const t = window.setTimeout(() => setBlockMsg(null), msg.error ? 5000 : 3000);
     return () => window.clearTimeout(t);
   }, [msg, inDialog, setBlockMsg]);
-  if (!(displayOnly && showBlocking && canvasMode === 'cad' && onUpdateBlocking)) return null;
+  // The tool rail stays for the whole structured Mesh tab; the dialogs and
+  // the selection panel only while the blocks are being edited.
+  if (!(displayOnly && showBlocking && onUpdateBlocking)) return null;
+  const editing = canvasMode === 'cad';
   const hasBlocks = !!blocking?.blocks.length;
   const pickTool = (t: BlockTool) => {
     setBlockTool(t);
@@ -63,7 +66,7 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
         undo={p.undo}
         redo={p.redo}
       />
-      {msg && (!msg.error || blockTool === 'select') && (
+      {editing && msg && (!msg.error || blockTool === 'select') && (
         <div
           className={`absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-surface border border-line rounded px-2.5 py-1 text-[11px] select-none ${
             msg.error ? 'text-danger' : 'text-fg-2'
@@ -72,50 +75,52 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
           {msg.text}
         </div>
       )}
-      <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1.5">
-        {blockTool !== 'select' && (
-          <BlockToolDialog
-            blockTool={blockTool}
-            blocking={blocking ?? emptyBlocking()}
-            onUpdateBlocking={onUpdateBlocking}
-            entities={p.cadState.entities}
-            toolPicks={p.toolPicks}
-            setToolPicks={p.setToolPicks}
-            toolField={p.toolField}
-            setToolField={p.setToolField}
-            drawCount={p.blockDrawCount}
-            ogridScale={p.ogridScale}
-            setOgridScale={p.setOgridScale}
-            matchCopy={p.matchCopy}
-            setMatchCopy={p.setMatchCopy}
-            blockSpacingJumps={p.blockSpacingJumps}
-            blockMsg={msg}
-            commitTool={p.commitTool}
-            cancelTool={p.cancelTool}
-          />
-        )}
-        {!hasBlocks && blockTool === 'select' && (
-          <div className="bg-surface border border-line rounded px-2.5 py-1.5 text-[11px] text-fg-2 select-none">
-            Initialize a block, or Create one (B).
-          </div>
-        )}
-        {hasBlocks && blocking && blockTool === 'select' && (
-          <BlockInspector
-            blocking={blocking}
-            onUpdateBlocking={onUpdateBlocking}
-            entities={p.cadState.entities}
-            selectedEdgeId={blockTool === 'select' ? p.selectedEdgeId : null}
-            selectedVertexId={blockTool === 'select' ? p.selectedVertexId : null}
-            selectedBlockId={blockTool === 'select' ? p.selectedBlockId : null}
-            blockVertexKinds={p.blockVertexKinds}
-            blockPremesh={p.blockPremesh}
-            blockSpacingJumps={p.blockSpacingJumps}
-            setVertexLocation={p.setVertexLocation}
-            deleteBlockById={p.deleteBlockById}
-            ogridThis={(id) => p.startTool('ogrid', { blocks: [id] }, 'pass')}
-          />
-        )}
-      </div>
+      {editing && (
+        <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-1.5">
+          {blockTool !== 'select' && (
+            <BlockToolDialog
+              blockTool={blockTool}
+              blocking={blocking ?? emptyBlocking()}
+              onUpdateBlocking={onUpdateBlocking}
+              entities={p.cadState.entities}
+              toolPicks={p.toolPicks}
+              setToolPicks={p.setToolPicks}
+              toolField={p.toolField}
+              setToolField={p.setToolField}
+              drawCount={p.blockDrawCount}
+              ogridScale={p.ogridScale}
+              setOgridScale={p.setOgridScale}
+              matchCopy={p.matchCopy}
+              setMatchCopy={p.setMatchCopy}
+              blockSpacingJumps={p.blockSpacingJumps}
+              blockMsg={msg}
+              commitTool={p.commitTool}
+              cancelTool={p.cancelTool}
+            />
+          )}
+          {!hasBlocks && blockTool === 'select' && (
+            <div className="bg-surface border border-line rounded px-2.5 py-1.5 text-[11px] text-fg-2 select-none">
+              Initialize a block, or Create one (B).
+            </div>
+          )}
+          {hasBlocks && blocking && blockTool === 'select' && (
+            <BlockInspector
+              blocking={blocking}
+              onUpdateBlocking={onUpdateBlocking}
+              entities={p.cadState.entities}
+              selectedEdgeId={blockTool === 'select' ? p.selectedEdgeId : null}
+              selectedVertexId={blockTool === 'select' ? p.selectedVertexId : null}
+              selectedBlockId={blockTool === 'select' ? p.selectedBlockId : null}
+              blockVertexKinds={p.blockVertexKinds}
+              blockPremesh={p.blockPremesh}
+              blockSpacingJumps={p.blockSpacingJumps}
+              setVertexLocation={p.setVertexLocation}
+              deleteBlockById={p.deleteBlockById}
+              ogridThis={(id) => p.startTool('ogrid', { blocks: [id] }, 'pass')}
+            />
+          )}
+        </div>
+      )}
     </>
   );
 }

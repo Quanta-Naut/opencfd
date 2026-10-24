@@ -7,12 +7,9 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
   const { ctx, ws } = f;
   const {
     activeField,
-    blocking,
     C,
     colormap,
-    directionColors,
     displayOnly,
-    elementBlockColor,
     fieldData,
     glMeshActive,
     liveHasContent,
@@ -127,8 +124,7 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
           ctx.fill();
           if (shouldDrawWireframe) ctx.stroke();
         } else {
-          const blockCol = directionColors ? elementBlockColor?.[elIdx] : null;
-          ctx.fillStyle = blockCol ? blockCol + '26' : C.meshFill;
+          ctx.fillStyle = C.meshFill;
           ctx.strokeStyle = C.meshLine;
           ctx.lineWidth = 0.65;
           ctx.beginPath();
@@ -177,39 +173,6 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
           const pi = ws(line[i][0], line[i][1]);
           ctx.lineTo(pi.x, pi.y);
         }
-        ctx.stroke();
-      }
-    }
-
-    // Direction-group overlay: while the mesh-sizing step is open, trace
-    // the block edges in the same colors as the Direction A/B/C cards over
-    // the generated mesh (the per-cell block fill itself is painted in the
-    // main element loop above, directly on the real cells, not here).
-    if (directionColors && blocking && blocking.edges.length > 0) {
-      for (const edge of blocking.edges) {
-        // Boundary (patched) edges are already traced by the exterior-edge
-        // pass above, following the mesh's own node-by-node polyline. This
-        // overlay's edge.path is the coarser blocking representation of the
-        // same curve - stroking both independently at a kink in the wall
-        // left two not-quite-aligned lines fighting each other there. Only
-        // the interior (unpatched) block seams have no other outline, so
-        // only those need drawing here.
-        if (edge.patch) continue;
-        const v0 = blocking.vertices.find((v) => v.id === edge.v0);
-        const v1 = blocking.vertices.find((v) => v.id === edge.v1);
-        const col = directionColors[edge.id];
-        if (!v0 || !v1 || !col) continue;
-        const chain = [v0.pt, ...edge.path, v1.pt];
-        ctx.strokeStyle = col;
-        ctx.lineWidth = 2;
-        ctx.lineJoin = 'round';
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        chain.forEach((p, i) => {
-          const s = ws(p.x, p.y);
-          if (i === 0) ctx.moveTo(s.x, s.y);
-          else ctx.lineTo(s.x, s.y);
-        });
         ctx.stroke();
       }
     }

@@ -14,7 +14,6 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
     redo,
     displayOnly,
     showBlocking,
-    canvasMode,
     setBlockDrawPts,
     setBlockTool,
     setBlockMsg,
@@ -61,9 +60,10 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
   }
   // Outside the geometry stage the canvas is display-only: the CAD shortcuts
   // (Delete, tool letters) must not touch the geometry. In the Blocks view the
-  // keys drive the block editor instead. Undo/redo still fall through.
+  // keys drive the block editor instead, in either structured section.
+  // Undo/redo still fall through.
   if (displayOnly && !e.ctrlKey && !e.metaKey) {
-    if (showBlocking && canvasMode === 'cad') {
+    if (showBlocking) {
       const k = e.key.toLowerCase();
       // Each tool is a command: Enter finishes it, Esc cancels it (undoing
       // what it changed) and goes back to Select, Tab moves between its fields.

@@ -6,6 +6,8 @@ import {
   Grid3x3,
   Magnet,
   Merge,
+  PanelLeftClose,
+  PanelLeftOpen,
   MousePointer2,
   Redo2,
   Ruler,
@@ -50,6 +52,22 @@ export function BlockToolRail(p: {
   redo: () => void;
 }) {
   const [confirmClear, setConfirmClear] = useState(false);
+  // Folds down to one button for anyone who wants the canvas clear.
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem('opencfd.blockRailCollapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const fold = (v: boolean) => {
+    setCollapsed(v);
+    try {
+      localStorage.setItem('opencfd.blockRailCollapsed', v ? '1' : '0');
+    } catch {
+      /* per-viewer convenience only */
+    }
+  };
   const btn = (active: boolean) =>
     `w-8 h-8 inline-flex items-center justify-center rounded transition-colors disabled:opacity-30 disabled:pointer-events-none ${
       active ? 'bg-accent-soft text-accent-fg' : 'text-fg-2 hover:bg-surface-3 hover:text-fg'
@@ -81,8 +99,20 @@ export function BlockToolRail(p: {
       </button>
     </Tooltip>
   );
+  if (collapsed)
+    return (
+      <div className="absolute top-14 left-3 z-20 p-1 bg-surface border border-line rounded select-none">
+        {item('expand', 'Show block tools', <PanelLeftOpen className="w-4 h-4" />, () =>
+          fold(false),
+        )}
+      </div>
+    );
   return (
     <div className="absolute top-14 left-3 z-20 flex flex-col items-center gap-0.5 p-1 bg-surface border border-line rounded select-none">
+      {item('collapse', 'Hide block tools', <PanelLeftClose className="w-4 h-4" />, () =>
+        fold(true),
+      )}
+      {sep}
       {item('undo', tip('Undo', 'Ctrl Z'), <Undo2 className="w-4 h-4" />, p.undo)}
       {item('redo', tip('Redo', 'Ctrl Y'), <Redo2 className="w-4 h-4" />, p.redo)}
       {sep}

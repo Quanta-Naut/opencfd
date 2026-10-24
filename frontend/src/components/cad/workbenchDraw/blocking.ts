@@ -73,48 +73,50 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
 
   // Faint per-block fill so the layout reads at a glance; picked blocks in
   // the selection colour, blocks over a body or outside the fluid in red.
-  blocking.blocks.forEach((blk, bi) => {
-    const poly = blockPolygon(blocking, blk);
-    if (poly.length < 3) return;
-    const hot = hoveredBlockIdx === bi;
-    const inOgrid = editing && pickedBlocks.has(blk.id);
-    const picked = editing && (selectedBlockId === blk.id || inOgrid);
-    const bad = badBlockIds.has(blk.id) || outsideBlockIds.has(blk.id);
-    const doomed = hot && blockTool === 'delete' && editing;
-    const target = hot && editing && (blockTool === 'ogrid' || blockTool === 'mergeB');
-    tracePath(poly);
-    ctx.closePath();
-    ctx.fillStyle =
-      bad || doomed
-        ? 'rgba(220, 38, 38, 0.18)'
-        : picked
-          ? 'rgba(224, 90, 0, 0.16)'
-          : target || hot
-            ? 'rgba(124, 58, 237, 0.12)'
-            : 'rgba(124, 58, 237, 0.04)';
-    ctx.fill();
-    if (picked) {
-      ctx.strokeStyle = SELECT;
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 3]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-    if (!showPremesh) {
-      const cx = poly.reduce((a, p) => a + p.x, 0) / poly.length;
-      const cy = poly.reduce((a, p) => a + p.y, 0) / poly.length;
-      const sc = ws(cx, cy);
-      ctx.fillStyle = 'rgba(124, 58, 237, 0.7)';
-      ctx.font = '600 11px Inter, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(bi + 1), sc.x, sc.y);
-    }
-  });
+  // Over the mesh (not editing) only the coloured edges are drawn.
+  if (editing)
+    blocking.blocks.forEach((blk, bi) => {
+      const poly = blockPolygon(blocking, blk);
+      if (poly.length < 3) return;
+      const hot = hoveredBlockIdx === bi;
+      const inOgrid = editing && pickedBlocks.has(blk.id);
+      const picked = editing && (selectedBlockId === blk.id || inOgrid);
+      const bad = badBlockIds.has(blk.id) || outsideBlockIds.has(blk.id);
+      const doomed = hot && blockTool === 'delete' && editing;
+      const target = hot && editing && (blockTool === 'ogrid' || blockTool === 'mergeB');
+      tracePath(poly);
+      ctx.closePath();
+      ctx.fillStyle =
+        bad || doomed
+          ? 'rgba(220, 38, 38, 0.18)'
+          : picked
+            ? 'rgba(224, 90, 0, 0.16)'
+            : target || hot
+              ? 'rgba(124, 58, 237, 0.12)'
+              : 'rgba(124, 58, 237, 0.04)';
+      ctx.fill();
+      if (picked) {
+        ctx.strokeStyle = SELECT;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if (!showPremesh) {
+        const cx = poly.reduce((a, p) => a + p.x, 0) / poly.length;
+        const cy = poly.reduce((a, p) => a + p.y, 0) / poly.length;
+        const sc = ws(cx, cy);
+        ctx.fillStyle = 'rgba(124, 58, 237, 0.7)';
+        ctx.font = '600 11px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(bi + 1), sc.x, sc.y);
+      }
+    });
 
   // ICEM pre-mesh: the grid each block will produce. Cells under ICEM's
   // targets (determinant 0.2, angle 18 deg) are tinted, folded ones solid.
-  if (showPremesh) {
+  if (showPremesh && editing) {
     for (const pm of blockPremesh) {
       const g = pm.grid;
       const m = g.length - 1;
@@ -164,7 +166,7 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     ctx.setLineDash([]);
     tracePath(chain);
     ctx.stroke();
-    if (showPremesh) continue;
+    if (showPremesh || !editing) continue;
     // Capped by on-screen length so a short edge zoomed out never smears
     // its ticks into a solid line.
     let screenLen = 0;
@@ -192,6 +194,11 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
       ctx.arc(q.x, q.y, 1.1, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  if (!editing) {
+    ctx.restore();
+    return;
   }
 
   // Editor highlights on top of the edges.

@@ -154,8 +154,9 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
     e.preventDefault();
     return;
   }
-  // Structured block vertices are editable even in display-only (mesh) mode.
-  if (e.button === 0 && showBlocking && blocking && onUpdateBlocking) {
+  // Block vertices drag while the blocks are being edited (not when they are
+  // only drawn over the mesh).
+  if (e.button === 0 && showBlocking && canvasMode === 'cad' && blocking && onUpdateBlocking) {
     const raw = toWorld(e.clientX, e.clientY);
     const vHit = 12 / zoom;
     let best: string | null = null;

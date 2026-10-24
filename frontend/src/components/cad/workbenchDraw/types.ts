@@ -58,7 +58,6 @@ export interface DrawScene {
   domainShape: DomainShapeType;
   downstreamChordFactor: number;
   draggingDomainHandle: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial';
-  elementBlockColor: string[];
   fieldData: any;
   flowType: FlowType;
   geometryBBox: GeometryBBox;
