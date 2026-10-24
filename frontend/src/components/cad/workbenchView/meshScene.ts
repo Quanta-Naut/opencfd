@@ -24,6 +24,8 @@ export function buildGlScene(wb: GlSceneContext): MeshGLScene {
     colormap,
     levels,
     contourLines,
+    clipOutside,
+    clipBox,
   } = wb;
   const nodes: number[][] | undefined = meshData?.nodes;
   const elements: number[][] | undefined = meshData?.elements;
@@ -73,8 +75,18 @@ export function buildGlScene(wb: GlSceneContext): MeshGLScene {
     }
     return {
       visible: true,
-      fill: { kind: 'node', vals: vals!, lo, hi, colormap, levels, lines: contourLines },
+      fill: {
+        kind: 'node',
+        vals: vals!,
+        lo,
+        hi,
+        colormap,
+        levels,
+        lines: contourLines,
+        clipOutside,
+      },
       wire: showMeshWireframe ? [1, 1, 1, 0.3] : null,
+      clip: clipBox,
     };
   }
   // Theme mesh lines over plain cells.
@@ -104,4 +116,6 @@ export interface GlSceneContext {
   /** Results contour style: flat bands (0 = smooth) and iso-lines. */
   levels: number;
   contourLines: boolean;
+  clipOutside: boolean;
+  clipBox: [number, number, number, number] | null;
 }

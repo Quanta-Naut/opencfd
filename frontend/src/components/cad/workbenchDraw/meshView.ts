@@ -34,6 +34,17 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
     meshLocator,
   } = scene;
   const levels = resultsOverlay?.levels ?? 0;
+  const clipOutside = !!resultsOverlay?.clipOutside;
+  const clipBox = showField ? (resultsOverlay?.clipBox ?? null) : null;
+  // Limit drawing to the clip box (screen space); the caller restores.
+  const clipToBox = () => {
+    if (!clipBox) return;
+    const a = ws(clipBox[0], clipBox[1]);
+    const b = ws(clipBox[2], clipBox[3]);
+    ctx.beginPath();
+    ctx.rect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+    ctx.clip();
+  };
   // Mesh mode reuses this CAD canvas, including its camera, pan and zoom.
   // Only the backend mesh is drawn; fields and streamlines are intentionally absent.
   if (
@@ -74,6 +85,8 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
     ctx.lineWidth = haveField ? 0.45 : 0.65;
 
     // When the GPU canvas is drawing the mesh, skip the per-element loop.
+    ctx.save();
+    clipToBox();
     if (!glMeshActive) {
       elements.forEach((element: number[], elIdx: number) => {
         if (element.length < 3) return;
@@ -115,6 +128,7 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
           let s = 0;
           for (const ni of element) s += (vals as number[])[ni] ?? 0;
           let t = (s / element.length - lo) / (hi - lo);
+          if (clipOutside && (t < 0 || t > 1)) return;
           if (levels > 0) {
             const c = Math.max(0, Math.min(1, t));
             t = (Math.min(Math.floor(c * levels), levels - 1) + 0.5) / levels;
@@ -146,6 +160,7 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
         }
       });
     }
+    ctx.restore();
 
     // Exterior edges explicitly show both the airfoil hole and domain edge.
     ctx.strokeStyle = C.boundary;
@@ -162,6 +177,8 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
     }
     ctx.stroke();
 
+    ctx.save();
+    clipToBox();
     // Streamlines overlay (Results) - only when showResultsStreamlines is toggled on
     if (
       showField &&
@@ -187,6 +204,22 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
 
     if (showField && resultsOverlay) {
       drawResultsOverlay(f, resultsOverlay, fieldData?.fields, meshLocator);
+    }
+    ctx.restore();
+
+    if (clipBox) {
+      const a = ws(clipBox[0], clipBox[1]);
+      const b = ws(clipBox[2], clipBox[3]);
+      ctx.strokeStyle = C.boundary;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeRect(
+        Math.min(a.x, b.x),
+        Math.min(a.y, b.y),
+        Math.abs(b.x - a.x),
+        Math.abs(b.y - a.y),
+      );
+      ctx.setLineDash([]);
     }
 
     return true;

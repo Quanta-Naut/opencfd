@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Calculator, ChevronDown, Crosshair, ImageDown, Pencil, Plus, X } from 'lucide-react';
+import { Calculator, ChevronDown, Crop, Crosshair, ImageDown, Pencil, Plus, X } from 'lucide-react';
 import type { StageId, StageStatus } from '../stages';
 import { CFDProjectState, PostProcessConfig } from '../../../types/cfd';
 import { StageGate } from './StageGate';
@@ -122,6 +122,7 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const [bAxis, setBAxis] = useState<'x' | 'y' | 's'>('x');
   // Calculator dialog: closed, a new field (null) or the field being edited.
   const [calc, setCalc] = useState<CustomField | null | undefined>(undefined);
+  const [isoText, setIsoText] = useState('');
 
   if (activeStage !== 'results') return null;
   if (stageStatus?.results?.locked)
@@ -150,6 +151,22 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
       ...(exists ? {} : { activeField: f.id }),
     });
     setCalc(undefined);
+  };
+  const isoNow = pp.isoValues?.[pp.activeField] ?? [];
+  const setIso = (vals: number[]) =>
+    set({ isoValues: { ...(pp.isoValues ?? {}), [pp.activeField]: vals } });
+  const addIso = () => {
+    const nums = isoText
+      .split(/[\s,;]+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter(Number.isFinite);
+    if (!nums.length) {
+      toast.error('Type a number', { description: 'For example 0, or several: 0.2, 0.5' });
+      return;
+    }
+    setIso([...new Set([...isoNow, ...nums])].sort((a, b) => a - b).slice(0, 12));
+    setIsoText('');
   };
   const removeCustom = (f: CustomField) => {
     if (!confirm(`Delete the calculator field "${f.name}"?`)) return;
@@ -292,6 +309,16 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
                 </label>
               </div>
             )}
+            {pp.rangeMode === 'custom' && (
+              <div className="mt-1.5">
+                <Check
+                  label="Hide values outside the range"
+                  on={!!pp.clipOutside}
+                  onChange={(v) => set({ clipOutside: v })}
+                  hint="Only the region whose value is between Min and Max is coloured, like a clip to range."
+                />
+              </div>
+            )}
           </div>
 
           <div>
@@ -330,6 +357,49 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
             onChange={(v) => set({ contourLines: v })}
             hint="Lines of equal value, at the band edges (or 10 lines when smooth)."
           />
+          <div>
+            <span className={`${lbl} block mb-1`}>Lines at values{unit && ` (${def.unit})`}</span>
+            <div className="flex gap-1">
+              <input
+                value={isoText}
+                onChange={(e) => setIsoText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') addIso();
+                }}
+                placeholder="e.g. 0, 0.5"
+                aria-label="Value for a line"
+                className={field}
+              />
+              <button
+                type="button"
+                onClick={addIso}
+                aria-label="Add line"
+                className="px-2 rounded-sm border border-line bg-surface text-fg-2 hover:text-fg hover:border-line-strong"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            {isoNow.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {isoNow.map((v) => (
+                  <span
+                    key={v}
+                    className="inline-flex items-center gap-1 pl-1.5 pr-0.5 py-0.5 rounded-sm border border-line bg-surface-2 text-[10px] font-mono text-fg"
+                  >
+                    {fmtValue(v)}
+                    <button
+                      type="button"
+                      aria-label={`Remove line at ${fmtValue(v)}`}
+                      onClick={() => setIso(isoNow.filter((x) => x !== v))}
+                      className="text-fg-3 hover:text-fg"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </Section>
 
         <Section
@@ -453,6 +523,65 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
                 </label>
               </div>
             )
+          )}
+        </Section>
+
+        <Section
+          id="clip"
+          title="Clip"
+          open={open}
+          setOpen={setOpen}
+          aside={
+            pp.clipBox && (
+              <button
+                type="button"
+                onClick={() => set({ clipBox: null })}
+                className="text-[10px] text-fg-2 hover:text-fg"
+              >
+                Clear
+              </button>
+            )
+          }
+        >
+          <button
+            type="button"
+            onClick={p.onToggleClipPicking}
+            disabled={!p.hasField}
+            className={`${ghostBtn} disabled:opacity-40 ${
+              p.clipPicking ? '!bg-accent-soft !text-accent-fg !border-accent-line' : ''
+            }`}
+          >
+            <Crop className="w-3.5 h-3.5" />
+            {p.clipPicking
+              ? 'Click two opposite corners'
+              : pp.clipBox
+                ? 'Pick a new box'
+                : 'Show results inside a box'}
+          </button>
+          {pp.clipBox && (
+            <div className="grid grid-cols-2 gap-1.5">
+              {(
+                [
+                  [0, 'x from'],
+                  [2, 'x to'],
+                  [1, 'y from'],
+                  [3, 'y to'],
+                ] as const
+              ).map(([i, text]) => (
+                <label key={i}>
+                  <span className={`${lbl} block mb-0.5`}>{text}</span>
+                  <NumberField
+                    value={pp.clipBox![i]}
+                    onChange={(n) => {
+                      const b = [...pp.clipBox!] as [number, number, number, number];
+                      b[i] = n;
+                      set({ clipBox: b });
+                    }}
+                    className={field}
+                  />
+                </label>
+              ))}
+            </div>
           )}
         </Section>
 
@@ -752,6 +881,8 @@ export interface ResultsStagePanelProps {
   patches: string[];
   probePicking: boolean;
   onToggleProbePicking: () => void;
+  clipPicking: boolean;
+  onToggleClipPicking: () => void;
   /** Returns false when the patch has no edges to plot. */
   onAddBoundaryPlot: (patch: string, variable: ResultFieldId, axis: 'x' | 'y' | 's') => boolean;
   runForces: { label: string; cd?: number; cl?: number } | null;

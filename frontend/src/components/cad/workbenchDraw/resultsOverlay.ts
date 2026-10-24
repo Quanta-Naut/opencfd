@@ -69,6 +69,56 @@ export function drawResultsOverlay(
     }
   }
 
+  // Lines at typed values: a light line on a dark halo, with the value on a
+  // tag at one point of each line that is on screen.
+  if (ov.isoLines.length) {
+    ctx.lineCap = 'round';
+    for (const pass of [0, 1]) {
+      ctx.strokeStyle = pass ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = pass ? 1.4 : 3.2;
+      ctx.beginPath();
+      for (const iso of ov.isoLines) {
+        const s = iso.segs;
+        for (let i = 0; i + 3 < s.length; i += 4) {
+          const a = ws(s[i], s[i + 1]);
+          const b = ws(s[i + 2], s[i + 3]);
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+        }
+      }
+      ctx.stroke();
+    }
+    ctx.font = '600 10px ui-monospace, monospace';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    // Tags already placed, so the next line's tag goes somewhere else.
+    const placed: { x: number; y: number }[] = [];
+    for (const iso of ov.isoLines) {
+      // The on-screen point nearest the view centre that is clear of other
+      // tags, so the tag stays visible and readable.
+      const s = iso.segs;
+      let best: { x: number; y: number } | null = null;
+      let bestD = Infinity;
+      for (let i = 0; i + 1 < s.length; i += 2) {
+        const p = ws(s[i], s[i + 1]);
+        if (p.x < 30 || p.y < 20 || p.x > cw - 60 || p.y > ch - 20) continue;
+        if (placed.some((q) => Math.abs(q.x - p.x) < 56 && Math.abs(q.y - p.y) < 22)) continue;
+        const d = Math.hypot(p.x - cw / 2, p.y - ch / 2);
+        if (d < bestD) {
+          bestD = d;
+          best = p;
+        }
+      }
+      if (!best) continue;
+      placed.push(best);
+      const w = ctx.measureText(iso.label).width + 8;
+      ctx.fillStyle = 'rgba(17,17,17,0.85)';
+      ctx.fillRect(best.x - w / 2, best.y - 8, w, 16);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(iso.label, best.x - w / 2 + 4, best.y);
+    }
+  }
+
   // Probes: a ringed dot and a numbered tag with the active field's value.
   ctx.font = '600 10px ui-monospace, monospace';
   ctx.textBaseline = 'middle';

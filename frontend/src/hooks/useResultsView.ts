@@ -13,6 +13,7 @@ import {
 } from '../utils/resultFields';
 import { buildMeshLocator } from '../utils/meshLocator';
 import { patchReports, type PatchReport } from '../utils/boundaryData';
+import { isoSegments } from '../utils/isoLines';
 
 interface FieldPayload {
   fields?: Record<string, number[]>;
@@ -168,6 +169,19 @@ export function useResultsView(
     [mesh, activeVals, fields],
   );
 
+  // Lines at the values typed for this field.
+  const isoValues = pp.isoValues?.[active];
+  const isoLines = useMemo(() => {
+    if (!isoValues?.length || !activeVals || !mesh?.nodes?.length) return [];
+    if (activeVals.length !== mesh.nodes.length) return [];
+    const unit = fieldDef(active).unit;
+    return isoValues.map((level) => ({
+      level,
+      label: `${fmtValue(level)}${unit ? ` ${unit}` : ''}`,
+      segs: isoSegments(mesh.nodes, mesh.elements, activeVals, level),
+    }));
+  }, [isoValues, activeVals, mesh?.nodes, mesh?.elements, active]);
+
   const def = fieldDef(active);
   const overlay = useMemo<ResultsOverlay>(
     () => ({
@@ -185,8 +199,11 @@ export function useResultsView(
         label: r.values?.[active] !== undefined ? fmtValue(r.values[active]!) : 'outside',
       })),
       legend: { title: def.short, unit: def.unit },
+      clipOutside: pp.clipOutside ?? false,
+      clipBox: pp.clipBox ?? null,
+      isoLines,
     }),
-    [pp, available, probeRows, active, def],
+    [pp, available, probeRows, active, def, isoLines],
   );
 
   return {

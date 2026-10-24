@@ -214,6 +214,12 @@ export interface PostProcessConfig {
   probes: { id: string; x: number; y: number }[];
   /** Fields defined in the calculator. */
   customFields: import('../utils/resultFields').CustomField[];
+  /** Lines at typed values, per field id. */
+  isoValues: Record<string, number[]>;
+  /** Leave out values outside the colour range instead of saturating. */
+  clipOutside: boolean;
+  /** Show results only inside this box [x0, y0, x1, y1], model units. */
+  clipBox: [number, number, number, number] | null;
 }
 
 export interface SolverRunRecord {

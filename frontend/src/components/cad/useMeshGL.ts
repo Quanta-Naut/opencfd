@@ -71,11 +71,14 @@ uniform int u_mode;
 uniform sampler2D u_colormap;
 uniform float u_levels;
 uniform float u_lines;
+uniform float u_clipOut;
 in float v_t;
 in vec4 v_col;
 out vec4 outColor;
 void main() {
   if (u_mode == 1 || u_mode == 2) {
+    // Hide values outside the colour range.
+    if (u_clipOut > 0.5 && (v_t < 0.0 || v_t > 1.0)) discard;
     float t = clamp(v_t, 0.0, 1.0);
     // Banded contours: N flat colours, each the middle of its band.
     if (u_levels > 0.5) t = (min(floor(t * u_levels), u_levels - 1.0) + 0.5) / u_levels;
@@ -125,6 +128,8 @@ export type MeshGLFill =
       /** Flat colour bands (0 = smooth) and iso-lines over them. */
       levels?: number;
       lines?: boolean;
+      /** Leave out values outside lo..hi instead of saturating them. */
+      clipOutside?: boolean;
     }
   | { kind: 'cell'; vals: ArrayLike<number>; lo: number; hi: number; colormap: string }
   | {
@@ -140,6 +145,8 @@ export interface MeshGLScene {
   fill: MeshGLFill;
   /** Wireframe colour (0-1 RGBA), or null for no wireframe. */
   wire: RGBA | null;
+  /** Draw only inside this world box [x0, y0, x1, y1]. */
+  clip?: readonly [number, number, number, number] | null;
 }
 
 export interface MeshGLCamera {
@@ -458,6 +465,7 @@ export function useMeshGL() {
             span: u('u_span'),
             solid: u('u_solid'),
             levels: u('u_levels'),
+            clipOut: u('u_clipOut'),
             lines: u('u_lines'),
           },
           lineUniforms: {
@@ -550,6 +558,19 @@ export function useMeshGL() {
     gl.uniform4fv(U.solid, f.kind === 'solid' ? f.color : [1, 1, 1, 1]);
     gl.uniform1f(U.levels, f.kind === 'node' ? (f.levels ?? 0) : 0);
     gl.uniform1f(U.lines, f.kind === 'node' && f.lines ? 1 : 0);
+    gl.uniform1f(U.clipOut, f.kind === 'node' && f.clipOutside ? 1 : 0);
+    if (scene.clip) {
+      // World box to device pixels; GL counts rows from the bottom.
+      const [x0, y0, x1, y1] = scene.clip;
+      const sx = (x: number) => (cam.width / 2 + cam.pan.x + x * cam.zoom) * dpr;
+      const sy = (y: number) => (cam.height / 2 - cam.pan.y + y * cam.zoom) * dpr;
+      const l = Math.floor(Math.max(0, Math.min(sx(x0), sx(x1))));
+      const b = Math.floor(Math.max(0, Math.min(sy(y0), sy(y1))));
+      const r = Math.ceil(Math.min(pw, Math.max(sx(x0), sx(x1))));
+      const t = Math.ceil(Math.min(ph, Math.max(sy(y0), sy(y1))));
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(l, b, Math.max(0, r - l), Math.max(0, t - b));
+    }
     const bind = (unit: number, tex: WebGLTexture, loc: WebGLUniformLocation | null) => {
       gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -569,6 +590,7 @@ export function useMeshGL() {
       gl.bindVertexArray(g.lineVao);
       gl.drawElements(gl.LINES, g.wireCount, gl.UNSIGNED_INT, 0);
     }
+    gl.disable(gl.SCISSOR_TEST);
     gl.bindVertexArray(null);
   }, []);
 

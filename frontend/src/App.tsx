@@ -1004,17 +1004,50 @@ export function App({
     state.physics,
   );
   const [probePicking, setProbePicking] = useState(false);
+  // Clip box picking: null when off, then the first corner once clicked.
+  const [clipPicking, setClipPicking] = useState<{ p1: [number, number] | null } | null>(null);
   useEffect(() => {
-    if (activeStage !== 'results') setProbePicking(false);
+    if (activeStage !== 'results') {
+      setProbePicking(false);
+      setClipPicking(null);
+    }
   }, [activeStage]);
   useEffect(() => {
-    if (!probePicking) return;
+    if (!probePicking && !clipPicking) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setProbePicking(false);
+      if (e.key !== 'Escape') return;
+      setProbePicking(false);
+      setClipPicking(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [probePicking]);
+  }, [probePicking, clipPicking]);
+  const pickClipCorner = useCallback(
+    (pt: [number, number]) => {
+      const p1 = clipPicking?.p1;
+      if (!p1) {
+        setClipPicking({ p1: pt });
+        return;
+      }
+      setClipPicking(null);
+      if (Math.abs(pt[0] - p1[0]) < 1e-9 || Math.abs(pt[1] - p1[1]) < 1e-9) return;
+      // Clicked corners, to a readable number of digits.
+      const r = (v: number) => Number(v.toPrecision(4));
+      setState((prev) => ({
+        ...prev,
+        postprocess: {
+          ...prev.postprocess,
+          clipBox: [
+            r(Math.min(p1[0], pt[0])),
+            r(Math.min(p1[1], pt[1])),
+            r(Math.max(p1[0], pt[0])),
+            r(Math.max(p1[1], pt[1])),
+          ],
+        },
+      }));
+    },
+    [clipPicking],
+  );
   const addProbe = useCallback((pt: [number, number]) => {
     setState((prev) => ({
       ...prev,
@@ -1418,7 +1451,14 @@ export function App({
                     probePicking,
                     onToggleProbePicking: () => {
                       setPickingPointsState(null);
+                      setClipPicking(null);
                       setProbePicking((v) => !v);
+                    },
+                    clipPicking: !!clipPicking,
+                    onToggleClipPicking: () => {
+                      setPickingPointsState(null);
+                      setProbePicking(false);
+                      setClipPicking((v) => (v ? null : { p1: null }));
                     },
                     onAddBoundaryPlot: handleAddBoundaryPlot,
                     runForces: viewedRun
@@ -1521,10 +1561,29 @@ export function App({
                 }
                 onRestoreLive={selectLatestFinishedRun}
                 activePlotLine={activePlotLineForCanvas}
-                isPickingPlotPoints={!!pickingPointsState || probePicking}
-                onPickPlotPoint={probePicking ? addProbe : handlePickPlotPoint}
-                plotPickPreviewP1={pickingPointsState?.p1 ?? null}
+                isPickingPlotPoints={!!pickingPointsState || probePicking || !!clipPicking}
+                onPickPlotPoint={
+                  clipPicking ? pickClipCorner : probePicking ? addProbe : handlePickPlotPoint
+                }
+                plotPickPreviewP1={clipPicking?.p1 ?? pickingPointsState?.p1 ?? null}
               />
+              {clipPicking && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
+                  <Crosshair className="w-4 h-4 text-accent" />
+                  <span>
+                    {clipPicking.p1
+                      ? 'Click the opposite corner of the box'
+                      : 'Click one corner of the box to show'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setClipPicking(null)}
+                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
               {probePicking && (
                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
                   <Crosshair className="w-4 h-4 text-accent" />

@@ -115,6 +115,12 @@ export interface ResultsOverlay {
   /** Probe points (model coordinates) and the text shown beside each. */
   probes: { id: string; x: number; y: number; label: string }[];
   legend: { title: string; unit: string };
+  /** Leave out values outside the colour range. */
+  clipOutside: boolean;
+  /** Show results only inside this world box [x0, y0, x1, y1]. */
+  clipBox: [number, number, number, number] | null;
+  /** Lines at typed values: world segments [x1, y1, x2, y2, ...]. */
+  isoLines: { level: number; label: string; segs: Float32Array }[];
 }
 
 export interface CadWorkbenchProps {

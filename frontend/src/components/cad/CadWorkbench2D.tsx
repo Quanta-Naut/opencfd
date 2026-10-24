@@ -748,6 +748,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         colormap,
         levels: resOv?.levels ?? 0,
         contourLines: resOv?.contourLines ?? false,
+        clipOutside: resOv?.clipOutside ?? false,
+        clipBox: resOv?.clipBox ?? null,
       }),
     [
       meshData?.nodes,
@@ -769,6 +771,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       meshWireOn,
       resOv?.levels,
       resOv?.contourLines,
+      resOv?.clipOutside,
+      resOv?.clipBox,
       C,
     ],
   );
