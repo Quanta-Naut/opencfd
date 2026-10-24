@@ -55,9 +55,10 @@ export {
   addBlockFromCorners,
 } from './editor';
 
-export type { VertexHome, BlockDragState } from './vertexHome';
+export type { VertexHome, VertexKind, BlockDragState } from './vertexHome';
 export {
   vertexHome,
+  vertexKinds,
   constrainToHome,
   outlineBreaks,
   vertexMoveKeepsBlocksValid,
@@ -80,3 +81,8 @@ export {
   edgeGroup,
   setEdgeParams,
 } from './hexa';
+export * from './quality';
+export * from './optimize';
+export * from './templates';
+export * from './engine';
+export * from './stations';

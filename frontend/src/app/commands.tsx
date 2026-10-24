@@ -23,7 +23,7 @@ import {
 import { setThemePreference, toggleTheme } from '../utils/theme';
 import { Command } from '../components/ui/CommandPalette';
 import { MOD_LABEL } from '../utils/platform';
-import { Blocking } from '../types/blocking';
+import { Blocking, BlockKind } from '../types/blocking';
 
 /** Every command in the command palette (navigation, actions, view, theme). */
 export function buildCommands(wb: CommandsContext): Command[] {
@@ -268,7 +268,7 @@ export interface CommandsContext {
   isMeshing: boolean;
   handleGenerateMesh: () => Promise<void>;
   blocking: Blocking;
-  handleBuildBlocks: (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') => void;
+  handleBuildBlocks: (kind: BlockKind) => void;
   handleGenerateStructuredMesh: () => Promise<void>;
   handleApplyYPlusToMesh: () => void;
   requestDownloadBlockMeshDictRef: React.RefObject<() => void>;

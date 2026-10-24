@@ -117,6 +117,27 @@ export function vertexHome(
   return { kind: 'free' };
 }
 
+/** How a vertex moves when dragged, for its canvas marker. */
+export type VertexKind = 'pinned' | 'slide' | 'free';
+
+/** The drag behaviour of every vertex of a blocking. */
+export function vertexKinds(
+  bk: Blocking,
+  outlines: Outline[],
+  tag?: (a: Point2D, b: Point2D) => BoundaryTag | undefined,
+): Map<string, VertexKind> {
+  const out = new Map<string, VertexKind>();
+  for (const v of bk.vertices) {
+    if (v.curves?.length) {
+      out.set(v.id, 'slide');
+      continue;
+    }
+    const h = vertexHome(v.pt, outlines, tag);
+    out.set(v.id, h.kind === 'point' ? 'pinned' : h.kind === 'free' ? 'free' : 'slide');
+  }
+  return out;
+}
+
 /** The nearest allowed position for a dragged vertex, or null if it is free. */
 export function constrainToHome(home: VertexHome, raw: Point2D): Point2D | null {
   switch (home.kind) {

@@ -23,6 +23,7 @@ import {
   blocksOverBodies,
   addBlockFromCorners,
   makeTagLookup,
+  vertexKinds,
   deleteBlock,
   splitSheet,
   currentCellSize,
@@ -949,6 +950,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     [cadState.entities, edgeTagMap],
   );
 
+  // What each block vertex is attached to, for its marker (pinned / sliding / free).
+  const blockVertexKinds = useMemo(
+    () => (blocking ? vertexKinds(blocking, blockOutlines, blockTag) : new Map()),
+    [blocking, blockOutlines, blockTag],
+  );
+
   /** One click of the Draw tool: collect corners, build the block on the 4th. */
   const addBlockCorner = useCallback(
     (pt: Point2D) => {
@@ -1306,6 +1313,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       hoverCurveId,
       hoveredBlockIdx,
       hoveredBlockVtx,
+      blockVertexKinds,
       hoveredDomainHandle,
       hoveredEdgeKey,
       hoverEdgeId,
@@ -1373,6 +1381,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     blocking,
     directionColors,
     hoveredBlockVtx,
+    blockVertexKinds,
     hoveredBlockIdx,
     hoveredVertex,
     meshOnly,

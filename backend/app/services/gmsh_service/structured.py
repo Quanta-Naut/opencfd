@@ -1,5 +1,5 @@
 import math
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import gmsh
 import numpy as np
@@ -39,11 +39,28 @@ def _law_cell_sizes(n_cells: int, law: str, ratio: float) -> List[float]:
     return [x / s for x in w]
 
 
+def _station_fracs(stations: Optional[List[float]], n_cells: int) -> Optional[List[float]]:
+    """Cell-size fractions from explicit node stations (cumulative arc-length
+    fractions 0..1, one per node), or None if they don't fit `n_cells`. The
+    client sends these for an edge whose nodes mirror the wall opposite it by
+    projection along the wall normals, which no grading law can express."""
+    if not stations or len(stations) != n_cells + 1:
+        return None
+    st = [float(x) for x in stations]
+    if abs(st[0]) > 1e-6 or abs(st[-1] - 1.0) > 1e-6:
+        return None
+    fr = [st[k + 1] - st[k] for k in range(n_cells)]
+    if any(f <= 0 for f in fr):
+        return None
+    return fr
+
+
 def _distribute_nodes_on_polyline(
     pts: List[Tuple[float, float]],
     n_cells: int,
     law: str,
     ratio: float,
+    stations: Optional[List[float]] = None,
 ) -> List[Tuple[float, float]]:
     """Place `n_cells + 1` points along the polyline `pts` by arc length, spaced
     per the grading law. A node is snapped exactly onto any sharp interior
@@ -62,7 +79,7 @@ def _distribute_nodes_on_polyline(
     if total_len < 1e-12:
         return [pts[0], pts[-1]]
 
-    fracs = _law_cell_sizes(n_cells, law, ratio)
+    fracs = _station_fracs(stations, n_cells) or _law_cell_sizes(n_cells, law, ratio)
     s = [0.0]
     for f in fracs:
         s.append(s[-1] + f * total_len)
@@ -125,7 +142,8 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
 
     params["blocking"] = {
       "edges":  [ {p0:[x,y], p1:[x,y], path:[[x,y],...], nodes:int,
-                   law:'uniform'|'geometric'|'bump', ratio:float, patch?:str}, ... ],
+                   law:'uniform'|'geometric'|'bump', ratio:float, patch?:str,
+                   stations?:[0..1 per node] (overrides the law)}, ... ],
       "blocks": [ [e0,e1,e2,e3], ... ]   # indices into edges, ordered round the block
     }
     Opposite edges of a block (0&2, 1&3) must already carry equal node counts.
@@ -185,7 +203,7 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
                 raise ValueError("A block edge collapsed to a single point.")
 
             n_cells = max(1, nodes - 1)
-            node_pts = _distribute_nodes_on_polyline(pts, n_cells, law, ratio)
+            node_pts = _distribute_nodes_on_polyline(pts, n_cells, law, ratio, e.get("stations"))
 
             subs: List[int] = []
             prev_tag = add_point(*node_pts[0])

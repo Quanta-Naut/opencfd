@@ -5,19 +5,12 @@ import { toast } from '../components/ui/Toast';
 import { FlowType, BoundaryTag, CadEntity } from '../types/cadWorkflow';
 import {
   Blocking,
-  autoBlockingFromOutline,
+  BlockKind,
+  KIND_KEYS,
   propagateNodeCounts,
   toStructuredRequest,
-  wrapBodyOgrid,
-  bodiesForOgrid,
-  entityRing,
-  cGridFromAirfoil,
-  wrapAirfoilOgrid,
-  airfoilsForCGrid,
-  outlineRing,
-  applyTargetCellSize,
-  autoCellSize,
 } from '../types/blocking';
+import { runBlockingJob, BlockingReport } from './blockingRunner';
 
 const fmtCount = (n: number) => (n ?? 0).toLocaleString();
 
@@ -174,108 +167,86 @@ export interface GenerateMeshContext {
   setCaseFiles: React.Dispatch<React.SetStateAction<Record<string, string>>>;
 }
 
-/** Build an automatic blocking (H-grid, O-grid or C-grid) around the geometry. */
-export function runBuildBlocks(
-  kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed',
-  wb: BuildBlocksContext,
-) {
+/** Build an automatic blocking: every topology of the chosen family is tried,
+ *  shape-optimized and scored in a worker, and the best one is kept. */
+export async function runBuildBlocks(kind: BlockKind, wb: BuildBlocksContext) {
   const { setBlocksBuiltTick, cadEntities, bodyPatchFor, setBlocking, edgeTagMap, ogridParams } =
     wb;
   setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
-  if (kind === 'cgrid') {
-    const af = airfoilsForCGrid(cadEntities)[0];
-    const domEnts = cadEntities.filter((e) => e.role === 'domain_boundary');
-    const domain = outlineRing(domEnts);
-    if (!af || domain.length < 3) {
-      toast.error('C-grid needs an airfoil', {
-        description: 'Place an elongated body inside a closed domain.',
-      });
+  const bodyPatches: Record<string, BoundaryTag> = {};
+  for (const e of cadEntities)
+    if (e.role !== 'domain_boundary' && e.layer !== 'construction')
+      bodyPatches[e.id] = bodyPatchFor(e.id);
+  const h = wb.firstCellMm;
+  const id = toast.loading('Building blocks', { progress: 0, description: 'Trying topologies' });
+  try {
+    const report = await runBlockingJob(
+      {
+        kind: 'auto',
+        entities: cadEntities,
+        edgeTagMap,
+        bodyPatches,
+        options: {
+          keys: KIND_KEYS[kind],
+          firstCellHeight: h && h > 0 ? h / 1000 : undefined,
+          growth: wb.growth,
+          ogrid: ogridParams,
+        },
+      },
+      {
+        progress: (p, label) => toast.update(id, { progress: p * 100, description: label }),
+        snapshot: (bk) => setBlocking(bk),
+      },
+    );
+    if (!report) {
+      toast.dismiss(id);
       return;
     }
-    const ent = cadEntities[af.index];
-    const domEnt =
-      domEnts.length === 1
-        ? domEnts[0]
-        : domEnts.find(
-            (e) =>
-              e.isClosed || e.type === 'rectangle' || e.type === 'circle' || e.type === 'ellipse',
-          );
-    const raw = cGridFromAirfoil(entityRing(ent), domain, bodyPatchFor(ent.id), ent.id, domEnt?.id);
-    if (!raw) {
-      toast.error('Could not build a C-grid', {
-        description: 'Give the airfoil more room downstream of the trailing edge.',
-      });
-      return;
-    }
-    const bk = applyTargetCellSize(raw, autoCellSize(raw));
-    setBlocking(bk);
-    toast.success(`C-grid built: ${bk.blocks.length} blocks`);
-    return;
-  }
-  if (kind === 'cgrid_closed') {
-    const af = airfoilsForCGrid(cadEntities)[0];
-    if (!af) {
-      toast.error('Closed O-grid needs an airfoil', {
-        description: 'Place an elongated body inside the domain.',
-      });
-      return;
-    }
-    const ent = cadEntities[af.index];
-    const base = autoBlockingFromOutline(cadEntities, edgeTagMap);
-    if (!base) {
-      toast.error('Could not auto-block this outline', {
-        description: 'Define a closed domain first.',
-      });
-      return;
-    }
-    const raw = wrapAirfoilOgrid(base, entityRing(ent), bodyPatchFor(ent.id), {
-      airfoilEntityId: ent.id,
+    setBlocking(report.blocking);
+    wb.setReport?.(report);
+    const n = report.blocking.blocks.length;
+    toast.success(`${report.label}: ${n} block${n > 1 ? 's' : ''}`, {
+      id,
+      description: `Wall skew ${report.quality.wallWorst.toFixed(2)}, worst ${report.quality.worst.toFixed(2)}`,
     });
-    if (!raw) {
-      toast.error('Could not wrap a closed O-grid', {
-        description: 'The airfoil may need more clearance from the domain edges.',
-      });
-      return;
-    }
-    const bk = applyTargetCellSize(propagateNodeCounts(raw), autoCellSize(raw));
-    setBlocking(bk);
-    toast.success(`Closed O-grid built: ${bk.blocks.length} blocks`);
-    return;
+  } catch (err) {
+    toast.error('Could not block this geometry', {
+      id,
+      description: err instanceof Error ? err.message : String(err),
+    });
   }
+}
 
-  let bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
-  if (!bk) {
-    toast.error('Could not auto-block this outline', {
-      description: 'Define a closed domain first.',
-    });
-    return;
-  }
-  let wrapped = 0;
-  if (kind === 'ogrid') {
-    for (const b of bodiesForOgrid(cadEntities, bk)) {
-      const ent = cadEntities[b.index];
-      const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id), {
-        bodyEntityId: ent.id,
-        ...ogridParams,
-      });
-      if (next) {
-        bk = next;
-        wrapped += 1;
-      }
+/** Re-run the shape optimizer on the current blocking (after manual edits). */
+export async function runOptimizeBlocking(
+  blocking: Blocking,
+  wb: Pick<BuildBlocksContext, 'cadEntities' | 'edgeTagMap' | 'setBlocking' | 'setReport'>,
+) {
+  const id = toast.loading('Optimizing block shapes', { progress: 0 });
+  try {
+    const report = await runBlockingJob(
+      { kind: 'optimize', entities: wb.cadEntities, edgeTagMap: wb.edgeTagMap, blocking },
+      {
+        progress: (p) => toast.update(id, { progress: p * 100 }),
+        snapshot: (bk) => wb.setBlocking(bk),
+      },
+    );
+    if (!report) {
+      toast.dismiss(id);
+      return;
     }
-  }
-  bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
-  setBlocking(bk);
-  if (kind === 'ogrid' && wrapped === 0) {
-    toast.warning(`Built ${bk.blocks.length} blocks without an O-grid`, {
-      description: 'No body could be wrapped. It must sit clear of the domain edges.',
+    wb.setBlocking(report.blocking);
+    wb.setReport?.(report);
+    toast.success('Block shapes optimized', {
+      id,
+      description: `Wall skew ${report.quality.wallWorst.toFixed(2)}, worst ${report.quality.worst.toFixed(2)}`,
     });
-  } else if (wrapped > 0) {
-    toast.success(`Built ${bk.blocks.length} blocks`, {
-      description: `O-grid around ${wrapped} bod${wrapped > 1 ? 'ies' : 'y'}`,
+  } catch (err) {
+    wb.setBlocking(blocking);
+    toast.error('Optimization failed', {
+      id,
+      description: err instanceof Error ? err.message : String(err),
     });
-  } else {
-    toast.success(`Built ${bk.blocks.length} block${bk.blocks.length > 1 ? 's' : ''}`);
   }
 }
 
@@ -287,6 +258,10 @@ export interface BuildBlocksContext {
   setBlocking: React.Dispatch<React.SetStateAction<Blocking>>;
   edgeTagMap: Record<string, BoundaryTag>;
   ogridParams: { offsetFactor: number; radialNodes: number; radialRatio: number };
+  /** y+ first-cell height (mm) and growth, for wall clustering. */
+  firstCellMm?: number;
+  growth?: number;
+  setReport?: (r: BlockingReport | null) => void;
 }
 
 /** Generate the structured mesh from the current blocking. */

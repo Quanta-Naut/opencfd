@@ -27,6 +27,10 @@ export interface BlockEdge {
   /** ICEM-style explicit association: CadEntity ids (joined end to end) this
    *  edge is projected onto. Takes precedence over `curveId`. */
   curves?: string[];
+  /** Id of a wall edge across the block whose node distribution this edge
+   *  mirrors by projection along the wall normals (ICEM copy-by-projection),
+   *  so grid lines leave a curved wall square to it. Overrides `law`. */
+  match?: string;
 }
 
 export interface Block {
@@ -55,6 +59,8 @@ export interface StructuredMeshRequest {
     law: EdgeLaw;
     ratio: number;
     patch?: string;
+    /** Explicit node stations (0..1 from p0), overriding the law. */
+    stations?: number[];
   }[];
   blocks: [number, number, number, number][];
 }

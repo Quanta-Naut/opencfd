@@ -11,7 +11,8 @@ import {
   BoundaryTag,
   GeometryBBox,
 } from '../../types/cadWorkflow';
-import { Blocking } from '../../types/blocking';
+import { Blocking, BlockKind } from '../../types/blocking';
+import type { BlockingReport } from '../../app/blockingRunner';
 import { StageGate } from './leftStagePanel/StageGate';
 import { ResultsStagePanel } from './leftStagePanel/ResultsStagePanel';
 import { YPlusStagePanel } from './leftStagePanel/YPlusStagePanel';
@@ -101,8 +102,10 @@ interface LeftStagePanelProps {
 
   // ── Structured meshing (H-block transfinite) ──
   blocking?: Blocking | null;
-  onBuildBlocks?: (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') => void;
+  onBuildBlocks?: (kind: BlockKind) => void;
   onInitializeBlocking?: () => void;
+  blockingReport?: BlockingReport | null;
+  onOptimizeBlocks?: () => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
   onGenerateStructuredMesh?: () => void;
   ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
@@ -111,7 +114,7 @@ interface LeftStagePanelProps {
   onUpdateOgridParams?: (
     p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>,
   ) => void;
-  structuredHint?: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed';
+  structuredHint?: BlockKind;
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
   meshTopology?: 'unstructured' | 'structured';
@@ -198,6 +201,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   stageStatus,
   blocking,
   onBuildBlocks,
+  blockingReport,
+  onOptimizeBlocks,
   onInitializeBlocking,
   onUpdateBlocking,
   onGenerateStructuredMesh,
@@ -398,6 +403,8 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           meshTopology,
           blocking,
           onBuildBlocks,
+          blockingReport,
+          onOptimizeBlocks,
           onInitializeBlocking,
           onUpdateBlocking,
           ogridBodies,

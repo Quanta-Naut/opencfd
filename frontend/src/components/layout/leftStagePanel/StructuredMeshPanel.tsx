@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { CFDProjectState } from '../../../types/cfd';
@@ -15,9 +15,16 @@ import {
   edgeLength,
   edgeDirectionGroups,
   DIRECTION_COLORS,
+  BlockKind,
+  scoreBlocking,
 } from '../../../types/blocking';
+import type { BlockingReport } from '../../../app/blockingRunner';
 import { computeFallbackYPlus } from '../../../utils/api';
 import { NumberField } from './NumberField';
+
+/** Equiangle skewness color: under 0.5 is good, over 0.75 is poor. */
+const skewTone = (v: number) =>
+  v < 0.5 ? 'text-success' : v < 0.75 ? 'text-warning' : 'text-danger';
 
 /**
  * Structured (block-structured) mesh controls, in two steps like the Geometry
@@ -26,8 +33,10 @@ import { NumberField } from './NumberField';
  */
 export const StructuredMeshPanel: React.FC<{
   blocking: Blocking | null;
-  onBuildBlocks?: (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') => void;
+  onBuildBlocks?: (kind: BlockKind) => void;
   onInitializeBlocking?: () => void;
+  blockingReport?: BlockingReport | null;
+  onOptimizeBlocks?: () => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
   ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
   onWrapBody?: (bodyIndex: number) => void;
@@ -35,7 +44,7 @@ export const StructuredMeshPanel: React.FC<{
   onUpdateOgridParams?: (
     p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>,
   ) => void;
-  structuredHint?: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed';
+  structuredHint?: BlockKind;
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
   field: string;
@@ -52,6 +61,8 @@ export const StructuredMeshPanel: React.FC<{
 }> = ({
   blocking,
   onBuildBlocks,
+  blockingReport,
+  onOptimizeBlocks,
   onInitializeBlocking,
   onUpdateBlocking,
   ogridBodies,
@@ -69,8 +80,8 @@ export const StructuredMeshPanel: React.FC<{
   onBlockModeChange,
 }) => {
   const hasBlocks = !!blocking && blocking.blocks.length > 0;
-  const recommended: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed' = structuredHint ?? 'hgrid';
-  const [kind, setKind] = useState<'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed'>(recommended);
+  const recommended: BlockKind = structuredHint ?? 'auto';
+  const [kind, setKind] = useState<BlockKind>(recommended);
   const [openStep, setOpenStep] = useState<1 | 2>(1);
   // Automatic = our topology generators. Manual = ICEM Hexa style: initialize
   // one block, then split / delete / associate / O-grid it on the canvas.
@@ -107,13 +118,20 @@ export const StructuredMeshPanel: React.FC<{
     return () => onDirectionColors(null);
   }, [blocking, openStep, hasBlocks, onDirectionColors]);
 
+  // Live quality of the current blocks, so manual edits show their effect.
+  const quality = useMemo(
+    () => (hasBlocks && blocking ? scoreBlocking(blocking) : null),
+    [blocking, hasBlocks],
+  );
+  const tried = blockingReport?.ranking ?? [];
+
   const currentOffset = ogridParams?.offsetFactor ?? 0.25;
   const [sliderDraft, setSliderDraft] = useState(currentOffset);
   useEffect(() => {
     setSliderDraft(currentOffset);
   }, [currentOffset]);
 
-  const pick = (k: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') => {
+  const pick = (k: BlockKind) => {
     kindRef.current = k;
     setKind(k);
   };
@@ -174,6 +192,7 @@ export const StructuredMeshPanel: React.FC<{
           <div className="grid grid-cols-2 gap-1.5">
             {(
               [
+                ['auto', 'Best fit', 'Try every topology, keep the best mesh'],
                 ['hgrid', 'H-grid', 'Box / channel / step'],
                 ['ogrid', 'O-grid', 'Body in the flow'],
                 ['cgrid', 'C-grid', 'Airfoil + open wake'],
@@ -183,7 +202,7 @@ export const StructuredMeshPanel: React.FC<{
               <button
                 key={k}
                 onClick={() => pick(k)}
-                className={`p-2 rounded border text-left transition-colors ${
+                className={`p-2 rounded border text-left transition-colors ${k === 'auto' ? 'col-span-2 ' : ''}${
                   kind === k
                     ? 'border-accent bg-accent-soft'
                     : 'bg-surface border-line hover:border-line-strong hover:bg-surface-2'
@@ -209,6 +228,69 @@ export const StructuredMeshPanel: React.FC<{
             {hasBlocks ? 'Rebuild blocks' : 'Generate blocks'}
           </button>
         </>
+      )}
+
+      {quality && (
+        <div className="border-t border-line pt-2.5 space-y-2">
+          <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
+            Block quality
+          </span>
+          <div className="grid grid-cols-3 gap-1.5">
+            {(
+              [
+                ['Wall skew', quality.wallWorst],
+                ['Worst skew', quality.worst],
+                ['Mean skew', quality.mean],
+              ] as const
+            ).map(([label, v]) => (
+              <div key={label} className="p-1.5 rounded border border-line bg-surface">
+                <span className="text-[10px] text-fg-2 block">{label}</span>
+                <span className={`text-[12px] font-mono font-semibold ${skewTone(v)}`}>
+                  {v.toFixed(2)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {quality.invalid > 0 && (
+            <p className="text-[10px] text-danger leading-relaxed">
+              {quality.invalid} block{quality.invalid > 1 ? 's fold' : ' folds'} over and will not
+              mesh. Optimize or move its vertices.
+            </p>
+          )}
+          <Tooltip content="Move the free block vertices and edges until the cells stop improving. Wall and corner vertices stay on the geometry.">
+            <button
+              onClick={() => onOptimizeBlocks?.()}
+              className="w-full py-1.5 rounded-sm border border-line bg-surface hover:border-line-strong text-fg font-medium transition-colors"
+            >
+              Optimize shape
+            </button>
+          </Tooltip>
+          {tried.length > 1 && (
+            <div className="space-y-1">
+              <span className="text-[10px] text-fg-2 block">Topologies tried</span>
+              {tried.map((t, i) => (
+                <div key={t.label} className="flex items-center gap-1.5 text-[10px]">
+                  <span
+                    className={`flex-1 truncate ${i === 0 && !t.failed ? 'text-fg font-semibold' : 'text-fg-2'}`}
+                  >
+                    {t.label}
+                  </span>
+                  {t.failed ? (
+                    <Tooltip content={t.failed}>
+                      <span className="text-fg-3">did not fit</span>
+                    </Tooltip>
+                  ) : Number.isFinite(t.rank) ? (
+                    <span className="font-mono text-fg-2">
+                      wall {t.wallWorst?.toFixed(2)} · worst {t.worst?.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="text-danger">folds</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {hasBlocks && blocking && (

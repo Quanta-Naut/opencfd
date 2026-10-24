@@ -41,7 +41,7 @@ export function outlinesFor(entities: CadEntity[]): Outline[] {
 
 interface Proj { pt: Point2D; seg: number; t: number; d: number }
 
-function projectOnRing(ring: Point2D[], p: Point2D): Proj {
+export function projectOnRing(ring: Point2D[], p: Point2D): Proj {
   let best: Proj = { pt: ring[0], seg: 0, t: 0, d: Infinity };
   for (let i = 0; i < ring.length; i++) {
     const a = ring[i], b = ring[(i + 1) % ring.length];
@@ -122,7 +122,7 @@ export function traceAlong(ring: Point2D[], pa: Point2D, pb: Point2D, hint?: Poi
 }
 
 /** The outline an edge chain lies on (every point within tolerance), if any. */
-function outlineUnder(chain: Point2D[], outlines: Outline[]): number {
+export function outlineUnder(chain: Point2D[], outlines: Outline[]): number {
   for (let k = 0; k < outlines.length; k++) {
     const tol = scaleOf(outlines[k].pts) * 1e-4;
     // Segment midpoints too: an internal edge can have both ENDS on the outline

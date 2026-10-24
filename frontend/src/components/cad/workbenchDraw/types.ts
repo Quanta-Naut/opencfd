@@ -10,7 +10,7 @@ import type {
   CadEntity,
   GeometryBBox,
 } from '../../../types/cadWorkflow';
-import type { Blocking } from '../../../types/blocking';
+import type { Blocking, VertexKind } from '../../../types/blocking';
 import type { CadTool, CanvasPalette, Snap } from '../workbenchCore';
 
 /** Per-frame drawing context shared by every pass. */
@@ -63,6 +63,8 @@ export interface DrawScene {
   hoverCurveId: string;
   hoveredBlockIdx: number;
   hoveredBlockVtx: string;
+  /** Drag behaviour per block vertex, for its marker. */
+  blockVertexKinds: Map<string, VertexKind>;
   hoveredDomainHandle: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial';
   hoveredEdgeKey: string;
   hoverEdgeId: string;

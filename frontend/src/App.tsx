@@ -45,13 +45,13 @@ import {
 } from './types/cadWorkflow';
 import {
   Blocking,
+  BlockKind,
   autoBlockingFromOutline,
   initializeBlocking,
   propagateNodeCounts,
   wrapBodyOgrid,
   bodiesForOgrid,
   entityRing,
-  airfoilsForCGrid,
   applyTargetCellSize,
   autoCellSize,
 } from './types/blocking';
@@ -61,7 +61,8 @@ import { scheduleAutosave } from './app/autosave';
 import { updateCaseCalculations } from './app/caseCalculations';
 import { syncFirstCellToMesh } from './app/caseCalculations';
 import { runGenerateMesh } from './app/meshingActions';
-import { runBuildBlocks } from './app/meshingActions';
+import { runBuildBlocks, runOptimizeBlocking } from './app/meshingActions';
+import type { BlockingReport } from './app/blockingRunner';
 import { runGenerateStructuredMesh } from './app/meshingActions';
 import { buildCommands } from './app/commands';
 
@@ -631,19 +632,11 @@ export function App({
     return (keys.map((k) => edgeTagMap[k]).find(Boolean) as any) || 'wall';
   };
 
-  const structuredHint = useMemo<'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed'>(() => {
-    const af = airfoilsForCGrid(cadEntities);
-    if (af.some((a) => a.aspect >= 2.2)) return 'cgrid_closed';
-    const body = cadEntities.some(
-      (e) =>
-        e.layer !== 'construction' &&
-        e.role !== 'domain_boundary' &&
-        (e.isClosed || e.type === 'circle' || e.type === 'rectangle'),
-    );
-    return body ? 'ogrid' : 'hgrid';
-  }, [cadEntities]);
+  // The search tries every topology that fits, so it is always the default.
+  const structuredHint: BlockKind = 'auto';
+  const [blockingReport, setBlockingReport] = useState<BlockingReport | null>(null);
 
-  const handleBuildBlocks = (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') =>
+  const handleBuildBlocks = (kind: BlockKind) =>
     runBuildBlocks(kind, {
       setBlocksBuiltTick,
       cadEntities,
@@ -651,7 +644,20 @@ export function App({
       setBlocking,
       edgeTagMap,
       ogridParams,
+      firstCellMm: state.yplus.first_layer_height_mm,
+      growth: state.yplus.expansion_ratio,
+      setReport: setBlockingReport,
     });
+
+  const handleOptimizeBlocks = () => {
+    if (blocking)
+      runOptimizeBlocking(blocking, {
+        cadEntities,
+        edgeTagMap,
+        setBlocking,
+        setReport: setBlockingReport,
+      });
+  };
 
   // Manual (ICEM-style) blocking: one block around all the geometry, which the
   // user then splits, deletes, associates and O-grids on the canvas.
@@ -1229,6 +1235,8 @@ export function App({
             onGenerateMesh={handleGenerateMesh}
             blocking={blocking}
             onBuildBlocks={handleBuildBlocks}
+            blockingReport={blockingReport}
+            onOptimizeBlocks={handleOptimizeBlocks}
             onInitializeBlocking={handleInitializeBlocking}
             onUpdateBlocking={handleUpdateBlocking}
             onGenerateStructuredMesh={handleGenerateStructuredMesh}

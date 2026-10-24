@@ -6,7 +6,9 @@ import type { DrawFrame, DrawScene } from './types';
 export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
   const { ctx, ws } = f;
   const {
+    C,
     assocEdges,
+    blockVertexKinds,
     badBlockIds,
     blockCursor,
     blockDrag,
@@ -160,21 +162,58 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
       assocEdges.forEach((id) => strokeEdge(id, '#E05A00', 4));
       if (selectedEdgeId) strokeEdge(selectedEdgeId, '#E05A00', 4);
     }
-    // corner handles: a small dot per vertex. Hovering the one you are about to
-    // grab draws a small solid-border square (no fill) tight around that dot.
+    // Vertex markers say how each vertex moves when dragged: a square is
+    // pinned (a corner or patch change), a filled dot slides along the wall
+    // under it, a hollow dot is free. Hovering one grabs it and names it.
+    let tip: { x: number; y: number; text: string } | null = null;
     for (const v of blocking.vertices) {
       const s = ws(v.pt.x, v.pt.y);
       const hot = hoveredBlockVtx === v.id || (blockTool === 'mergeV' && blockPick === v.id);
+      const kind = blockVertexKinds.get(v.id) ?? 'free';
+      const col = hot ? '#E05A00' : kind === 'free' ? '#7C3AED' : '#059669';
+      ctx.fillStyle = col;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.25;
       ctx.beginPath();
-      ctx.arc(s.x, s.y, hot ? 2.6 : 2.0, 0, Math.PI * 2);
-      // associated (ICEM) vertices are green: they slide along their curve
-      ctx.fillStyle = hot ? '#E05A00' : v.curves?.length ? '#059669' : '#7C3AED';
-      ctx.fill();
+      if (kind === 'pinned') {
+        const r = hot ? 3 : 2.5;
+        ctx.rect(s.x - r, s.y - r, 2 * r, 2 * r);
+        ctx.fill();
+      } else if (kind === 'slide') {
+        ctx.arc(s.x, s.y, hot ? 3 : 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = C.bg;
+        ctx.arc(s.x, s.y, hot ? 3 : 2.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
       if (hot) {
         ctx.strokeStyle = '#E05A00';
         ctx.lineWidth = 1;
-        ctx.strokeRect(s.x - 4.5, s.y - 4.5, 9, 9);
+        ctx.strokeRect(s.x - 5.5, s.y - 5.5, 11, 11);
+        if (!blockDrag.current)
+          tip = {
+            x: s.x,
+            y: s.y,
+            text:
+              kind === 'pinned'
+                ? 'Pinned to the geometry'
+                : kind === 'slide'
+                  ? 'Slides along the wall (Alt: detach)'
+                  : 'Free',
+          };
       }
+    }
+    if (tip) {
+      ctx.font = 'bold 9px Inter, sans-serif';
+      const tw = ctx.measureText(tip.text).width;
+      ctx.fillStyle = C.tipBg;
+      ctx.fillRect(tip.x - tw / 2 - 4, tip.y - 22, tw + 8, 14);
+      ctx.fillStyle = C.tipText;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(tip.text, tip.x, tip.y - 15);
     }
 
     // alignment guides while dragging a block corner (or placing one)

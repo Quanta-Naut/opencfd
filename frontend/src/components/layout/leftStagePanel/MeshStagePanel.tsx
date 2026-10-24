@@ -3,7 +3,8 @@ import type { StageId, StageStatus } from '../stages';
 import { Tooltip } from '../../ui/Tooltip';
 import { CFDProjectState } from '../../../types/cfd';
 import { Layers, ChevronRight, ChevronDown } from 'lucide-react';
-import { Blocking } from '../../../types/blocking';
+import { Blocking, BlockKind } from '../../../types/blocking';
+import type { BlockingReport } from '../../../app/blockingRunner';
 import { NumberField } from './NumberField';
 import { StageGate } from './StageGate';
 import { StructuredMeshPanel } from './StructuredMeshPanel';
@@ -20,6 +21,8 @@ export function MeshStagePanel(p: MeshStagePanelProps) {
     meshTopology,
     blocking,
     onBuildBlocks,
+    blockingReport,
+    onOptimizeBlocks,
     onInitializeBlocking,
     onUpdateBlocking,
     ogridBodies,
@@ -110,6 +113,8 @@ export function MeshStagePanel(p: MeshStagePanelProps) {
                   <StructuredMeshPanel
                     blocking={blocking ?? null}
                     onBuildBlocks={onBuildBlocks}
+                    blockingReport={blockingReport}
+                    onOptimizeBlocks={onOptimizeBlocks}
                     onInitializeBlocking={onInitializeBlocking}
                     onUpdateBlocking={onUpdateBlocking}
                     ogridBodies={ogridBodies}
@@ -465,8 +470,10 @@ export interface MeshStagePanelProps {
   setMeshTopology: (t: 'unstructured' | 'structured') => void;
   meshTopology: 'unstructured' | 'structured';
   blocking: Blocking;
-  onBuildBlocks: (kind: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed') => void;
+  onBuildBlocks: (kind: BlockKind) => void;
   onInitializeBlocking: () => void;
+  blockingReport?: BlockingReport | null;
+  onOptimizeBlocks?: () => void;
   onUpdateBlocking: (bk: Blocking | null) => void;
   ogridBodies: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
   onWrapBody: (bodyIndex: number) => void;
@@ -474,7 +481,7 @@ export interface MeshStagePanelProps {
   onUpdateOgridParams: (
     p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>,
   ) => void;
-  structuredHint: 'hgrid' | 'ogrid' | 'cgrid' | 'cgrid_closed';
+  structuredHint: BlockKind;
   structuredSmooth: boolean;
   setStructuredSmooth: (v: boolean) => void;
   updateYPlus: (p: any) => void;
