@@ -16,7 +16,6 @@ import {
 } from '../../types/cadWorkflow';
 import {
   Blocking,
-  blockPolygon,
   entityRing,
   propagateNodeCounts,
   emptyBlocking,
@@ -36,7 +35,6 @@ import {
   associateEdges,
   snapProjectVertices,
   premesh,
-  premeshQuality,
   spacingJumps,
   ogridBlocks,
   applyVertexMove,
@@ -862,21 +860,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     },
     [cadState.entities],
   );
-  // How much of the fluid (domain minus bodies) the blocks cover: only blocked
-  // area gets meshed, so a partly drawn blocking must say so.
-  const blockCoverage = useMemo(() => {
-    if (!blocking?.blocks.length) return null;
-    const area = (q: Point2D[]) => {
-      let a = 0;
-      for (let i = 0; i < q.length; i++)
-        a += q[i].x * q[(i + 1) % q.length].y - q[(i + 1) % q.length].x * q[i].y;
-      return Math.abs(a) / 2;
-    };
-    const fluid = blockOutlines.reduce((acc, o) => acc + (o.body ? -area(o.pts) : area(o.pts)), 0);
-    if (fluid <= 0) return null;
-    const covered = blocking.blocks.reduce((acc, b) => acc + area(blockPolygon(blocking, b)), 0);
-    return Math.min(1, covered / fluid);
-  }, [blocking, blockOutlines]);
   // Leaving the Blocks view (or structured meshing) drops any half-drawn block.
   useEffect(() => {
     if (!showBlocking) {
@@ -940,31 +923,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     () => (blocking?.blocks.length && showBlocking ? premesh(blocking, 80) : []),
     [blocking, showBlocking],
   );
-  const premeshQ = useMemo(() => premeshQuality(blockPremesh), [blockPremesh]);
-  // Cells the blocking will make (the pre-mesh may be thinned for drawing),
-  // and edges with nodes but next to no length: a block collapsed onto a
-  // point there fans its grid lines out of it (a sharp trailing edge).
-  const blockCellCount = useMemo(() => {
-    if (!blocking) return 0;
-    const em = new Map(blocking.edges.map((e) => [e.id, e] as const));
-    return blocking.blocks.reduce(
-      (n, b) => n + ((em.get(b.edges[0])?.nodes ?? 2) - 1) * ((em.get(b.edges[1])?.nodes ?? 2) - 1),
-      0,
-    );
-  }, [blocking]);
-  const blockTinyEdges = useMemo(() => {
-    if (!blocking?.edges.length) return 0;
-    const vm = new Map(blocking.vertices.map((v) => [v.id, v.pt] as const));
-    const xs = blocking.vertices.map((v) => v.pt.x);
-    const ys = blocking.vertices.map((v) => v.pt.y);
-    const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-    return blocking.edges.filter((e) => {
-      const pts = [vm.get(e.v0)!, ...e.path, vm.get(e.v1)!];
-      let L = 0;
-      for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-      return e.nodes > 2 && L < size * 2e-4;
-    }).length;
-  }, [blocking]);
   const blockSpacingJumps = useMemo(
     () => (blocking?.blocks.length && showBlocking ? spacingJumps(blocking) : []),
     [blocking, showBlocking],
@@ -2576,21 +2534,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             commitTool,
             cancelTool,
             startTool,
-            cellCount: blockCellCount,
-            tinyEdges: blockTinyEdges,
             selectedEdgeId,
             selectedVertexId,
             selectedBlockId,
             blockVertexKinds,
             blockPremesh,
-            premeshQ,
             blockSpacingJumps,
             setVertexLocation,
             deleteBlockById,
-            unpatchedEdgeIds,
-            badBlockIds,
-            outsideBlockIds,
-            blockCoverage,
           }}
         />
         <LivePreviewControls

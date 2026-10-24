@@ -3,7 +3,6 @@ import { Point2D, CadEntity } from '../../../types/cadWorkflow';
 import {
   Blocking,
   BlockPremesh,
-  PremeshQuality,
   SpacingJump,
   VertexKind,
   emptyBlocking,
@@ -11,13 +10,12 @@ import {
 import { BlockToolRail } from './blockEditor/BlockToolRail';
 import { BlockToolDialog } from './blockEditor/BlockToolDialog';
 import { BlockInspector } from './blockEditor/BlockInspector';
-import { BlockChecks } from './blockEditor/BlockChecks';
 import type { BlockMsg, BlockTool } from './blockEditor/shared';
 import type { ToolPicks } from './blockEditor/toolFields';
 
 /** The block editor (Blocks view): ICEM CFD Hexa style tools on the left; on
  *  the right the active tool's dialog (or, under Select, the selection's
- *  parameters) above the live checks. The geometry is locked here. */
+ *  parameters). The geometry is locked here. */
 export function BlockEditorTools(p: BlockEditorToolsProps) {
   const {
     displayOnly,
@@ -101,38 +99,21 @@ export function BlockEditorTools(p: BlockEditorToolsProps) {
             Initialize a block, or Create one (B).
           </div>
         )}
-        {hasBlocks && blocking && (
-          <>
-            {blockTool === 'select' && (
-              <BlockInspector
-                blocking={blocking}
-                onUpdateBlocking={onUpdateBlocking}
-                entities={p.cadState.entities}
-                selectedEdgeId={blockTool === 'select' ? p.selectedEdgeId : null}
-                selectedVertexId={blockTool === 'select' ? p.selectedVertexId : null}
-                selectedBlockId={blockTool === 'select' ? p.selectedBlockId : null}
-                blockVertexKinds={p.blockVertexKinds}
-                blockPremesh={p.blockPremesh}
-                blockSpacingJumps={p.blockSpacingJumps}
-                setVertexLocation={p.setVertexLocation}
-                deleteBlockById={p.deleteBlockById}
-                ogridThis={(id) => p.startTool('ogrid', { blocks: [id] }, 'pass')}
-              />
-            )}
-            <BlockChecks
-              blockCount={blocking.blocks.length}
-              quality={p.premeshQ}
-              outside={p.outsideBlockIds.size}
-              overBody={p.badBlockIds.size}
-              unpatched={p.unpatchedEdgeIds.size}
-              jumps={p.blockSpacingJumps}
-              coverage={p.blockCoverage}
-              showPremesh={p.showPremesh}
-              maxAspect={p.premeshQ.maxAspect}
-              cellCount={p.cellCount}
-              tinyEdges={p.tinyEdges}
-            />
-          </>
+        {hasBlocks && blocking && blockTool === 'select' && (
+          <BlockInspector
+            blocking={blocking}
+            onUpdateBlocking={onUpdateBlocking}
+            entities={p.cadState.entities}
+            selectedEdgeId={blockTool === 'select' ? p.selectedEdgeId : null}
+            selectedVertexId={blockTool === 'select' ? p.selectedVertexId : null}
+            selectedBlockId={blockTool === 'select' ? p.selectedBlockId : null}
+            blockVertexKinds={p.blockVertexKinds}
+            blockPremesh={p.blockPremesh}
+            blockSpacingJumps={p.blockSpacingJumps}
+            setVertexLocation={p.setVertexLocation}
+            deleteBlockById={p.deleteBlockById}
+            ogridThis={(id) => p.startTool('ogrid', { blocks: [id] }, 'pass')}
+          />
         )}
       </div>
     </>
@@ -170,20 +151,12 @@ export interface BlockEditorToolsProps {
   cancelTool: () => void;
   /** Open a tool with its fields already filled. */
   startTool: (t: BlockTool, picks: ToolPicks, field?: string) => void;
-  /** Cells the blocking will make, and edges collapsed to a point. */
-  cellCount: number;
-  tinyEdges: number;
   selectedEdgeId: string | null;
   selectedVertexId: string | null;
   selectedBlockId: string | null;
   blockVertexKinds: Map<string, VertexKind>;
   blockPremesh: BlockPremesh[];
-  premeshQ: PremeshQuality;
   blockSpacingJumps: SpacingJump[];
   setVertexLocation: (vid: string, pt: Point2D) => void;
   deleteBlockById: (id: string) => void;
-  unpatchedEdgeIds: Set<string>;
-  badBlockIds: Set<string>;
-  outsideBlockIds: Set<string>;
-  blockCoverage: number | null;
 }
