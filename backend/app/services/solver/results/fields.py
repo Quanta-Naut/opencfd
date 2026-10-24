@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 import numpy as np
@@ -18,7 +19,8 @@ def _assemble_from_cells(nodes, elements: List, centres: np.ndarray,
                          U: np.ndarray, p: np.ndarray,
                          k: Optional[np.ndarray], omega: Optional[np.ndarray],
                          time_name: str, times: List[str],
-                         geom_key: Optional[tuple] = None) -> Dict:
+                         geom_key: Optional[tuple] = None,
+                         extra: Optional[Dict[str, np.ndarray]] = None) -> Dict:
     """Turn raw per-cell OpenFOAM fields into the smooth per-node viewer payload."""
     nodes_xy = np.asarray(nodes, dtype=float)[:, :2]
     nn = len(nodes_xy)
@@ -72,7 +74,7 @@ def _assemble_from_cells(nodes, elements: List, centres: np.ndarray,
             hi = lo + 1.0
         return [round(float(lo), 4), round(float(hi), 4)]
 
-    return {
+    out = {
         "time": time_name,
         "availableTimes": times,
         "source": "openfoam",
@@ -94,6 +96,49 @@ def _assemble_from_cells(nodes, elements: List, centres: np.ndarray,
         },
         "streamlines": streamlines,
     }
+    # Fields only some runs write (T, nut, Mach): per cell, one per mesh cell.
+    for name, cv in (extra or {}).items():
+        cv = np.asarray(cv, dtype=float).ravel()
+        if cv.size == 1:
+            cv = np.full(len(centres), cv[0])
+        if cv.size != len(centres):
+            continue
+        vals = field(cv)
+        out["fields"][name] = [float(f"{v:.5g}") for v in vals]
+        out["ranges"][name] = [float(f"{v:.5g}") for v in rng(vals)]
+    return out
+
+
+def _gas_constants(case: Path) -> Optional[tuple]:
+    """(gamma, R) of a compressible run's perfect gas, from physicalProperties."""
+    path = case / "constant" / "physicalProperties"
+    if not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    mw = re.search(r"\bmolWeight\s+([\d.eE+-]+);", text)
+    cp = re.search(r"\bCp\s+([\d.eE+-]+);", text)
+    if not mw or not cp:
+        return None
+    R = 8314.47 / float(mw.group(1))
+    Cp = float(cp.group(1))
+    return (Cp / (Cp - R), R) if Cp > R else None
+
+
+def _extra_cell_fields(case: Path, tdir: Path, U: np.ndarray) -> Dict[str, np.ndarray]:
+    """Temperature, turbulent viscosity and Mach number, when the run has them."""
+    out: Dict[str, np.ndarray] = {}
+    for name in ("T", "nut"):
+        f = _read_field(tdir / name)
+        if f is not None:
+            out[name] = np.asarray(f, dtype=float).ravel()
+    gas = _gas_constants(case) if "T" in out else None
+    if gas is not None:
+        gamma, R = gas
+        U = np.atleast_2d(np.asarray(U, dtype=float))
+        speed = np.linalg.norm(U[:, :2], axis=1)
+        T = out["T"] if out["T"].size == len(speed) else np.full(len(speed), out["T"][0])
+        out["Ma"] = speed / np.sqrt(gamma * R * np.maximum(T, 1e-6))
+    return out
 
 
 def read_field_results(case_dir: str | Path, mesh: Dict, time_value: Optional[str] = None) -> Optional[Dict]:
@@ -130,6 +175,7 @@ def read_field_results(case_dir: str | Path, mesh: Dict, time_value: Optional[st
         nodes, elements, centres, U, p,
         _read_field(tdir / "k"), _read_field(tdir / "omega"),
         tdir.name, [path.name for _, path in times], geom_key,
+        _extra_cell_fields(case, tdir, U),
     )
     # Wall y+ and shear (on wall nodes, 0 elsewhere) and the force split,
     # when the run's function objects wrote them.

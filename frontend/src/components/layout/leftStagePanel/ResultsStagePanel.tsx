@@ -26,7 +26,7 @@ const COLORMAPS: PostProcessConfig['colormap'][] = [
   'jet',
   'rainbow',
 ];
-const GROUPS = ['Velocity', 'Pressure', 'Turbulence', 'Derived'] as const;
+const GROUPS = ['Velocity', 'Pressure', 'Turbulence', 'Thermal', 'Derived'] as const;
 const OPEN_KEY = 'opencfd_results_sections';
 
 const lbl = 'text-[10px] text-fg-2';

@@ -20,6 +20,9 @@ export type ResultFieldId =
   | 'p_total'
   | 'k'
   | 'omega'
+  | 'nut'
+  | 'T'
+  | 'Ma'
   | 'vorticity'
   | 'yPlus'
   | 'tau_w'
@@ -43,7 +46,7 @@ export interface ResultFieldDef {
   /** Short name for legends and tables. */
   short: string;
   unit: string;
-  group: 'Velocity' | 'Pressure' | 'Turbulence' | 'Derived' | 'Wall' | 'Calculator';
+  group: 'Velocity' | 'Pressure' | 'Turbulence' | 'Thermal' | 'Derived' | 'Wall' | 'Calculator';
   /** Signed about zero: the colour range is centred on 0. */
   symmetric?: boolean;
   /** Has values on walls only: for boundary plots and reports, not contours. */
@@ -54,11 +57,14 @@ export const RESULT_FIELDS: ResultFieldDef[] = [
   { id: 'U_mag', label: 'Velocity magnitude', short: '|U|', unit: 'm/s', group: 'Velocity' },
   { id: 'Ux', label: 'Velocity X', short: 'Ux', unit: 'm/s', group: 'Velocity' },
   { id: 'Uy', label: 'Velocity Y', short: 'Uy', unit: 'm/s', group: 'Velocity' },
+  { id: 'Ma', label: 'Mach number', short: 'Ma', unit: '', group: 'Velocity' },
   { id: 'p', label: 'Static pressure', short: 'p', unit: 'Pa', group: 'Pressure' },
   { id: 'Cp', label: 'Pressure coefficient', short: 'Cp', unit: '', group: 'Pressure' },
   { id: 'p_total', label: 'Total pressure', short: 'p0', unit: 'Pa', group: 'Pressure' },
   { id: 'k', label: 'Turbulent kinetic energy', short: 'k', unit: 'm²/s²', group: 'Turbulence' },
   { id: 'omega', label: 'Specific dissipation', short: 'ω', unit: '1/s', group: 'Turbulence' },
+  { id: 'nut', label: 'Turbulent viscosity', short: 'νt', unit: 'm²/s', group: 'Turbulence' },
+  { id: 'T', label: 'Temperature', short: 'T', unit: 'K', group: 'Thermal' },
   {
     id: 'vorticity',
     label: 'Vorticity',
@@ -144,6 +150,9 @@ export const EXPR_FIELDS: Record<string, string> = {
   p0: 'p_total',
   k: 'k',
   omega: 'omega',
+  nut: 'nut',
+  T: 'T',
+  Ma: 'Ma',
   vorticity: 'vorticity',
   yPlus: 'yPlus',
   tau_w: 'tau_w',

@@ -34,7 +34,7 @@ const PRESETS: { name: string; unit: string; expr: string; symmetric?: boolean; 
     expr: '100*sqrt(2/3*k)/U_inf',
     hint: 'Turbulence intensity against the freestream speed',
   },
-  { name: 'nut/nu', unit: '', expr: 'k/omega/nu', hint: 'Eddy viscosity ratio (k-omega models)' },
+  { name: 'nut/nu', unit: '', expr: 'nut/nu', hint: 'Eddy viscosity ratio' },
   {
     name: 'Flow angle',
     unit: 'deg',
@@ -60,6 +60,9 @@ const FIELD_HINTS: Record<string, string> = {
   p0: 'Total pressure, Pa',
   k: 'Turbulent kinetic energy, m²/s²',
   omega: 'Specific dissipation, 1/s',
+  nut: 'Turbulent viscosity, m²/s',
+  T: 'Temperature, K (compressible runs)',
+  Ma: 'Mach number (compressible runs)',
   vorticity: 'Vorticity, 1/s',
   x: 'Point x, m',
   y: 'Point y, m',
@@ -285,20 +288,33 @@ export const FieldCalculatorDialog: React.FC<FieldCalculatorDialogProps> = ({
 
             <div className="space-y-2">
               <ChipRow label="Fields">
-                {['U', 'Ux', 'Uy', 'p', 'Cp', 'p0', 'k', 'omega', 'vorticity', 'x', 'y'].map(
-                  (v) => (
-                    <Tooltip key={v} content={FIELD_HINTS[v]} delay={250}>
-                      <button
-                        type="button"
-                        className={chip}
-                        disabled={!!fields && !has.has(v)}
-                        onClick={() => insert(v)}
-                      >
-                        {v}
-                      </button>
-                    </Tooltip>
-                  ),
-                )}
+                {[
+                  'U',
+                  'Ux',
+                  'Uy',
+                  'p',
+                  'Cp',
+                  'p0',
+                  'k',
+                  'omega',
+                  'nut',
+                  'T',
+                  'Ma',
+                  'vorticity',
+                  'x',
+                  'y',
+                ].map((v) => (
+                  <Tooltip key={v} content={FIELD_HINTS[v]} delay={250}>
+                    <button
+                      type="button"
+                      className={chip}
+                      disabled={!!fields && !has.has(v)}
+                      onClick={() => insert(v)}
+                    >
+                      {v}
+                    </button>
+                  </Tooltip>
+                ))}
               </ChipRow>
               <ChipRow label="Constants">
                 {Object.keys(consts).map((c) => (
