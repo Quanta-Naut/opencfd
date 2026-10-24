@@ -43,26 +43,13 @@ import {
   validateBoundaryTags,
   geometryFormsLoop,
 } from './types/cadWorkflow';
-import {
-  Blocking,
-  BlockKind,
-  autoBlockingFromOutline,
-  initializeBlocking,
-  propagateNodeCounts,
-  wrapBodyOgrid,
-  bodiesForOgrid,
-  entityRing,
-  applyTargetCellSize,
-  autoCellSize,
-} from './types/blocking';
+import { Blocking, initializeBlocking } from './types/blocking';
 import { restoreRememberedTags } from './app/boundaryTagMemory';
 import { computePatchRoles } from './app/boundaryTagMemory';
 import { scheduleAutosave } from './app/autosave';
 import { updateCaseCalculations } from './app/caseCalculations';
 import { syncFirstCellToMesh } from './app/caseCalculations';
 import { runGenerateMesh } from './app/meshingActions';
-import { runBuildBlocks, runOptimizeBlocking } from './app/meshingActions';
-import type { BlockingReport } from './app/blockingRunner';
 import { runGenerateStructuredMesh } from './app/meshingActions';
 import { buildCommands } from './app/commands';
 
@@ -159,12 +146,6 @@ export function App({
   );
   const [blocking, setBlocking] = useState<Blocking | null>(() => savedSession?.blocking ?? null);
   const [directionColors, setDirectionColors] = useState<Record<string, string> | null>(null);
-  const [blockMode, setBlockMode] = useState<'auto' | 'manual'>('auto');
-  const [ogridParams, setOgridParams] = useState<{
-    offsetFactor: number;
-    radialNodes: number;
-    radialRatio: number;
-  }>(() => savedSession?.ogridParams ?? { offsetFactor: 0.25, radialNodes: 26, radialRatio: 10 });
   const [structuredSmooth, setStructuredSmooth] = useState<boolean>(true);
   const [meshTopology, setMeshTopology] = useState<'unstructured' | 'structured'>(
     () => savedSession?.meshTopology ?? 'unstructured',
@@ -300,7 +281,14 @@ export function App({
       '|' +
       JSON.stringify(blocking?.vertices?.map((v) => v.pt) ?? null) +
       '|' +
-      JSON.stringify(blocking?.edges?.map((e) => [e.nodes, e.law, e.ratio]) ?? null),
+      JSON.stringify(
+        // Spacings only when set, so meshes saved before they existed stay fresh.
+        blocking?.edges?.map((e) =>
+          e.spacing1 || e.spacing2
+            ? [e.nodes, e.law, e.ratio, e.spacing1, e.spacing2]
+            : [e.nodes, e.law, e.ratio],
+        ) ?? null,
+      ),
     [geomSigCore, blocking],
   );
   const meshSigRef = useRef<string | null>(savedSession?.meshSig ?? null);
@@ -431,7 +419,6 @@ export function App({
     freestreamVelocity,
     activeTagTool,
     blocking,
-    ogridParams,
     meshTopology,
     // meshData / fieldData are saved separately by the blob effect below.
     meshSig: meshSigRef.current,
@@ -621,44 +608,6 @@ export function App({
     });
 
   // ── Structured meshing (H-block transfinite) ──────────────────────────────
-  const bodyPatchFor = (entId: string): any => {
-    const ent = cadEntities.find((e) => e.id === entId);
-    if (ent && ent.role !== 'domain_boundary') {
-      const keys = Object.keys(edgeTagMap).filter((k) => k.startsWith(`${entId}_`));
-      const explicit = keys.map((k) => edgeTagMap[k]).find(Boolean);
-      return explicit || 'wall';
-    }
-    const keys = Object.keys(edgeTagMap).filter((k) => k.startsWith(`${entId}_`));
-    return (keys.map((k) => edgeTagMap[k]).find(Boolean) as any) || 'wall';
-  };
-
-  // The search tries every topology that fits, so it is always the default.
-  const structuredHint: BlockKind = 'auto';
-  const [blockingReport, setBlockingReport] = useState<BlockingReport | null>(null);
-
-  const handleBuildBlocks = (kind: BlockKind) =>
-    runBuildBlocks(kind, {
-      setBlocksBuiltTick,
-      cadEntities,
-      bodyPatchFor,
-      setBlocking,
-      edgeTagMap,
-      ogridParams,
-      firstCellMm: state.yplus.first_layer_height_mm,
-      growth: state.yplus.expansion_ratio,
-      setReport: setBlockingReport,
-    });
-
-  const handleOptimizeBlocks = () => {
-    if (blocking)
-      runOptimizeBlocking(blocking, {
-        cadEntities,
-        edgeTagMap,
-        setBlocking,
-        setReport: setBlockingReport,
-      });
-  };
-
   // Manual (ICEM-style) blocking: one block around all the geometry, which the
   // user then splits, deletes, associates and O-grids on the canvas.
   const handleInitializeBlocking = () => {
@@ -670,63 +619,6 @@ export function App({
     setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
     setBlocking(bk);
     toast.success('Created 1 block');
-  };
-
-  const ogridBodies = useMemo(
-    () => (blocking ? bodiesForOgrid(cadEntities, blocking) : []),
-    [cadEntities, blocking],
-  );
-
-  const handleWrapBody = (bodyIndex: number) => {
-    if (!blocking) return;
-    const ent = cadEntities[bodyIndex];
-    if (!ent) return;
-    const next = wrapBodyOgrid(blocking, entityRing(ent), bodyPatchFor(ent.id), {
-      bodyEntityId: ent.id,
-      ...ogridParams,
-    });
-    if (!next) {
-      toast.error('Could not wrap that body', {
-        description: 'It needs to sit well inside the domain, clear of the edges.',
-      });
-      return;
-    }
-    setBlocking(propagateNodeCounts(next));
-    toast.success('O-grid ring built', {
-      description: 'Set the ring and wall-normal counts in the panel.',
-    });
-  };
-
-  const handleUpdateOgridParams = (p: Partial<typeof ogridParams>) => {
-    const nextParams = { ...ogridParams, ...p };
-    setOgridParams(nextParams);
-
-    // Only rebuild if a body is actually wrapped. A bare `curveId` is not enough -
-    // Phase 1 puts curveId on plain domain-outline edges too.
-    const hasOgrid =
-      blocking &&
-      (bodiesForOgrid(cadEntities, blocking).some((b) => b.wrapped) ||
-        blocking.edges.some((e) => {
-          if (!e.curveId) return false;
-          return cadEntities.find((x) => x.id === e.curveId)?.role !== 'domain_boundary';
-        }));
-    if (!hasOgrid) return;
-
-    let bk = autoBlockingFromOutline(cadEntities, edgeTagMap);
-    if (!bk) return;
-    for (const b of bodiesForOgrid(cadEntities, bk)) {
-      const ent = cadEntities[b.index];
-      const next = wrapBodyOgrid(bk, entityRing(ent), bodyPatchFor(ent.id), {
-        bodyEntityId: ent.id,
-        ...nextParams,
-      });
-      if (next) {
-        bk = next;
-      }
-    }
-    bk = applyTargetCellSize(propagateNodeCounts(bk), autoCellSize(bk));
-    setBlocking(bk);
-    toast.success('O-grid ring rebuilt');
   };
 
   const handleGenerateStructuredMesh = async () =>
@@ -1065,7 +957,7 @@ export function App({
         isMeshing,
         handleGenerateMesh,
         blocking,
-        handleBuildBlocks,
+        handleInitializeBlocking,
         handleGenerateStructuredMesh,
         handleApplyYPlusToMesh,
         requestDownloadBlockMeshDictRef,
@@ -1091,7 +983,7 @@ export function App({
       solverRunning,
       solverBusy,
       handleGenerateMesh,
-      handleBuildBlocks,
+      handleInitializeBlocking,
       handleGenerateStructuredMesh,
       handleApplyYPlusToMesh,
       handleRunSolver,
@@ -1234,17 +1126,9 @@ export function App({
             }
             onGenerateMesh={handleGenerateMesh}
             blocking={blocking}
-            onBuildBlocks={handleBuildBlocks}
-            blockingReport={blockingReport}
-            onOptimizeBlocks={handleOptimizeBlocks}
             onInitializeBlocking={handleInitializeBlocking}
             onUpdateBlocking={handleUpdateBlocking}
             onGenerateStructuredMesh={handleGenerateStructuredMesh}
-            ogridBodies={ogridBodies}
-            onWrapBody={handleWrapBody}
-            ogridParams={ogridParams}
-            onUpdateOgridParams={handleUpdateOgridParams}
-            structuredHint={structuredHint}
             structuredSmooth={structuredSmooth}
             setStructuredSmooth={setStructuredSmooth}
             meshTopology={meshTopology}
@@ -1260,7 +1144,6 @@ export function App({
             }}
             onApplyYPlusToMesh={handleApplyYPlusToMesh}
             onDirectionColors={setDirectionColors}
-            onBlockModeChange={setBlockMode}
             meshData={meshData}
             meshError={meshError}
             meshStale={meshStale}
@@ -1367,7 +1250,6 @@ export function App({
                 onUpdateBlocking={handleUpdateBlocking}
                 showBlocking={activeStage === 'mesh' && meshTopology === 'structured'}
                 directionColors={directionColors}
-                blockMode={blockMode}
                 domainBroken={domainState === 'broken'}
                 isMeshing={isMeshing}
                 showMesh={

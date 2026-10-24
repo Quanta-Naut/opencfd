@@ -12,9 +12,15 @@ import { BlockEdge, Blocking } from './types';
 // slant. Matching by projection keeps it square to the wall.
 
 /** Node stations of an edge under its grading law, from v0. At most `keep`
- *  cells come back, picked so a clustered end stays clustered. */
-export function lawStations(e: BlockEdge, keep = Infinity): number[] {
+ *  cells come back, picked so a clustered end stays clustered. `len` is the
+ *  edge's length, needed by the 'tanh' law (its spacings are absolute). */
+export function lawStations(e: BlockEdge, keep = Infinity, len = 0): number[] {
   const n = Math.max(1, e.nodes - 1);
+  if (e.law === 'tanh') {
+    const d0 = e.spacing1 && len > 0 ? e.spacing1 / len : undefined;
+    const d1 = e.spacing2 && len > 0 ? e.spacing2 / len : undefined;
+    return subsample(tanhStations(n, d0, d1), keep);
+  }
   let w: number[];
   if (e.law === 'geometric' && Math.abs(e.ratio - 1) > 1e-6) {
     const q = Math.max(e.ratio, 1e-6) ** (1 / Math.max(1, n - 1));
@@ -32,6 +38,96 @@ export function lawStations(e: BlockEdge, keep = Infinity): number[] {
   for (const x of w) cum.push(cum[cum.length - 1] + x / sum);
   cum[n] = 1;
   return subsample(cum, keep);
+}
+
+// ── Hyperbolic tangent law (Vinokur 1983), as Pointwise distributes ─────────
+//
+// Two-sided: x(xi) = u / (A + (1 - A) u), u = (1 + tanh(d (xi - 1/2)) / tanh(d/2)) / 2,
+// with A = sqrt(ds1 / ds0) and sinh(d) / d = 1 / (n sqrt(ds0 ds1)). One-sided
+// uses x = 1 + tanh(d/2 (xi - 1)) / tanh(d/2) with sinh(d) / d = 1 / (n ds0).
+// When the request is coarser than uniform the sin / tan forms take over. The
+// formulas match end slopes, so a few corrections make the first cell exact.
+
+/** Solve sinh(d)/d = b (b > 1) or sin(d)/d = b (b < 1) for d > 0. */
+function solveDelta(b: number): number {
+  if (b > 1) {
+    let d = b < 2.7 ? Math.sqrt(6 * (b - 1)) : Math.log(2 * b * Math.log(2 * b)) + 1;
+    if (!(d > 0)) d = 1;
+    for (let i = 0; i < 60; i++) {
+      const f = Math.sinh(d) / d - b;
+      const fp = (Math.cosh(d) * d - Math.sinh(d)) / (d * d);
+      const nd = d - f / fp;
+      d = nd > 0 ? nd : d / 2;
+      if (Math.abs(f) < 1e-12 * b) break;
+    }
+    return d;
+  }
+  let lo = 1e-9;
+  let hi = Math.PI - 1e-9;
+  for (let i = 0; i < 80; i++) {
+    const m = (lo + hi) / 2;
+    if (Math.sin(m) / m > b) lo = m;
+    else hi = m;
+  }
+  return (lo + hi) / 2;
+}
+
+function tanhRaw(n: number, d0?: number, d1?: number): number[] {
+  const xs = Array.from({ length: n + 1 }, (_, k) => k / n);
+  if (d0 && d1) {
+    const A = Math.sqrt(d1 / d0);
+    const b = 1 / (n * Math.sqrt(d0 * d1));
+    const d = Math.abs(b - 1) < 1e-3 ? 0 : solveDelta(b);
+    return xs.map((x) => {
+      const u = !d
+        ? x
+        : b > 1
+          ? 0.5 * (1 + Math.tanh(d * (x - 0.5)) / Math.tanh(d / 2))
+          : 0.5 * (1 + Math.tan(d * (x - 0.5)) / Math.tan(d / 2));
+      return u / (A + (1 - A) * u);
+    });
+  }
+  const one = (ds: number) => {
+    const b = 1 / (n * ds);
+    if (Math.abs(b - 1) < 1e-3) return xs;
+    const d = solveDelta(b);
+    return xs.map((x) =>
+      b > 1
+        ? 1 + Math.tanh((d / 2) * (x - 1)) / Math.tanh(d / 2)
+        : 1 + Math.tan((d / 2) * (x - 1)) / Math.tan(d / 2),
+    );
+  };
+  if (d0) return one(d0);
+  if (d1)
+    return one(d1)
+      .map((x) => 1 - x)
+      .reverse();
+  return xs;
+}
+
+/** Stations for `n` cells with first cell `d0` at the start and `d1` at the
+ *  end (fractions of the length; either may be omitted). */
+export function tanhStations(n: number, d0?: number, d1?: number): number[] {
+  // A spacing at or above a whole cell's share cannot cluster: drop it.
+  const ok = (d?: number) => (d && d > 0 && d < 1 ? d : undefined);
+  d0 = ok(d0);
+  d1 = ok(d1);
+  let a = d0;
+  let b = d1;
+  let s = tanhRaw(n, a, b);
+  for (let it = 0; it < 30; it++) {
+    const e0 = d0 ? d0 / (s[1] - s[0]) : 1;
+    const e1 = d1 ? d1 / (s[n] - s[n - 1]) : 1;
+    if (Math.abs(e0 - 1) < 1e-6 && Math.abs(e1 - 1) < 1e-6) break;
+    if (a) a *= e0;
+    if (b) b *= e1;
+    const next = tanhRaw(n, a, b);
+    if (next.some((x, k) => !Number.isFinite(x) || (k > 0 && !(x > next[k - 1])))) break;
+    s = next;
+  }
+  s[0] = 0;
+  s[n] = 1;
+  return s;
 }
 
 function subsample(cum: number[], keep: number): number[] {
@@ -108,7 +204,7 @@ export function projectedStations(
   const same =
     d(S[0], D[0]) + d(S[S.length - 1], D[D.length - 1]) <=
     d(S[0], D[D.length - 1]) + d(S[S.length - 1], D[0]);
-  const st = lawStations(src);
+  const st = lawStations(src, Infinity, Ls);
   // Normal side: the one that reaches dst at the middle.
   const mid = at(S, cs, Ls / 2);
   const nrm = { x: -mid.t.y, y: mid.t.x };
@@ -153,5 +249,7 @@ export function edgeStations(
 ): number[] {
   const src = e.match ? em.get(e.match) : undefined;
   const proj = src ? projectedStations(src, e, vm) : null;
-  return proj ? subsample(proj, keep) : lawStations(e, keep);
+  if (proj) return subsample(proj, keep);
+  const c = cumLen(chainOf(e, vm));
+  return lawStations(e, keep, c[c.length - 1]);
 }

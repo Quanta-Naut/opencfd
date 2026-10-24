@@ -3,51 +3,58 @@ import { Block, BlockEdge, Blocking } from './types';
 import { blockCornerIds } from './blockEdit';
 import { edgeStations } from './stations';
 
-// Mesh quality of a blocking, measured on the grid it would actually produce:
-// each block is filled by transfinite interpolation (what the backend does
-// before smoothing) and every cell is scored by its equiangle skewness
+// ICEM CFD "Pre-Mesh": the grid each block will produce, filled by transfinite
+// interpolation from its four edges (what the mesher does before smoothing),
+// with ICEM's two headline quality checks per cell:
 //
-//   EAS = max((θmax - 90) / 90, (90 - θmin) / 90)     0 = square, 1 = degenerate
-//
-// A cell that folds over (corner turning the wrong way) makes the block invalid.
+//   determinant  smallest / largest corner Jacobian of the quad. 1 is a
+//                parallelogram, 0 or less is folded. Solvers accept > 0.1,
+//                aim for > 0.2.
+//   angle        smallest interior angle. Aim for > 18 degrees.
 
-export interface BlockScore {
-  /** Mean EAS over the block's cells. */
-  mean: number;
-  /** Worst EAS in the block. */
-  worst: number;
-  /** Worst EAS of the cells touching a wall edge (0 when there is none):
-   *  the first layer off a wall is where skew costs accuracy. */
-  wallWorst: number;
-  /** A cell folded over: the block would not mesh. */
-  invalid: boolean;
-  /** The block's objective contribution (lower is better). */
-  cost: number;
+/** ICEM's targets. */
+export const PREMESH_MIN_DET = 0.2;
+export const PREMESH_MIN_ANGLE = 18;
+
+export interface BlockPremesh {
+  blockId: string;
+  /** Grid points, rows by columns: grid[j][i]. */
+  grid: Point2D[][];
+  /** Per cell, row-major (m rows of n): determinant ratio and min angle (deg). */
+  det: Float32Array;
+  angle: Float32Array;
+  minDet: number;
+  minAngle: number;
 }
 
-export interface BlockingScore {
-  cost: number;
-  mean: number;
-  worst: number;
-  wallWorst: number;
-  invalid: number;
-  blocks: Map<string, BlockScore>;
+export interface PremeshQuality {
+  cells: number;
+  minDet: number;
+  minAngle: number;
+  /** Cells under the ICEM targets. */
+  lowDet: number;
+  lowAngle: number;
+  /** Cells that fold (determinant <= 0): the mesh would be invalid. */
+  folded: number;
+  /** Block holding the worst cell. */
+  worstBlockId: string | null;
 }
-
-/** Cells per block side used for scoring (capped so the search stays fast). */
-const SAMPLE_MIN = 6;
-const SAMPLE_MAX = 40;
 
 function chainOf(e: BlockEdge, from: string, vm: Map<string, Point2D>): Point2D[] {
   const pts = [vm.get(e.v0)!, ...e.path, vm.get(e.v1)!];
   return e.v0 === from ? pts : pts.reverse();
 }
 
-/** Points along a polyline at the given arc-length fractions. */
-function atStations(pts: Point2D[], st: number[]): Point2D[] {
+function cumLen(pts: Point2D[]): number[] {
   const cum = [0];
   for (let i = 1; i < pts.length; i++)
     cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  return cum;
+}
+
+/** Points along a polyline at the given arc-length fractions. */
+function atStations(pts: Point2D[], st: number[]): Point2D[] {
+  const cum = cumLen(pts);
   const L = cum[cum.length - 1] || 1;
   const out: Point2D[] = [];
   let j = 0;
@@ -64,34 +71,15 @@ function atStations(pts: Point2D[], st: number[]): Point2D[] {
   return out;
 }
 
-/** `n + 1` points evenly spaced by arc length along a polyline. */
-function resampleArc(pts: Point2D[], n: number): Point2D[] {
-  const cum = [0];
-  for (let i = 1; i < pts.length; i++)
-    cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
-  const L = cum[cum.length - 1] || 1;
-  const out: Point2D[] = [];
-  let j = 0;
-  for (let k = 0; k <= n; k++) {
-    const s = (L * k) / n;
-    while (j < pts.length - 2 && cum[j + 1] < s) j++;
-    const seg = cum[j + 1] - cum[j] || 1;
-    const t = Math.min(1, Math.max(0, (s - cum[j]) / seg));
-    out.push({
-      x: pts[j].x + t * (pts[j + 1].x - pts[j].x),
-      y: pts[j].y + t * (pts[j + 1].y - pts[j].y),
-    });
-  }
-  return out;
-}
-
-const sideCount = (a: BlockEdge, b: BlockEdge) =>
-  Math.max(SAMPLE_MIN, Math.min(SAMPLE_MAX, Math.max(a.nodes, b.nodes) - 1));
-
-/** The TFI grid of a block as rows of points (grid[j][i]), or null if malformed. */
+/**
+ * The pre-mesh of one block, or null if malformed. Each side carries its real
+ * node distribution; a side with more than `maxCells` cells is thinned (ends
+ * kept dense) so a fine mesh still previews fast.
+ */
 export function blockGrid(
   bk: Blocking,
   blk: Block,
+  maxCells = 120,
   vm: Map<string, Point2D> = new Map(bk.vertices.map((v) => [v.id, v.pt] as const)),
   em: Map<string, BlockEdge> = new Map(bk.edges.map((e) => [e.id, e] as const)),
 ): Point2D[][] | null {
@@ -100,167 +88,176 @@ export function blockGrid(
   const E = blk.edges.map((id) => em.get(id));
   if (E.some((e) => !e)) return null;
   const [e0, e1, e2, e3] = E as BlockEdge[];
-  const n = sideCount(e0, e2);
-  const m = sideCount(e1, e3);
-  // Each side sampled with its own grading law, read from the corner it starts at.
+  const count = (a: BlockEdge, b: BlockEdge) =>
+    Math.max(1, Math.min(maxCells, Math.max(a.nodes, b.nodes) - 1));
+  const n = count(e0, e2);
+  const m = count(e1, e3);
   const side = (e: BlockEdge, from: string, cells: number) => {
-    const st = e.nodes - 1 >= cells ? edgeStations(bk, e, cells, vm, em) : null;
-    const pts = chainOf(e, from, vm);
-    if (!st || st.length !== cells + 1) return resampleArc(pts, cells);
-    return atStations(pts, e.v0 === from ? st : st.map((f) => 1 - f).reverse());
+    let st = edgeStations(bk, e, cells, vm, em);
+    // A side with fewer nodes than its opposite (unbalanced) is spread evenly.
+    if (st.length !== cells + 1) st = Array.from({ length: cells + 1 }, (_, k) => k / cells);
+    return atStations(chainOf(e, from, vm), e.v0 === from ? st : st.map((f) => 1 - f).reverse());
   };
   // bottom c0->c1, right c1->c2, top c3->c2, left c0->c3
   const B = side(e0, c[0], n);
   const R = side(e1, c[1], m);
   const T = side(e2, c[3], n);
   const Lf = side(e3, c[0], m);
-  const P00 = B[0],
-    P10 = B[n],
-    P11 = T[n],
-    P01 = T[0];
+  const P00 = B[0];
+  const P10 = B[n];
+  const P11 = T[n];
+  const P01 = T[0];
   // Blend weights are arc-length fractions along the bottom and right sides,
-  // as Gmsh's transfinite surface does (index fractions fold thin cells
-  // under strong grading).
+  // as Gmsh's transfinite surface does.
   const frac = (pts: Point2D[]) => {
-    const c = [0];
-    for (let k = 1; k < pts.length; k++)
-      c.push(c[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y));
-    const L = c[c.length - 1] || 1;
-    return c.map((x) => x / L);
+    const cum = cumLen(pts);
+    const L = cum[cum.length - 1] || 1;
+    return cum.map((x) => x / L);
   };
-  const U = frac(B),
-    V = frac(R);
+  const U = frac(B);
+  const V = frac(R);
   const grid: Point2D[][] = [];
   for (let j = 0; j <= m; j++) {
     const v = V[j];
     const row: Point2D[] = [];
     for (let i = 0; i <= n; i++) {
       const u = U[i];
-      const x =
-        (1 - v) * B[i].x +
-        v * T[i].x +
-        (1 - u) * Lf[j].x +
-        u * R[j].x -
-        ((1 - u) * (1 - v) * P00.x + u * (1 - v) * P10.x + u * v * P11.x + (1 - u) * v * P01.x);
-      const y =
-        (1 - v) * B[i].y +
-        v * T[i].y +
-        (1 - u) * Lf[j].y +
-        u * R[j].y -
-        ((1 - u) * (1 - v) * P00.y + u * (1 - v) * P10.y + u * v * P11.y + (1 - u) * v * P01.y);
-      row.push({ x, y });
+      row.push({
+        x:
+          (1 - v) * B[i].x +
+          v * T[i].x +
+          (1 - u) * Lf[j].x +
+          u * R[j].x -
+          ((1 - u) * (1 - v) * P00.x + u * (1 - v) * P10.x + u * v * P11.x + (1 - u) * v * P01.x),
+        y:
+          (1 - v) * B[i].y +
+          v * T[i].y +
+          (1 - u) * Lf[j].y +
+          u * R[j].y -
+          ((1 - u) * (1 - v) * P00.y + u * (1 - v) * P10.y + u * v * P11.y + (1 - u) * v * P01.y),
+      });
     }
     grid.push(row);
   }
   return grid;
 }
 
-const HALF_PI = Math.PI / 2;
+const DEG = 180 / Math.PI;
 
-/** Score one block's TFI grid. */
-export function scoreBlock(
+/** Pre-mesh one block and score its cells. */
+export function premeshBlock(
   bk: Blocking,
   blk: Block,
+  maxCells = 120,
   vm?: Map<string, Point2D>,
   em?: Map<string, BlockEdge>,
-): BlockScore {
-  const g = blockGrid(bk, blk, vm, em);
-  if (!g) return { mean: 1, worst: 1, wallWorst: 1, invalid: true, cost: 1e3 };
-  // Orientation from the whole block (shoelace over the boundary rows).
-  const m = g.length - 1,
-    n = g[0].length - 1;
-  let area = 0;
+): BlockPremesh | null {
+  const grid = blockGrid(bk, blk, maxCells, vm, em);
+  if (!grid) return null;
+  const m = grid.length - 1;
+  const n = grid[0].length - 1;
+  // Orientation of the whole block (shoelace over its boundary rows), so a
+  // block wound clockwise is not reported as folded.
   const ring = [
-    ...g[0],
-    ...g.slice(1).map((r) => r[n]),
-    ...[...g[m]].reverse().slice(1),
-    ...g
+    ...grid[0],
+    ...grid.slice(1).map((r) => r[n]),
+    ...[...grid[m]].reverse().slice(1),
+    ...grid
       .slice(1, -1)
       .map((r) => r[0])
       .reverse(),
   ];
+  let area = 0;
   for (let k = 0; k < ring.length; k++) {
-    const p = ring[k],
-      q = ring[(k + 1) % ring.length];
+    const p = ring[k];
+    const q = ring[(k + 1) % ring.length];
     area += p.x * q.y - q.x * p.y;
   }
   const sgn = area >= 0 ? 1 : -1;
-  const edges = em ?? new Map(bk.edges.map((e) => [e.id, e] as const));
-  const wall = blk.edges.map((id) => edges.get(id)?.patch === 'wall');
-  const atWall = (i: number, j: number) =>
-    (wall[0] && j === 0) ||
-    (wall[1] && i === n - 1) ||
-    (wall[2] && j === m - 1) ||
-    (wall[3] && i === 0);
-  let sum = 0,
-    sumHi = 0,
-    worst = 0,
-    wallWorst = 0,
-    invalid = false;
-  const quad = [0, 0, 0, 0].map(() => ({ x: 0, y: 0 }));
+  const det = new Float32Array(m * n);
+  const angle = new Float32Array(m * n);
+  let minDet = Infinity;
+  let minAngle = Infinity;
+  const q: Point2D[] = [grid[0][0], grid[0][0], grid[0][0], grid[0][0]];
   for (let j = 0; j < m; j++) {
     for (let i = 0; i < n; i++) {
-      quad[0] = g[j][i];
-      quad[1] = g[j][i + 1];
-      quad[2] = g[j + 1][i + 1];
-      quad[3] = g[j + 1][i];
-      let amin = Math.PI,
-        amax = 0;
+      q[0] = grid[j][i];
+      q[1] = grid[j][i + 1];
+      q[2] = grid[j + 1][i + 1];
+      q[3] = grid[j + 1][i];
+      let jmin = Infinity;
+      let jmax = -Infinity;
+      let amin = Math.PI;
       for (let k = 0; k < 4; k++) {
-        const a = quad[(k + 3) % 4],
-          p = quad[k],
-          b = quad[(k + 1) % 4];
-        const ux = a.x - p.x,
-          uy = a.y - p.y,
-          vx = b.x - p.x,
-          vy = b.y - p.y;
-        const cross = (vx * uy - vy * ux) * sgn; // > 0 for a convex corner of a positively oriented quad
-        const dot = ux * vx + uy * vy;
-        if (!(cross > 0)) invalid = true;
-        const ang = Math.atan2(Math.abs(cross), dot);
+        const a = q[(k + 3) % 4];
+        const p = q[k];
+        const b = q[(k + 1) % 4];
+        const ux = b.x - p.x;
+        const uy = b.y - p.y;
+        const vx = a.x - p.x;
+        const vy = a.y - p.y;
+        const cross = (ux * vy - uy * vx) * sgn;
+        if (cross < jmin) jmin = cross;
+        if (cross > jmax) jmax = cross;
+        const ang = Math.atan2(Math.abs(cross), ux * vx + uy * vy);
         if (ang < amin) amin = ang;
-        if (ang > amax) amax = ang;
       }
-      const eas = Math.max((amax - HALF_PI) / HALF_PI, (HALF_PI - amin) / HALF_PI);
-      sum += eas * eas;
-      sumHi += eas ** 8;
-      if (eas > worst) worst = eas;
-      if (eas > wallWorst && atWall(i, j)) wallWorst = eas;
+      const d = jmax > 0 ? jmin / jmax : -1;
+      const a = jmin > 0 ? amin * DEG : 0;
+      det[j * n + i] = d;
+      angle[j * n + i] = a;
+      if (d < minDet) minDet = d;
+      if (a < minAngle) minAngle = a;
     }
   }
-  const cells = m * n;
-  const mean = Math.sqrt(sum / cells);
-  // Mean square skew keeps the whole block good; the 8th-power term and the
-  // worst cell keep any single cell from being sacrificed for the average.
-  const cost = invalid ? 1e3 : sum / cells + (4 * sumHi) / cells + worst * worst;
-  return { mean, worst, wallWorst, invalid, cost };
+  return { blockId: blk.id, grid, det, angle, minDet, minAngle };
 }
 
-/** Score every block of a blocking. */
-export function scoreBlocking(bk: Blocking): BlockingScore {
+/** Pre-mesh every block. */
+export function premesh(bk: Blocking, maxCells = 120): BlockPremesh[] {
   const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
   const em = new Map(bk.edges.map((e) => [e.id, e] as const));
-  const blocks = new Map<string, BlockScore>();
-  let cost = 0,
-    mean = 0,
-    worst = 0,
-    wallWorst = 0,
-    invalid = 0;
+  const out: BlockPremesh[] = [];
   for (const blk of bk.blocks) {
-    const s = scoreBlock(bk, blk, vm, em);
-    blocks.set(blk.id, s);
-    cost += s.cost;
-    mean += s.mean;
-    worst = Math.max(worst, s.worst);
-    wallWorst = Math.max(wallWorst, s.wallWorst);
-    if (s.invalid) invalid++;
+    const p = premeshBlock(bk, blk, maxCells, vm, em);
+    if (p) out.push(p);
+  }
+  return out;
+}
+
+/** Summary of a pre-mesh against the ICEM targets. */
+export function premeshQuality(blocks: BlockPremesh[]): PremeshQuality {
+  let cells = 0;
+  let minDet = Infinity;
+  let minAngle = Infinity;
+  let lowDet = 0;
+  let lowAngle = 0;
+  let folded = 0;
+  let worst = Infinity;
+  let worstBlockId: string | null = null;
+  for (const b of blocks) {
+    cells += b.det.length;
+    for (let k = 0; k < b.det.length; k++) {
+      const d = b.det[k];
+      if (d <= 0) folded++;
+      else if (d < PREMESH_MIN_DET) lowDet++;
+      if (b.angle[k] < PREMESH_MIN_ANGLE) lowAngle++;
+    }
+    if (b.minDet < minDet) minDet = b.minDet;
+    if (b.minAngle < minAngle) minAngle = b.minAngle;
+    const s = Math.min(b.minDet / PREMESH_MIN_DET, b.minAngle / PREMESH_MIN_ANGLE);
+    if (s < worst) {
+      worst = s;
+      worstBlockId = b.blockId;
+    }
   }
   return {
-    cost,
-    mean: bk.blocks.length ? mean / bk.blocks.length : 0,
-    worst,
-    wallWorst,
-    invalid,
-    blocks,
+    cells,
+    minDet: cells ? minDet : 1,
+    minAngle: cells ? minAngle : 90,
+    lowDet,
+    lowAngle,
+    folded,
+    worstBlockId,
   };
 }

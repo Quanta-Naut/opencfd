@@ -524,84 +524,6 @@ export function mergeBlocks(bk: Blocking, idA: string, idB: string): Blocking | 
   return propagateNodeCounts(cleanBlocking(out));
 }
 
-// ── O-grid ──────────────────────────────────────────────────────────────────
-
-/**
- * ICEM "Split Block > O-grid Block" for one block: an inner block (the block
- * shrunk toward its centre by `scale`) plus four ring blocks joining it to the
- * original sides. The original sides are kept, so neighbours stay conformal.
- * Delete the inner block and associate its edges to a body to wrap that body.
- */
-export function ogridBlock(
-  bk: Blocking,
-  blockId: string,
-  scale = 0.5,
-  cellSize?: number,
-): Blocking | { error: string } {
-  const blk = bk.blocks.find((b) => b.id === blockId);
-  if (!blk) return { error: 'Block not found.' };
-  const lp = loopOf(bk, blk);
-  if (!lp) return { error: 'Only a clean 4-sided block can be O-gridded.' };
-  const s = Math.max(0.05, Math.min(0.95, scale));
-  const out = clone(bk);
-  const vm = new Map(bk.vertices.map((v) => [v.id, v.pt] as const));
-  const poly = blockPolygon(bk, blk);
-  const ctr = {
-    x: poly.reduce((a, p) => a + p.x, 0) / poly.length,
-    y: poly.reduce((a, p) => a + p.y, 0) / poly.length,
-  };
-  if (!pointInRing(ctr.x, ctr.y, poly))
-    return { error: 'The block is too bent to O-grid (its centre is outside it).' };
-  const em = new Map(bk.edges.map((e) => [e.id, e] as const));
-  const size = cellSize ?? scaleOfBk(bk) / 90;
-  const inner = lp.c.map((cid) => {
-    const p = vm.get(cid)!;
-    const v: BlockVertex = {
-      id: uid(),
-      pt: { x: ctr.x + s * (p.x - ctr.x), y: ctr.y + s * (p.y - ctr.y) },
-    };
-    out.vertices.push(v);
-    return v;
-  });
-  const radial = lp.c.map((cid, k) => {
-    const p = vm.get(cid)!;
-    const q = inner[k].pt;
-    const e: BlockEdge = {
-      id: uid(),
-      v0: cid,
-      v1: inner[k].id,
-      path: [],
-      law: 'uniform',
-      ratio: 1,
-      nodes: Math.max(4, Math.round(Math.hypot(q.x - p.x, q.y - p.y) / size) + 1),
-    };
-    out.edges.push(e);
-    return e;
-  });
-  const innerEdges = [0, 1, 2, 3].map((k) => {
-    const e: BlockEdge = {
-      id: uid(),
-      v0: inner[k].id,
-      v1: inner[(k + 1) % 4].id,
-      path: [],
-      law: 'uniform',
-      ratio: 1,
-      nodes: em.get(lp.e[k])!.nodes,
-    };
-    out.edges.push(e);
-    return e;
-  });
-  out.blocks = out.blocks.filter((b) => b.id !== blockId);
-  for (let k = 0; k < 4; k++) {
-    out.blocks.push({
-      id: uid(),
-      edges: [lp.e[k], radial[(k + 1) % 4].id, innerEdges[k].id, radial[k].id] as Block['edges'],
-    });
-  }
-  out.blocks.push({ id: uid(), edges: innerEdges.map((e) => e.id) as Block['edges'] });
-  return propagateNodeCounts(out);
-}
-
 // ── Check ───────────────────────────────────────────────────────────────────
 
 export interface BlockingCheck {
@@ -680,14 +602,22 @@ export function edgeGroup(bk: Blocking, edgeId: string): string[] {
 
 /**
  * ICEM "Pre-Mesh Params > Edge Params". Node count always applies to the whole
- * group (a structured grid needs it). Spacing law and ratio apply to this edge,
- * or with `copyParallel` to the whole group, flipping the ratio on edges that
- * run the other way so the fine end stays on the same side.
+ * group (a structured grid needs it). Law, ratio and end spacings apply to
+ * this edge, or with `copyParallel` to the whole group, flipped on edges that
+ * run the other way so the fine end stays on the same side. A spacing of 0
+ * clears that end.
  */
 export function setEdgeParams(
   bk: Blocking,
   edgeId: string,
-  p: { nodes?: number; law?: BlockEdge['law']; ratio?: number; copyParallel?: boolean },
+  p: {
+    nodes?: number;
+    law?: BlockEdge['law'];
+    ratio?: number;
+    spacing1?: number;
+    spacing2?: number;
+    copyParallel?: boolean;
+  },
 ): Blocking {
   const out = clone(bk);
   const group = new Set(edgeGroup(out, edgeId));
@@ -704,12 +634,18 @@ export function setEdgeParams(
     if (!group.has(e.id)) continue;
     if (p.nodes !== undefined) e.nodes = Math.max(2, Math.round(p.nodes));
     if (e.id === edgeId || p.copyParallel) {
+      const d = dir(e);
+      const same = e.id === edgeId || d.x * sd.x + d.y * sd.y >= 0;
       if (p.law !== undefined) e.law = p.law;
-      if (p.ratio !== undefined && p.ratio > 0) {
-        const d = dir(e);
-        const same = e.id === edgeId || d.x * sd.x + d.y * sd.y >= 0;
-        e.ratio = same ? p.ratio : 1 / p.ratio;
-      }
+      if (p.ratio !== undefined && p.ratio > 0) e.ratio = same ? p.ratio : 1 / p.ratio;
+      const set = (k: 'spacing1' | 'spacing2', v: number | undefined) => {
+        if (v === undefined) return;
+        const key = same ? k : k === 'spacing1' ? 'spacing2' : 'spacing1';
+        if (v > 0) e[key] = v;
+        else delete e[key];
+      };
+      set('spacing1', p.spacing1);
+      set('spacing2', p.spacing2);
     }
   }
   return out;

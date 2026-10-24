@@ -11,8 +11,7 @@ import {
   BoundaryTag,
   GeometryBBox,
 } from '../../types/cadWorkflow';
-import { Blocking, BlockKind } from '../../types/blocking';
-import type { BlockingReport } from '../../app/blockingRunner';
+import { Blocking } from '../../types/blocking';
 import { StageGate } from './leftStagePanel/StageGate';
 import { ResultsStagePanel } from './leftStagePanel/ResultsStagePanel';
 import { YPlusStagePanel } from './leftStagePanel/YPlusStagePanel';
@@ -32,7 +31,6 @@ interface LeftStagePanelProps {
   onGenerateMesh: () => void;
   onApplyYPlusToMesh: () => void;
   onDirectionColors?: (colors: Record<string, string> | null) => void;
-  onBlockModeChange?: (mode: 'auto' | 'manual') => void;
   meshData?: any;
   meshError?: string | null;
   meshStale?: boolean;
@@ -102,19 +100,9 @@ interface LeftStagePanelProps {
 
   // ── Structured meshing (H-block transfinite) ──
   blocking?: Blocking | null;
-  onBuildBlocks?: (kind: BlockKind) => void;
   onInitializeBlocking?: () => void;
-  blockingReport?: BlockingReport | null;
-  onOptimizeBlocks?: () => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
   onGenerateStructuredMesh?: () => void;
-  ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
-  onWrapBody?: (bodyIndex: number) => void;
-  ogridParams?: { offsetFactor: number; radialNodes: number; radialRatio: number };
-  onUpdateOgridParams?: (
-    p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>,
-  ) => void;
-  structuredHint?: BlockKind;
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
   meshTopology?: 'unstructured' | 'structured';
@@ -137,7 +125,6 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   onGenerateMesh,
   onApplyYPlusToMesh,
   onDirectionColors,
-  onBlockModeChange,
   meshData,
   meshError,
   meshStale,
@@ -200,17 +187,9 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   onSelectStage,
   stageStatus,
   blocking,
-  onBuildBlocks,
-  blockingReport,
-  onOptimizeBlocks,
   onInitializeBlocking,
   onUpdateBlocking,
   onGenerateStructuredMesh,
-  ogridBodies,
-  onWrapBody,
-  ogridParams,
-  onUpdateOgridParams,
-  structuredHint,
   structuredSmooth,
   setStructuredSmooth,
   meshTopology = 'unstructured',
@@ -402,22 +381,13 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
           setMeshTopology,
           meshTopology,
           blocking,
-          onBuildBlocks,
-          blockingReport,
-          onOptimizeBlocks,
           onInitializeBlocking,
           onUpdateBlocking,
-          ogridBodies,
-          onWrapBody,
-          ogridParams,
-          onUpdateOgridParams,
-          structuredHint,
           structuredSmooth,
           setStructuredSmooth,
           updateYPlus,
           onApplyYPlusToMesh,
           onDirectionColors,
-          onBlockModeChange,
           yplusDraft,
           commitYplusDraft,
           normalizeYplusDraft,

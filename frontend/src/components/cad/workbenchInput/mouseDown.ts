@@ -12,15 +12,7 @@ import {
   GeometryBBox,
   createDomainEntity,
 } from '../../../types/cadWorkflow';
-import {
-  Blocking,
-  pickEdge,
-  blockAt,
-  currentCellSize,
-  mergeVertices,
-  mergeBlocks,
-  ogridBlock,
-} from '../../../types/blocking';
+import { Blocking, pickEdge, blockAt, mergeVertices, mergeBlocks } from '../../../types/blocking';
 import type { CadTool } from '../workbenchCore';
 
 /** Canvas mouse down: starts pans, drags, marquees and block-editor picks. */
@@ -56,7 +48,10 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
     blocking,
     deleteBlockById,
     applyBlockOp,
-    ogridScale,
+    ogridSel,
+    setOgridSel,
+    setOgridPass,
+    setSelectedVertexId,
     zoom,
     blockPick,
     setBlockPick,
@@ -127,12 +122,23 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
       const id = blockAt(blocking, raw);
       if (id) deleteBlockById(id);
     } else if (blockTool === 'ogrid' && blocking) {
-      const id = blockAt(blocking, raw);
-      if (id) {
-        applyBlockOp(
-          ogridBlock(blocking, id, ogridScale, currentCellSize(blocking)),
-          'O-grid added.',
+      // An edge on the outside of the picked blocks toggles pass-through
+      // (ICEM "add faces"); anywhere else toggles the block under the cursor.
+      const uses = new Map<string, number>();
+      for (const b of blocking.blocks)
+        if (ogridSel.includes(b.id))
+          for (const id of b.edges) uses.set(id, (uses.get(id) ?? 0) + 1);
+      const hit = ogridSel.length ? pickEdge(blocking, raw, 7 / zoom) : null;
+      if (hit && uses.get(hit.edgeId) === 1) {
+        setOgridPass((p) =>
+          p.includes(hit.edgeId) ? p.filter((x) => x !== hit.edgeId) : [...p, hit.edgeId],
         );
+      } else {
+        const id = blockAt(blocking, raw);
+        if (id) {
+          setOgridSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+          setOgridPass([]);
+        }
       }
     } else if (blockTool === 'mergeV' && blocking) {
       let vid: string | null = null;
@@ -209,6 +215,7 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
       const hit = pickEdge(blocking, raw, 6 / zoom);
       setSelectedEdgeId(hit?.edgeId ?? null);
       setSelectedBlockId(hit ? null : blockAt(blocking, raw));
+      setSelectedVertexId(null);
     }
   }
 
@@ -330,7 +337,10 @@ export interface MouseDownContext {
   blocking: Blocking;
   deleteBlockById: (id: string) => void;
   applyBlockOp: (res: Blocking | { error: string } | null, okText: string) => boolean;
-  ogridScale: number;
+  ogridSel: string[];
+  setOgridSel: React.Dispatch<React.SetStateAction<string[]>>;
+  setOgridPass: React.Dispatch<React.SetStateAction<string[]>>;
+  setSelectedVertexId: React.Dispatch<React.SetStateAction<string | null>>;
   zoom: number;
   blockPick: string;
   setBlockPick: React.Dispatch<React.SetStateAction<string>>;

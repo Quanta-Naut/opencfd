@@ -34,6 +34,14 @@ import {
   initializeBlocking,
   associateEdges,
   snapProjectVertices,
+  premesh,
+  premeshQuality,
+  spacingJumps,
+  ogridBlocks,
+  applyVertexMove,
+  vertexHome,
+  constrainToHome,
+  vertexMoveKeepsBlocksValid,
 } from '../../types/blocking';
 import { useMeshGL, type MeshGLScene } from './useMeshGL';
 import { useResolvedTheme } from '../../utils/theme';
@@ -137,7 +145,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   showBlocking = false,
   blocksBuiltTick = 0,
   directionColors = null,
-  blockMode = 'auto',
   isTransient = false,
   transientTimes = [],
   transientFrameIndex = 0,
@@ -788,12 +795,6 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [blockTool, setBlockTool] = useState<
     'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc'
   >('select');
-  // Leaving Manual mode must drop any mid-edit tool - otherwise a leftover
-  // 'draw'/'split'/... tool keeps intercepting clicks on the Automatic canvas
-  // even with its own toolbar hidden.
-  useEffect(() => {
-    if (blockMode !== 'manual') setBlockTool('select');
-  }, [blockMode]);
   // ICEM-style tools: the first pick of a two-pick tool (merge vertices /
   // blocks), the edge selection + stage of Associate, the curve under the
   // cursor, the edge whose params are being edited, and the O-grid size.
@@ -804,6 +805,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [ogridScale, setOgridScale] = useState(0.5);
+  // O-grid tool: the blocks it wraps and the outline edges it passes through.
+  const [ogridSel, setOgridSel] = useState<string[]>([]);
+  const [ogridPass, setOgridPass] = useState<string[]>([]);
+  const [selectedVertexId, setSelectedVertexId] = useState<string | null>(null);
+  // ICEM "Pre-Mesh": the grid each block will produce, drawn over the blocks.
+  const [showPremesh, setShowPremesh] = useState(false);
   const [blockDrawPts, setBlockDrawPts] = useState<Point2D[]>([]);
   const [blockCursor, setBlockCursor] = useState<Point2D | null>(null);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
@@ -873,6 +880,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setAssocEdges([]);
       setAssocStage('edges');
       setSelectedEdgeId(null);
+      setSelectedVertexId(null);
+      setOgridSel([]);
+      setOgridPass([]);
     }
   }, [showBlocking]);
   useEffect(() => {
@@ -880,11 +890,17 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setSelectedBlockId(null);
     if (selectedEdgeId && !blocking?.edges.some((e) => e.id === selectedEdgeId))
       setSelectedEdgeId(null);
+    if (selectedVertexId && !blocking?.vertices.some((v) => v.id === selectedVertexId))
+      setSelectedVertexId(null);
+    if (ogridSel.some((id) => !blocking?.blocks.some((b) => b.id === id))) {
+      setOgridSel([]);
+      setOgridPass([]);
+    }
     if (assocEdges.length && blocking) {
       const live = assocEdges.filter((id) => blocking.edges.some((e) => e.id === id));
       if (live.length !== assocEdges.length) setAssocEdges(live);
     }
-  }, [blocking, selectedBlockId, selectedEdgeId, assocEdges]);
+  }, [blocking, selectedBlockId, selectedEdgeId, selectedVertexId, assocEdges, ogridSel]);
   // Switching tools drops any half-finished pick.
   useEffect(() => {
     setBlockPick(null);
@@ -894,8 +910,27 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setAssocEdges([]);
       setAssocStage('edges');
     }
-    if (blockTool !== 'select') setSelectedEdgeId(null);
+    if (blockTool !== 'select') {
+      setSelectedEdgeId(null);
+      setSelectedVertexId(null);
+    }
+    if (blockTool !== 'ogrid') {
+      setOgridSel([]);
+      setOgridPass([]);
+    }
   }, [blockTool]);
+
+  // Pre-mesh and its ICEM quality, plus spacing jumps across block joins:
+  // the live checks the block editor shows while the blocks are edited.
+  const blockPremesh = useMemo(
+    () => (blocking?.blocks.length && showBlocking ? premesh(blocking, 80) : []),
+    [blocking, showBlocking],
+  );
+  const premeshQ = useMemo(() => premeshQuality(blockPremesh), [blockPremesh]);
+  const blockSpacingJumps = useMemo(
+    () => (blocking?.blocks.length && showBlocking ? spacingJumps(blocking) : []),
+    [blocking, showBlocking],
+  );
 
   const domainRing = useMemo<Point2D[]>(() => {
     const dom = cadState.entities.find((e) => e.role === 'domain_boundary');
@@ -1092,6 +1127,47 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       setBlockMsg({ text: `Block deleted. ${next.blocks.length} left.`, error: false });
     },
     [blocking, onUpdateBlocking],
+  );
+
+  /** O-grid tool: wrap the picked blocks, passing through the picked edges. */
+  const applyOgrid = useCallback(() => {
+    if (!blocking || !ogridSel.length) return;
+    const res = ogridBlocks(
+      blocking,
+      ogridSel,
+      ogridPass,
+      ogridScale,
+      blocking.edges.length ? currentCellSize(blocking) : undefined,
+    );
+    const kind = !ogridPass.length ? 'O-grid' : ogridPass.length === 1 ? 'C-grid' : 'O-grid';
+    if (applyBlockOp(res, `${kind} built around ${ogridSel.length} block${ogridSel.length > 1 ? 's' : ''}.`)) {
+      setOgridSel([]);
+      setOgridPass([]);
+    }
+  }, [blocking, ogridSel, ogridPass, ogridScale, applyBlockOp]);
+
+  /** ICEM "Move Vertices > Set Location": put a vertex at typed coordinates,
+   *  kept on the geometry it is attached to. */
+  const setVertexLocation = useCallback(
+    (vid: string, pt: Point2D) => {
+      if (!blocking || !onUpdateBlocking) return;
+      const v = blocking.vertices.find((x) => x.id === vid);
+      if (!v) return;
+      const home = v.curves?.length ? undefined : vertexHome(v.pt, blockOutlines, blockTag);
+      if (home?.kind === 'point') {
+        setBlockMsg({ text: 'This vertex is fixed to a geometry point.', error: true });
+        return;
+      }
+      const target = (home && constrainToHome(home, pt)) ?? pt;
+      const next = applyVertexMove(blocking, vid, target, cadState.entities);
+      if (!vertexMoveKeepsBlocksValid(blocking, next, vid)) {
+        setBlockMsg({ text: 'That location would fold a block.', error: true });
+        return;
+      }
+      onUpdateBlocking(next);
+      setBlockMsg({ text: 'Vertex moved.', error: false });
+    },
+    [blocking, onUpdateBlocking, blockOutlines, blockTag, cadState.entities],
   );
 
   const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null);
@@ -1314,6 +1390,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       hoveredBlockIdx,
       hoveredBlockVtx,
       blockVertexKinds,
+      blockPremesh,
+      showPremesh,
+      blockSpacingJumps,
+      ogridSel,
+      ogridPass,
+      selectedVertexId,
       hoveredDomainHandle,
       hoveredEdgeKey,
       hoverEdgeId,
@@ -1382,6 +1464,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     directionColors,
     hoveredBlockVtx,
     blockVertexKinds,
+    blockPremesh,
+    showPremesh,
+    blockSpacingJumps,
+    ogridSel,
+    ogridPass,
+    selectedVertexId,
     hoveredBlockIdx,
     hoveredVertex,
     meshOnly,
@@ -1570,7 +1658,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         blocking,
         deleteBlockById,
         applyBlockOp,
-        ogridScale,
+        ogridSel,
+        setOgridSel,
+        setOgridPass,
+        setSelectedVertexId,
         zoom,
         blockPick,
         setBlockPick,
@@ -1617,7 +1708,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       splitAtHover,
       deleteBlockById,
       applyBlockOp,
-      ogridScale,
+      ogridSel,
       blockPick,
       assocStage,
       assocEdges,
@@ -1636,6 +1727,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         setPan,
         blockDrag,
         blockSnapGuides,
+        setSelectedVertexId,
+        setSelectedEdgeId,
+        setSelectedBlockId,
         blocking,
         onUpdateBlocking,
         setCmdText,
@@ -1889,6 +1983,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         blockTool,
         selectedBlockId,
         deleteBlockById,
+        ogridSel,
+        setOgridSel,
+        setOgridPass,
+        applyOgrid,
+        setShowPremesh,
         isDrawing,
         tempPts,
         setIsDrawing,
@@ -1929,6 +2028,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       assocStage,
       assocEdges,
       blockTool,
+      ogridSel,
+      applyOgrid,
     ],
   );
 
@@ -2392,24 +2493,42 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             displayOnly,
             showBlocking,
             canvasMode,
-            blockMode,
             onUpdateBlocking,
-            selectedEdgeId,
             blocking,
             cadState,
+            blockTool,
             setBlockTool,
             setBlockDrawPts,
+            blockDrawCount: blockDrawPts.length,
+            blockPick,
+            blockMsg,
             setBlockMsg,
-            blockTool,
             initializeBlocks,
             snapProject,
-            blockMsg,
+            undo: () => void undoBlocking(),
+            redo: () => void redoBlocking(),
+            showPremesh,
+            setShowPremesh,
+            ogridSel,
+            setOgridSel,
+            ogridPass,
+            setOgridPass,
             ogridScale,
             setOgridScale,
+            applyOgrid,
             assocStage,
-            assocEdges,
             setAssocStage,
+            assocEdges,
             setAssocEdges,
+            selectedEdgeId,
+            selectedVertexId,
+            selectedBlockId,
+            blockVertexKinds,
+            blockPremesh,
+            premeshQ,
+            blockSpacingJumps,
+            setVertexLocation,
+            deleteBlockById,
             unpatchedEdgeIds,
             badBlockIds,
             outsideBlockIds,

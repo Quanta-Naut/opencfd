@@ -17,19 +17,9 @@ export { resampleOpen, entityRing } from './geometry';
 
 export { reprojectEdgePath, applyVertexMove } from './edgeOps';
 
-export {
-  outlineRing,
-  autoBlockingFromOutline,
-  singleBlockFromOutline,
-  stripDecomposition,
-  makeTagLookup,
-} from './autoBlock';
+export { outlineRing, makeTagLookup } from './autoBlock';
 
 export { blockCornerIds, blockPolygon, splitBlock, deleteBlock, splitSheet } from './blockEdit';
-
-export { bodiesForOgrid, wrapBodyOgrid } from './ogrid';
-
-export { airfoilsForCGrid, cGridFromAirfoil, wrapAirfoilOgrid } from './cgrid';
 
 export {
   cleanBlocking,
@@ -76,13 +66,11 @@ export {
   constrainToCurves,
   mergeVertices,
   mergeBlocks,
-  ogridBlock,
   checkBlocking,
   edgeGroup,
   setEdgeParams,
 } from './hexa';
 export * from './quality';
-export * from './optimize';
-export * from './templates';
-export * from './engine';
 export * from './stations';
+export { ogridBlocks } from './ogridAround';
+export * from './spacing';

@@ -15,6 +15,9 @@ export function onMouseUp(e: React.MouseEvent, wb: MouseUpContext) {
     setPan,
     blockDrag,
     blockSnapGuides,
+    setSelectedVertexId,
+    setSelectedEdgeId,
+    setSelectedBlockId,
     blocking,
     onUpdateBlocking,
     setCmdText,
@@ -43,12 +46,18 @@ export function onMouseUp(e: React.MouseEvent, wb: MouseUpContext) {
 
   if (blockDrag.current) {
     const moved = Boolean(blockDrag.current.recorded);
+    const vid = blockDrag.current.vid;
     blockDrag.current = null;
     blockSnapGuides.current = [];
     if (moved && blocking && onUpdateBlocking) {
       onUpdateBlocking(cleanBlocking(propagateNodeCounts(blocking)));
+      setCmdText('Block vertex moved.');
+    } else {
+      // A click without a drag selects the vertex (Set Location in the inspector).
+      setSelectedVertexId(vid);
+      setSelectedEdgeId(null);
+      setSelectedBlockId(null);
     }
-    setCmdText('Block corner moved.');
     return;
   }
 
@@ -131,6 +140,9 @@ export interface MouseUpContext {
   pendingPanRef: React.RefObject<Point2D>;
   setPan: React.Dispatch<React.SetStateAction<Point2D>>;
   blockDrag: React.RefObject<BlockDragState>;
+  setSelectedVertexId: React.Dispatch<React.SetStateAction<string | null>>;
+  setSelectedEdgeId: React.Dispatch<React.SetStateAction<string>>;
+  setSelectedBlockId: React.Dispatch<React.SetStateAction<string>>;
   blockSnapGuides: React.RefObject<{ a: Point2D; b: Point2D }[]>;
   blocking: Blocking;
   onUpdateBlocking: (bk: Blocking | null) => void;

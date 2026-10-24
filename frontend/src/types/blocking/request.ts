@@ -1,11 +1,12 @@
 import { Blocking, StructuredMeshRequest } from './types';
 import { resampleOpen } from './geometry';
-import { projectedStations } from './stations';
+import { edgeStations } from './stations';
 
 export function toStructuredRequest(bk: Blocking): StructuredMeshRequest {
   const vmap = new Map(bk.vertices.map((v) => [v.id, v.pt]));
   const emap = new Map(bk.edges.map((e, i) => [e.id, i]));
   const byId = new Map(bk.edges.map((e) => [e.id, e] as const));
+  const nodes = (e: { nodes: number }) => Math.max(2, Math.round(e.nodes));
   return {
     edges: bk.edges.map((e) => {
       const a = vmap.get(e.v0)!;
@@ -16,14 +17,17 @@ export function toStructuredRequest(bk: Blocking): StructuredMeshRequest {
         const resampled = resampleOpen(fullChain, 50);
         pathPts = resampled.slice(1, -1);
       }
-      const src = e.match ? byId.get(e.match) : undefined;
-      const stations = src ? projectedStations(src, e, vmap) : null;
+      // Laws the backend has no formula for go as explicit node stations.
+      const explicit = e.law === 'tanh' || !!(e.match && byId.has(e.match));
+      const stations = explicit
+        ? edgeStations(bk, { ...e, nodes: nodes(e) }, Infinity, vmap, byId)
+        : null;
       return {
         ...(stations ? { stations } : {}),
         p0: [a.x, a.y] as [number, number],
         p1: [b.x, b.y] as [number, number],
         path: pathPts.map((p) => [p.x, p.y] as [number, number]),
-        nodes: Math.max(2, Math.round(e.nodes)),
+        nodes: nodes(e),
         law: e.law,
         ratio: e.ratio,
         patch: e.patch,

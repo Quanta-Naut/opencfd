@@ -10,7 +10,7 @@ import type {
   CadEntity,
   GeometryBBox,
 } from '../../../types/cadWorkflow';
-import type { Blocking, VertexKind } from '../../../types/blocking';
+import type { Blocking, BlockPremesh, SpacingJump, VertexKind } from '../../../types/blocking';
 import type { CadTool, CanvasPalette, Snap } from '../workbenchCore';
 
 /** Per-frame drawing context shared by every pass. */
@@ -63,6 +63,15 @@ export interface DrawScene {
   hoverCurveId: string;
   hoveredBlockIdx: number;
   hoveredBlockVtx: string;
+  /** ICEM pre-mesh of every block, and whether to draw it. */
+  blockPremesh: BlockPremesh[];
+  showPremesh: boolean;
+  /** Vertices where cell size jumps across a block join. */
+  blockSpacingJumps: SpacingJump[];
+  /** O-grid tool picks: blocks to wrap and outline edges to pass through. */
+  ogridSel: string[];
+  ogridPass: string[];
+  selectedVertexId: string | null;
   /** Drag behaviour per block vertex, for its marker. */
   blockVertexKinds: Map<string, VertexKind>;
   hoveredDomainHandle: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial';

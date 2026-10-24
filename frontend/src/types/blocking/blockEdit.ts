@@ -123,8 +123,9 @@ export function splitAllAt(bk: Blocking, axis: 'x' | 'y', value: number): Blocki
     const mid = vid(p);
     const cut = cutAlong(edgeId);
     const keep = { patch: e.patch, nodes: e.nodes, law: e.law, ratio: e.ratio, curveId: e.curveId, curves: e.curves };
-    const e0: BlockEdge = { id: uid(), v0: e.v0, v1: mid, path: cut?.before ?? [], ...keep };
-    const e1: BlockEdge = { id: uid(), v0: mid, v1: e.v1, path: cut?.after ?? [], ...keep };
+    // Each half keeps the end spacing of the end it still has.
+    const e0: BlockEdge = { id: uid(), v0: e.v0, v1: mid, path: cut?.before ?? [], ...keep, ...(e.spacing1 ? { spacing1: e.spacing1 } : {}) };
+    const e1: BlockEdge = { id: uid(), v0: mid, v1: e.v1, path: cut?.after ?? [], ...keep, ...(e.spacing2 ? { spacing2: e.spacing2 } : {}) };
     out.edges.push(e0, e1);
     const res: [string, string] = [e0.id, e1.id];
     splitCache.set(edgeId, res);
@@ -222,11 +223,17 @@ export function deleteBlock(bk: Blocking, blockId: string): Blocking {
  * reaches an edge only one block uses (the domain boundary, or a hole whose
  * block was removed). Only that one sheet of blocks is split, unlike
  * `splitAllAt`, whose straight line cuts every block it passes on its way
- * across the domain. `skipBlockId` is a block on the starting edge's other
- * side that the caller is about to replace, so the sheet runs away from it.
+ * across the domain. `skip` is the block (or blocks) on the starting edge's
+ * other side that the caller is about to replace, so the sheet runs away from it.
  * Returns null if a block on the way is not a clean quad.
  */
-export function splitSheet(bk: Blocking, edgeId: string, p: Point2D, skipBlockId?: string): Blocking | null {
+export function splitSheet(
+  bk: Blocking,
+  edgeId: string,
+  p: Point2D,
+  skip?: string | Set<string>,
+): Blocking | null {
+  const skipped = (id: string) => (typeof skip === 'string' ? id === skip : !!skip?.has(id));
   const out: Blocking = {
     vertices: bk.vertices.map((v) => ({ ...v, pt: { ...v.pt } })),
     edges: bk.edges.map((e) => ({ ...e, path: e.path.map((q) => ({ ...q })) })),
@@ -280,10 +287,12 @@ export function splitSheet(bk: Blocking, edgeId: string, p: Point2D, skipBlockId
     const h0: BlockEdge = {
       id: uid(), v0: e.v0, v1: mid, nodes: Math.max(2, Math.round(e.nodes * t)),
       path: pts.slice(1, i + 1).filter((q) => Math.hypot(q.x - m.x, q.y - m.y) > 1e-9).map((q) => ({ ...q })), ...keep,
+      ...(e.spacing1 ? { spacing1: e.spacing1 } : {}),
     };
     const h1: BlockEdge = {
       id: uid(), v0: mid, v1: e.v1, nodes: Math.max(2, Math.round(e.nodes * (1 - t))),
       path: pts.slice(i + 1, -1).filter((q) => Math.hypot(q.x - m.x, q.y - m.y) > 1e-9).map((q) => ({ ...q })), ...keep,
+      ...(e.spacing2 ? { spacing2: e.spacing2 } : {}),
     };
     out.edges.push(h0, h1);
     em.set(h0.id, h0); em.set(h1.id, h1);
@@ -298,7 +307,7 @@ export function splitSheet(bk: Blocking, edgeId: string, p: Point2D, skipBlockId
   if (t0 <= 1e-6 || t0 >= 1 - 1e-6) return null;
   // Walk away from the starting edge through every block on it (both sides,
   // unless one is skipped), each walk ending at the boundary.
-  const firsts = out.blocks.filter((b) => b.id !== skipBlockId && b.edges.includes(start.id)).map((b) => b.id);
+  const firsts = out.blocks.filter((b) => !skipped(b.id) && b.edges.includes(start.id)).map((b) => b.id);
   splitAt(start, t0);
   for (const firstId of firsts) {
     let cur: BlockEdge = start, t = t0, blkId: string | undefined = firstId;
@@ -329,7 +338,7 @@ export function splitSheet(bk: Blocking, edgeId: string, p: Point2D, skipBlockId
       out.blocks.push({ id: uid(), edges: side1 }, { id: uid(), edges: side2 });
       cur = opp;
       t = tOpp;
-      blkId = out.blocks.find((b) => b.id !== skipBlockId && b.edges.includes(opp.id))?.id;
+      blkId = out.blocks.find((b) => !skipped(b.id) && b.edges.includes(opp.id))?.id;
     }
   }
   // A split edge stays only if a block still uses it: the skipped block keeps

@@ -23,7 +23,7 @@ import {
 import { setThemePreference, toggleTheme } from '../utils/theme';
 import { Command } from '../components/ui/CommandPalette';
 import { MOD_LABEL } from '../utils/platform';
-import { Blocking, BlockKind } from '../types/blocking';
+import { Blocking } from '../types/blocking';
 
 /** Every command in the command palette (navigation, actions, view, theme). */
 export function buildCommands(wb: CommandsContext): Command[] {
@@ -33,7 +33,7 @@ export function buildCommands(wb: CommandsContext): Command[] {
     isMeshing,
     handleGenerateMesh,
     blocking,
-    handleBuildBlocks,
+    handleInitializeBlocking,
     handleGenerateStructuredMesh,
     handleApplyYPlusToMesh,
     requestDownloadBlockMeshDictRef,
@@ -108,28 +108,12 @@ export function buildCommands(wb: CommandsContext): Command[] {
       run: handleGenerateMesh,
     },
     {
-      id: 'mesh-blocks-h',
+      id: 'mesh-blocks-init',
       group: 'Mesh',
-      title: 'Build Structured Blocks · H-grid',
-      keywords: 'blocking hexa structured',
+      title: 'Initialize Blocking',
+      keywords: 'blocking hexa structured icem block',
       icon: <Layers className="w-4 h-4" />,
-      run: () => handleBuildBlocks('hgrid'),
-    },
-    {
-      id: 'mesh-blocks-o',
-      group: 'Mesh',
-      title: 'Build Structured Blocks · O-grid',
-      keywords: 'blocking ring body',
-      icon: <Layers className="w-4 h-4" />,
-      run: () => handleBuildBlocks('ogrid'),
-    },
-    {
-      id: 'mesh-blocks-c',
-      group: 'Mesh',
-      title: 'Build Structured Blocks · C-grid',
-      keywords: 'blocking airfoil wake',
-      icon: <Layers className="w-4 h-4" />,
-      run: () => handleBuildBlocks('cgrid'),
+      run: handleInitializeBlocking,
     },
     {
       id: 'mesh-structured-generate',
@@ -268,7 +252,7 @@ export interface CommandsContext {
   isMeshing: boolean;
   handleGenerateMesh: () => Promise<void>;
   blocking: Blocking;
-  handleBuildBlocks: (kind: BlockKind) => void;
+  handleInitializeBlocking: () => void;
   handleGenerateStructuredMesh: () => Promise<void>;
   handleApplyYPlusToMesh: () => void;
   requestDownloadBlockMeshDictRef: React.RefObject<() => void>;

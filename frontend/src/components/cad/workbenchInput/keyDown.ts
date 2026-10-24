@@ -27,6 +27,11 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
     blockTool,
     selectedBlockId,
     deleteBlockById,
+    ogridSel,
+    setOgridSel,
+    setOgridPass,
+    applyOgrid,
+    setShowPremesh,
     isDrawing,
     tempPts,
     setIsDrawing,
@@ -70,10 +75,15 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
       if (e.key === 'Escape') {
         if (blockDrawPts.length) setBlockDrawPts([]);
         else if (blockPick) setBlockPick(null);
-        else if (assocStage === 'curve') setAssocStage('edges');
+        else if (ogridSel.length) {
+          setOgridSel([]);
+          setOgridPass([]);
+        } else if (assocStage === 'curve') setAssocStage('edges');
         else if (assocEdges.length) setAssocEdges([]);
         else setBlockTool('select');
         setBlockMsg(null);
+      } else if (e.key === 'Enter' && blockTool === 'ogrid' && ogridSel.length) {
+        applyOgrid();
       } else if (
         e.key === 'Enter' &&
         blockTool === 'assoc' &&
@@ -94,6 +104,7 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
       else if (k === 'm') setBlockTool('mergeV');
       else if (k === 'j') setBlockTool('mergeB');
       else if (k === 'a') setBlockTool('assoc');
+      else if (k === 'p') setShowPremesh((v) => !v);
     }
     return;
   }
@@ -229,6 +240,11 @@ export interface KeyDownContext {
   blockTool: 'select' | 'draw' | 'split' | 'delete' | 'ogrid' | 'mergeV' | 'mergeB' | 'assoc';
   selectedBlockId: string;
   deleteBlockById: (id: string) => void;
+  ogridSel: string[];
+  setOgridSel: React.Dispatch<React.SetStateAction<string[]>>;
+  setOgridPass: React.Dispatch<React.SetStateAction<string[]>>;
+  applyOgrid: () => void;
+  setShowPremesh: React.Dispatch<React.SetStateAction<boolean>>;
   isDrawing: boolean;
   tempPts: Point2D[];
   setIsDrawing: React.Dispatch<React.SetStateAction<boolean>>;

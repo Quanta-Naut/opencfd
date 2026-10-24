@@ -3,14 +3,7 @@ import { CFDProjectState } from '../types/cfd';
 import { generateMesh, generateStructuredMesh } from '../utils/api';
 import { toast } from '../components/ui/Toast';
 import { FlowType, BoundaryTag, CadEntity } from '../types/cadWorkflow';
-import {
-  Blocking,
-  BlockKind,
-  KIND_KEYS,
-  propagateNodeCounts,
-  toStructuredRequest,
-} from '../types/blocking';
-import { runBlockingJob, BlockingReport } from './blockingRunner';
+import { Blocking, propagateNodeCounts, toStructuredRequest } from '../types/blocking';
 
 const fmtCount = (n: number) => (n ?? 0).toLocaleString();
 
@@ -165,103 +158,6 @@ export interface GenerateMeshContext {
   geomSigCore: string;
   makeCaseFiles: () => Promise<any>;
   setCaseFiles: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-}
-
-/** Build an automatic blocking: every topology of the chosen family is tried,
- *  shape-optimized and scored in a worker, and the best one is kept. */
-export async function runBuildBlocks(kind: BlockKind, wb: BuildBlocksContext) {
-  const { setBlocksBuiltTick, cadEntities, bodyPatchFor, setBlocking, edgeTagMap, ogridParams } =
-    wb;
-  setBlocksBuiltTick((t) => t + 1); // reveal the Blocks view
-  const bodyPatches: Record<string, BoundaryTag> = {};
-  for (const e of cadEntities)
-    if (e.role !== 'domain_boundary' && e.layer !== 'construction')
-      bodyPatches[e.id] = bodyPatchFor(e.id);
-  const h = wb.firstCellMm;
-  const id = toast.loading('Building blocks', { progress: 0, description: 'Trying topologies' });
-  try {
-    const report = await runBlockingJob(
-      {
-        kind: 'auto',
-        entities: cadEntities,
-        edgeTagMap,
-        bodyPatches,
-        options: {
-          keys: KIND_KEYS[kind],
-          firstCellHeight: h && h > 0 ? h / 1000 : undefined,
-          growth: wb.growth,
-          ogrid: ogridParams,
-        },
-      },
-      {
-        progress: (p, label) => toast.update(id, { progress: p * 100, description: label }),
-        snapshot: (bk) => setBlocking(bk),
-      },
-    );
-    if (!report) {
-      toast.dismiss(id);
-      return;
-    }
-    setBlocking(report.blocking);
-    wb.setReport?.(report);
-    const n = report.blocking.blocks.length;
-    toast.success(`${report.label}: ${n} block${n > 1 ? 's' : ''}`, {
-      id,
-      description: `Wall skew ${report.quality.wallWorst.toFixed(2)}, worst ${report.quality.worst.toFixed(2)}`,
-    });
-  } catch (err) {
-    toast.error('Could not block this geometry', {
-      id,
-      description: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-/** Re-run the shape optimizer on the current blocking (after manual edits). */
-export async function runOptimizeBlocking(
-  blocking: Blocking,
-  wb: Pick<BuildBlocksContext, 'cadEntities' | 'edgeTagMap' | 'setBlocking' | 'setReport'>,
-) {
-  const id = toast.loading('Optimizing block shapes', { progress: 0 });
-  try {
-    const report = await runBlockingJob(
-      { kind: 'optimize', entities: wb.cadEntities, edgeTagMap: wb.edgeTagMap, blocking },
-      {
-        progress: (p) => toast.update(id, { progress: p * 100 }),
-        snapshot: (bk) => wb.setBlocking(bk),
-      },
-    );
-    if (!report) {
-      toast.dismiss(id);
-      return;
-    }
-    wb.setBlocking(report.blocking);
-    wb.setReport?.(report);
-    toast.success('Block shapes optimized', {
-      id,
-      description: `Wall skew ${report.quality.wallWorst.toFixed(2)}, worst ${report.quality.worst.toFixed(2)}`,
-    });
-  } catch (err) {
-    wb.setBlocking(blocking);
-    toast.error('Optimization failed', {
-      id,
-      description: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-/** What runBuildBlocks reads from the workbench component. */
-export interface BuildBlocksContext {
-  setBlocksBuiltTick: React.Dispatch<React.SetStateAction<number>>;
-  cadEntities: CadEntity[];
-  bodyPatchFor: (entId: string) => any;
-  setBlocking: React.Dispatch<React.SetStateAction<Blocking>>;
-  edgeTagMap: Record<string, BoundaryTag>;
-  ogridParams: { offsetFactor: number; radialNodes: number; radialRatio: number };
-  /** y+ first-cell height (mm) and growth, for wall clustering. */
-  firstCellMm?: number;
-  growth?: number;
-  setReport?: (r: BlockingReport | null) => void;
 }
 
 /** Generate the structured mesh from the current blocking. */

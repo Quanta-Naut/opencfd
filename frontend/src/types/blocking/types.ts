@@ -1,6 +1,9 @@
 import { Point2D, BoundaryTag } from '../cadWorkflow';
 
-export type EdgeLaw = 'uniform' | 'geometric' | 'bump';
+/** Node distribution along an edge. 'tanh' is the two-sided hyperbolic
+ *  tangent law (Vinokur) driven by `spacing1` / `spacing2`, Pointwise's
+ *  default: it hits the requested end spacings for any node count. */
+export type EdgeLaw = 'uniform' | 'geometric' | 'bump' | 'tanh';
 
 export interface BlockVertex {
   id: string;
@@ -22,6 +25,11 @@ export interface BlockEdge {
   law: EdgeLaw;
   /** Growth ratio: last cell / first cell along the edge. 1 = uniform. */
   ratio: number;
+  /** 'tanh' law: first cell length at the v0 end (ICEM "Spacing 1"), in
+   *  model units. Undefined leaves that end free. */
+  spacing1?: number;
+  /** 'tanh' law: first cell length at the v1 end (ICEM "Spacing 2"). */
+  spacing2?: number;
   /** CadEntity.id whose closed outline this edge follows. Undefined = straight or unassociated. */
   curveId?: string;
   /** ICEM-style explicit association: CadEntity ids (joined end to end) this

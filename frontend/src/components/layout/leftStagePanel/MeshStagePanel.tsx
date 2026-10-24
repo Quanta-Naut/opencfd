@@ -3,8 +3,7 @@ import type { StageId, StageStatus } from '../stages';
 import { Tooltip } from '../../ui/Tooltip';
 import { CFDProjectState } from '../../../types/cfd';
 import { Layers, ChevronRight, ChevronDown } from 'lucide-react';
-import { Blocking, BlockKind } from '../../../types/blocking';
-import type { BlockingReport } from '../../../app/blockingRunner';
+import { Blocking } from '../../../types/blocking';
 import { NumberField } from './NumberField';
 import { StageGate } from './StageGate';
 import { StructuredMeshPanel } from './StructuredMeshPanel';
@@ -20,22 +19,13 @@ export function MeshStagePanel(p: MeshStagePanelProps) {
     setMeshTopology,
     meshTopology,
     blocking,
-    onBuildBlocks,
-    blockingReport,
-    onOptimizeBlocks,
     onInitializeBlocking,
     onUpdateBlocking,
-    ogridBodies,
-    onWrapBody,
-    ogridParams,
-    onUpdateOgridParams,
-    structuredHint,
     structuredSmooth,
     setStructuredSmooth,
     updateYPlus,
     onApplyYPlusToMesh,
     onDirectionColors,
-    onBlockModeChange,
     yplusDraft,
     commitYplusDraft,
     normalizeYplusDraft,
@@ -112,16 +102,8 @@ export function MeshStagePanel(p: MeshStagePanelProps) {
                 {meshTopology === 'structured' ? (
                   <StructuredMeshPanel
                     blocking={blocking ?? null}
-                    onBuildBlocks={onBuildBlocks}
-                    blockingReport={blockingReport}
-                    onOptimizeBlocks={onOptimizeBlocks}
                     onInitializeBlocking={onInitializeBlocking}
                     onUpdateBlocking={onUpdateBlocking}
-                    ogridBodies={ogridBodies}
-                    onWrapBody={onWrapBody}
-                    ogridParams={ogridParams}
-                    onUpdateOgridParams={onUpdateOgridParams}
-                    structuredHint={structuredHint}
                     structuredSmooth={structuredSmooth}
                     setStructuredSmooth={setStructuredSmooth}
                     field={field}
@@ -129,7 +111,6 @@ export function MeshStagePanel(p: MeshStagePanelProps) {
                     updateYPlus={updateYPlus}
                     onApplyYPlusToMesh={onApplyYPlusToMesh}
                     onDirectionColors={onDirectionColors}
-                    onBlockModeChange={onBlockModeChange}
                   />
                 ) : (
                   <>
@@ -470,24 +451,13 @@ export interface MeshStagePanelProps {
   setMeshTopology: (t: 'unstructured' | 'structured') => void;
   meshTopology: 'unstructured' | 'structured';
   blocking: Blocking;
-  onBuildBlocks: (kind: BlockKind) => void;
   onInitializeBlocking: () => void;
-  blockingReport?: BlockingReport | null;
-  onOptimizeBlocks?: () => void;
   onUpdateBlocking: (bk: Blocking | null) => void;
-  ogridBodies: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
-  onWrapBody: (bodyIndex: number) => void;
-  ogridParams: { offsetFactor: number; radialNodes: number; radialRatio: number };
-  onUpdateOgridParams: (
-    p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>,
-  ) => void;
-  structuredHint: BlockKind;
   structuredSmooth: boolean;
   setStructuredSmooth: (v: boolean) => void;
   updateYPlus: (p: any) => void;
   onApplyYPlusToMesh: () => void;
   onDirectionColors: (colors: Record<string, string> | null) => void;
-  onBlockModeChange: (mode: 'auto' | 'manual') => void;
   yplusDraft: string;
   commitYplusDraft: (raw: string) => void;
   normalizeYplusDraft: () => void;

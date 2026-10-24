@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { CFDProjectState } from '../../../types/cfd';
@@ -8,43 +8,62 @@ import {
   EdgeLaw,
   propagateNodeCounts,
   emptyBlocking,
-  splitBlock,
-  deleteBlock,
   applyTargetCellSize,
   currentCellSize,
   edgeLength,
   edgeDirectionGroups,
   DIRECTION_COLORS,
-  BlockKind,
-  scoreBlocking,
+  premesh,
+  premeshQuality,
+  PREMESH_MIN_ANGLE,
+  PREMESH_MIN_DET,
 } from '../../../types/blocking';
-import type { BlockingReport } from '../../../app/blockingRunner';
 import { computeFallbackYPlus } from '../../../utils/api';
 import { NumberField } from './NumberField';
 
-/** Equiangle skewness color: under 0.5 is good, over 0.75 is poor. */
-const skewTone = (v: number) =>
-  v < 0.5 ? 'text-success' : v < 0.75 ? 'text-warning' : 'text-danger';
+// The ICEM CFD Hexa blocking process, done on the canvas with the block tools.
+const WORKFLOW: [string, string][] = [
+  ['Initialize', 'One block around all the geometry (rail, top).'],
+  [
+    'Shape the topology',
+    'Split (K) the block at the geometry features, then Delete (X) the blocks inside bodies.',
+  ],
+  [
+    'Wrap the bodies',
+    'O-grid (O) the blocks around a body. Pass through the outlet edge for a C-grid.',
+  ],
+  [
+    'Associate',
+    'Associate (A) the edges along walls to their curves. Vertices go green and slide on them.',
+  ],
+  ['Move vertices', 'Drag vertices for square, even blocks. Red ones are fixed to the geometry.'],
+  ['Size the edges', 'Click an edge: nodes, law, end spacings. Or use Mesh sizing below.'],
+  ['Check the pre-mesh', 'Show it (P). Aim for determinant over 0.2 and angles over 18 deg.'],
+];
+
+// Rules of thumb from structured meshing practice (ICEM, Pointwise, and the
+// usual CFD texts).
+const GUIDELINES = [
+  'Put block corners on geometry corners and on every change of boundary patch.',
+  'Wrap every wall in an O-grid (or C-grid for a sharp trailing edge) so grid lines leave the wall square.',
+  'Keep block corners near 90 deg. Under 45 or over 135 deg makes skewed cells.',
+  'Keep neighbouring cells within a growth of about 1.2 to 1.3, also across block joins.',
+  'Match the cell size on both sides of a block join: no sudden jumps.',
+  'Place points where 3 or 5 blocks meet away from walls and strong gradients.',
+  'Align blocks with the flow, and run a block line down the wake.',
+  'Give the first cell at a wall the height your y+ target needs.',
+];
 
 /**
- * Structured (block-structured) mesh controls, in two steps like the Geometry
- * stage: (1) Blocking - pick a topology type and generate the mapped block
- * layout; (2) Mesh sizing - per-direction cell counts and wall grading.
+ * Structured (block-structured) mesh controls, in two steps: (1) Blocking -
+ * build the blocks by hand on the canvas, ICEM CFD style, with the workflow
+ * and the live pre-mesh quality here; (2) Mesh sizing - per-direction cell
+ * counts and wall grading.
  */
 export const StructuredMeshPanel: React.FC<{
   blocking: Blocking | null;
-  onBuildBlocks?: (kind: BlockKind) => void;
   onInitializeBlocking?: () => void;
-  blockingReport?: BlockingReport | null;
-  onOptimizeBlocks?: () => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
-  ogridBodies?: { index: number; name: string; blockId: string | null; wrapped: boolean }[];
-  onWrapBody?: (bodyIndex: number) => void;
-  ogridParams?: { offsetFactor: number; radialNodes: number; radialRatio: number };
-  onUpdateOgridParams?: (
-    p: Partial<{ offsetFactor: number; radialNodes: number; radialRatio: number }>,
-  ) => void;
-  structuredHint?: BlockKind;
   structuredSmooth?: boolean;
   setStructuredSmooth?: (v: boolean) => void;
   field: string;
@@ -55,51 +74,20 @@ export const StructuredMeshPanel: React.FC<{
    * canvas can paint each block edge the same color as its direction card
    * (null when that step isn't open, so the canvas falls back to patch colors). */
   onDirectionColors?: (colors: Record<string, string> | null) => void;
-  /** Reports whether Automatic or Manual (ICEM-style) blocking is selected, so
-   * the canvas only shows the manual block-editing tool palette in Manual mode. */
-  onBlockModeChange?: (mode: 'auto' | 'manual') => void;
 }> = ({
   blocking,
-  onBuildBlocks,
-  blockingReport,
-  onOptimizeBlocks,
   onInitializeBlocking,
   onUpdateBlocking,
-  ogridBodies,
-  onWrapBody,
-  ogridParams,
-  onUpdateOgridParams,
-  structuredHint,
   structuredSmooth,
   setStructuredSmooth,
   field,
   state,
   updateYPlus,
-  onApplyYPlusToMesh,
   onDirectionColors,
-  onBlockModeChange,
 }) => {
   const hasBlocks = !!blocking && blocking.blocks.length > 0;
-  const recommended: BlockKind = structuredHint ?? 'auto';
-  const [kind, setKind] = useState<BlockKind>(recommended);
   const [openStep, setOpenStep] = useState<1 | 2>(1);
-  // Automatic = our topology generators. Manual = ICEM Hexa style: initialize
-  // one block, then split / delete / associate / O-grid it on the canvas.
-  const [blockMode, setBlockMode] = useState<'auto' | 'manual'>('auto');
-  useEffect(() => {
-    onBlockModeChange?.(blockMode);
-  }, [blockMode, onBlockModeChange]);
-  const kindRef = useRef(recommended);
-  useEffect(() => {
-    // follow the recommendation until the user has picked, and until blocks exist
-    if (!hasBlocks && kindRef.current !== recommended) {
-      kindRef.current = recommended;
-      setKind(recommended);
-    }
-  }, [recommended, hasBlocks]);
-  useEffect(() => {
-    if (hasBlocks) setOpenStep(2);
-  }, [hasBlocks]);
+  const [showRules, setShowRules] = useState(false);
 
   // Tell the canvas which color each block edge's direction group should draw
   // as, only while the Mesh sizing step (where "Direction A/B/C" live) is open.
@@ -118,324 +106,100 @@ export const StructuredMeshPanel: React.FC<{
     return () => onDirectionColors(null);
   }, [blocking, openStep, hasBlocks, onDirectionColors]);
 
-  // Live quality of the current blocks, so manual edits show their effect.
+  // Pre-mesh quality of the current blocks (ICEM's determinant and angle).
   const quality = useMemo(
-    () => (hasBlocks && blocking ? scoreBlocking(blocking) : null),
+    () => (hasBlocks && blocking ? premeshQuality(premesh(blocking, 60)) : null),
     [blocking, hasBlocks],
   );
-  const tried = blockingReport?.ranking ?? [];
-
-  const currentOffset = ogridParams?.offsetFactor ?? 0.25;
-  const [sliderDraft, setSliderDraft] = useState(currentOffset);
-  useEffect(() => {
-    setSliderDraft(currentOffset);
-  }, [currentOffset]);
-
-  const pick = (k: BlockKind) => {
-    kindRef.current = k;
-    setKind(k);
-  };
 
   // ── Step 1: Blocking ──
-  const modeToggle = (
-    <div className="grid grid-cols-2 gap-1 p-0.5 bg-app rounded border border-line">
-      {(
-        [
-          ['auto', 'Automatic'],
-          ['manual', 'Manual (ICEM-style)'],
-        ] as const
-      ).map(([m, label]) => (
-        <button
-          key={m}
-          onClick={() => setBlockMode(m)}
-          className={`py-1 rounded text-[11px] font-medium transition-colors ${
-            blockMode === m
-              ? 'bg-surface text-fg font-semibold border border-line'
-              : 'text-fg-2 hover:text-fg'
-          }`}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-
-  const manualPanel = (
-    <div className="space-y-2.5">
-      <div className="grid grid-cols-2 gap-1.5">
-        <button
-          onClick={() => onInitializeBlocking?.()}
-          className="py-2 bg-accent hover:bg-accent-hover text-white font-medium rounded-sm transition-colors"
-        >
-          Initialize block
-        </button>
-        <button
-          onClick={() => onUpdateBlocking?.(emptyBlocking())}
-          className="py-2 rounded-sm border border-line bg-surface hover:border-line-strong text-fg font-medium transition-colors"
-        >
-          Start empty
-        </button>
-      </div>
-    </div>
-  );
-
   const step1 = (
     <div className="space-y-2.5">
-      {modeToggle}
-      {blockMode === 'manual' ? (
-        manualPanel
-      ) : (
+      {!hasBlocks && (
         <>
-          <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
-            Topology
-          </span>
+          <p className="text-[10px] text-fg-2 leading-relaxed">
+            Build the blocks by hand on the canvas, the way ANSYS ICEM CFD does: start from one
+            block and split, wrap and associate it to the geometry.
+          </p>
           <div className="grid grid-cols-2 gap-1.5">
-            {(
-              [
-                ['auto', 'Best fit', 'Try every topology, keep the best mesh'],
-                ['hgrid', 'H-grid', 'Box / channel / step'],
-                ['ogrid', 'O-grid', 'Body in the flow'],
-                ['cgrid', 'C-grid', 'Airfoil + open wake'],
-                ['cgrid_closed', 'Airfoil O-grid', 'Airfoil, wake pinches shut'],
-              ] as const
-            ).map(([k, label, hint]) => (
-              <button
-                key={k}
-                onClick={() => pick(k)}
-                className={`p-2 rounded border text-left transition-colors ${k === 'auto' ? 'col-span-2 ' : ''}${
-                  kind === k
-                    ? 'border-accent bg-accent-soft'
-                    : 'bg-surface border-line hover:border-line-strong hover:bg-surface-2'
-                }`}
-              >
-                <span
-                  className={`text-[11px] font-semibold block ${kind === k ? 'text-accent-fg' : 'text-fg'}`}
-                >
-                  {label}
-                  {recommended === k && (
-                    <span className="ml-1 text-[10px] font-medium text-success">rec.</span>
-                  )}
-                </span>
-                <span className="text-[10px] text-fg-2 block leading-tight mt-0.5">{hint}</span>
-              </button>
-            ))}
+            <button
+              onClick={() => onInitializeBlocking?.()}
+              className="py-2 bg-accent hover:bg-accent-hover text-white font-medium rounded-sm transition-colors"
+            >
+              Initialize block
+            </button>
+            <button
+              onClick={() => onUpdateBlocking?.(emptyBlocking())}
+              className="py-2 rounded-sm border border-line bg-surface hover:border-line-strong text-fg font-medium transition-colors"
+            >
+              Start empty
+            </button>
           </div>
-
-          <button
-            onClick={() => onBuildBlocks?.(kind)}
-            className="w-full py-2 bg-accent hover:bg-accent-hover text-white font-medium rounded-sm transition-colors"
-          >
-            {hasBlocks ? 'Rebuild blocks' : 'Generate blocks'}
-          </button>
         </>
       )}
 
       {quality && (
-        <div className="border-t border-line pt-2.5 space-y-2">
-          <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
-            Block quality
-          </span>
-          <div className="grid grid-cols-3 gap-1.5">
-            {(
+        <div className="grid grid-cols-3 gap-1.5">
+          {(
+            [
+              ['Blocks', String(blocking!.blocks.length), true],
+              ['Min determinant', quality.minDet.toFixed(2), quality.minDet >= PREMESH_MIN_DET],
               [
-                ['Wall skew', quality.wallWorst],
-                ['Worst skew', quality.worst],
-                ['Mean skew', quality.mean],
-              ] as const
-            ).map(([label, v]) => (
-              <div key={label} className="p-1.5 rounded border border-line bg-surface">
-                <span className="text-[10px] text-fg-2 block">{label}</span>
-                <span className={`text-[12px] font-mono font-semibold ${skewTone(v)}`}>
-                  {v.toFixed(2)}
-                </span>
-              </div>
-            ))}
-          </div>
-          {quality.invalid > 0 && (
-            <p className="text-[10px] text-danger leading-relaxed">
-              {quality.invalid} block{quality.invalid > 1 ? 's fold' : ' folds'} over and will not
-              mesh. Optimize or move its vertices.
-            </p>
-          )}
-          <Tooltip content="Move the free block vertices and edges until the cells stop improving. Wall and corner vertices stay on the geometry.">
-            <button
-              onClick={() => onOptimizeBlocks?.()}
-              className="w-full py-1.5 rounded-sm border border-line bg-surface hover:border-line-strong text-fg font-medium transition-colors"
-            >
-              Optimize shape
-            </button>
-          </Tooltip>
-          {tried.length > 1 && (
-            <div className="space-y-1">
-              <span className="text-[10px] text-fg-2 block">Topologies tried</span>
-              {tried.map((t, i) => (
-                <div key={t.label} className="flex items-center gap-1.5 text-[10px]">
-                  <span
-                    className={`flex-1 truncate ${i === 0 && !t.failed ? 'text-fg font-semibold' : 'text-fg-2'}`}
-                  >
-                    {t.label}
-                  </span>
-                  {t.failed ? (
-                    <Tooltip content={t.failed}>
-                      <span className="text-fg-3">did not fit</span>
-                    </Tooltip>
-                  ) : Number.isFinite(t.rank) ? (
-                    <span className="font-mono text-fg-2">
-                      wall {t.wallWorst?.toFixed(2)} · worst {t.worst?.toFixed(2)}
-                    </span>
-                  ) : (
-                    <span className="text-danger">folds</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {hasBlocks && blocking && (
-        <>
-          <div className="border-t border-line pt-2.5 space-y-1.5">
-            <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
-              Blocks ({blocking.blocks.length})
-            </span>
-            {blocking.blocks.map((blk, i) => (
-              <div key={blk.id} className="flex items-center gap-1.5 text-[10px]">
-                <span className="text-fg-2 w-12 shrink-0">Block {i + 1}</span>
-                <button
-                  onClick={() =>
-                    onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'x')))
-                  }
-                  className="flex-1 py-1 rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors"
-                >
-                  Split &#8596;
-                </button>
-                <button
-                  onClick={() =>
-                    onUpdateBlocking?.(propagateNodeCounts(splitBlock(blocking, blk.id, 'y')))
-                  }
-                  className="flex-1 py-1 rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors"
-                >
-                  Split &#8597;
-                </button>
-                <button
-                  onClick={() =>
-                    onUpdateBlocking?.(propagateNodeCounts(deleteBlock(blocking, blk.id)))
-                  }
-                  disabled={blocking.blocks.length <= 1}
-                  className="px-2 py-1 rounded border border-line bg-surface text-danger hover:border-danger disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                >
-                  Del
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {ogridBodies && ogridBodies.length > 0 && (
-            <div className="border-t border-line pt-2.5 space-y-1.5">
-              <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
-                Bodies
+                'Min angle',
+                `${quality.minAngle.toFixed(1)} deg`,
+                quality.minAngle >= PREMESH_MIN_ANGLE,
+              ],
+            ] as const
+          ).map(([label, v, ok]) => (
+            <div key={label} className="p-1.5 rounded border border-line bg-surface">
+              <span className="text-[10px] text-fg-2 block">{label}</span>
+              <span
+                className={`text-[12px] font-mono font-semibold ${ok ? 'text-fg' : 'text-danger'}`}
+              >
+                {v}
               </span>
-              {ogridBodies.map((b) => (
-                <div key={b.index} className="flex items-center gap-1.5 text-[10px]">
-                  <span className="flex-1 text-fg truncate">{b.name}</span>
-                  {b.wrapped ? (
-                    <span className="px-2 py-1 text-success font-medium">Wrapped</span>
-                  ) : (
-                    <button
-                      onClick={() => onWrapBody?.(b.index)}
-                      disabled={!b.blockId}
-                      className="px-2 py-1 rounded border border-line bg-surface hover:border-accent hover:text-accent-fg transition-colors disabled:opacity-30"
-                    >
-                      Wrap O-grid
-                    </button>
-                  )}
-                </div>
-              ))}
-              {ogridBodies.some((b) => !b.blockId && !b.wrapped) && (
-                <p className="text-[10px] text-fg-2 leading-relaxed">
-                  Body must sit clear of the domain edges to wrap.
-                </p>
-              )}
             </div>
-          )}
-        </>
-      )}
-
-      {(kind === 'ogrid' || ogridBodies?.some((b) => b.wrapped)) && (
-        <div className="border-t border-line pt-2.5 space-y-2">
-          <span className="text-[10px] font-semibold text-fg-2 uppercase tracking-wider block">
-            O-grid ring
-          </span>
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-fg-2">Ring thickness</span>
-              <span className="text-[10px] font-mono text-fg">{sliderDraft.toFixed(2)} x body</span>
-            </div>
-            <input
-              type="range"
-              min={0.06}
-              max={1.2}
-              step={0.02}
-              value={sliderDraft}
-              onChange={(e) => {
-                const v = parseFloat(e.target.value);
-                setSliderDraft(v);
-                if (!ogridBodies?.some((b) => b.wrapped)) {
-                  onUpdateOgridParams?.({ offsetFactor: v });
-                }
-              }}
-              onPointerUp={(e) => {
-                const v = parseFloat((e.target as HTMLInputElement).value);
-                onUpdateOgridParams?.({ offsetFactor: v });
-              }}
-              onMouseUp={(e) => {
-                const v = parseFloat((e.target as HTMLInputElement).value);
-                onUpdateOgridParams?.({ offsetFactor: v });
-              }}
-              onKeyUp={(e) => {
-                const v = parseFloat((e.target as HTMLInputElement).value);
-                onUpdateOgridParams?.({ offsetFactor: v });
-              }}
-              className="w-full accent-accent cursor-pointer"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <label>
-              <span className="text-[10px] text-fg-2 block mb-1">Radial nodes</span>
-              <NumberField
-                value={ogridParams?.radialNodes ?? 26}
-                integer
-                min={4}
-                max={400}
-                fallback={26}
-                onChange={(n) => onUpdateOgridParams?.({ radialNodes: n })}
-                className={field}
-              />
-            </label>
-            <label>
-              <Tooltip content="Higher = finer first cell at the wall (like y+ clustering).">
-                <span className="text-[10px] text-fg-2 block mb-1 cursor-help decoration-dotted underline decoration-fg-5 underline-offset-2">
-                  Wall clustering
-                </span>
-              </Tooltip>
-              <NumberField
-                value={ogridParams?.radialRatio ?? 10}
-                min={1}
-                max={100}
-                fallback={10}
-                onChange={(n) => onUpdateOgridParams?.({ radialRatio: n })}
-                className={field}
-              />
-            </label>
-          </div>
+          ))}
         </div>
       )}
+
+      <ol className="space-y-1.5">
+        {WORKFLOW.map(([title, how], i) => (
+          <li key={title} className="flex gap-2 text-[10px] leading-snug">
+            <span className="w-4 h-4 rounded-full bg-surface-3 text-fg-2 flex items-center justify-center text-[9px] font-semibold shrink-0">
+              {i + 1}
+            </span>
+            <span>
+              <span className="text-fg font-semibold">{title}.</span>{' '}
+              <span className="text-fg-2">{how}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+
+      <div className="border-t border-line pt-2">
+        <button
+          onClick={() => setShowRules((v) => !v)}
+          className="w-full flex items-center justify-between text-[10px] font-semibold text-fg-2 uppercase tracking-wider"
+        >
+          Blocking guidelines
+          <ChevronDown
+            className={`w-3.5 h-3.5 transition-transform ${showRules ? 'rotate-180' : ''}`}
+          />
+        </button>
+        {showRules && (
+          <ul className="mt-1.5 space-y-1 list-disc pl-4 text-[10px] text-fg-2 leading-snug">
+            {GUIDELINES.map((g) => (
+              <li key={g}>{g}</li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 
   // ── Step 2: Mesh sizing ──
-  let step2: React.ReactNode = <p className="text-[10px] text-fg-2">Generate the blocks first.</p>;
+  let step2: React.ReactNode = <p className="text-[10px] text-fg-2">Build the blocks first.</p>;
   if (hasBlocks && blocking) {
     const groupOf = edgeDirectionGroups(blocking);
     const groups: Record<string, string[]> = {};
@@ -752,6 +516,7 @@ export const StructuredMeshPanel: React.FC<{
                   <option value="uniform">Uniform</option>
                   <option value="geometric">Geometric (cluster one end)</option>
                   <option value="bump">Bump (cluster both ends)</option>
+                  <option value="tanh">Spacing (tanh, set per edge)</option>
                 </select>
               </label>
             </div>

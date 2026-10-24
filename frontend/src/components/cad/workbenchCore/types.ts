@@ -165,10 +165,6 @@ export interface CadWorkbenchProps {
    * cards are open. Overrides the usual patch coloring so an edge reads as
    * the same color as the card that controls it. */
   directionColors?: Record<string, string> | null;
-  /** 'manual' shows the ICEM-style block-editing tool palette (Draw/Split/
-   * O-grid/Associate/...); 'auto' hides it, since those tools edit topology
-   * the automatic generators already built. */
-  blockMode?: 'auto' | 'manual';
   isTransient?: boolean;
   transientTimes?: number[];
   transientFrameIndex?: number;
