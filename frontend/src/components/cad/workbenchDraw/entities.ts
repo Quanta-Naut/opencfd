@@ -1,4 +1,4 @@
-import { dist } from '../workbenchCore';
+import { dist, editPoints } from '../workbenchCore';
 import type { DrawFrame, DrawScene } from './types';
 
 /** CAD entities, plus the hovered-vertex marker. */
@@ -43,7 +43,20 @@ export function drawEntities(f: DrawFrame, scene: DrawScene): void {
     }
 
     // Draw entity geometry
-    if (e.type === 'construction' && e.pts.length === 2) {
+    if (e.type === 'point' && e.pts.length) {
+      // A reference point: a small cross, ringed when selected.
+      const p = ws(e.pts[0].x, e.pts[0].y);
+      ctx.setLineDash([]);
+      ctx.strokeStyle = isSel ? '#E05A00' : '#4A90D9';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(p.x - 5, p.y - 5);
+      ctx.lineTo(p.x + 5, p.y + 5);
+      ctx.moveTo(p.x - 5, p.y + 5);
+      ctx.lineTo(p.x + 5, p.y - 5);
+      ctx.stroke();
+      if (isSel) ctx.strokeRect(p.x - 7.5, p.y - 7.5, 15, 15);
+    } else if (e.type === 'construction' && e.pts.length === 2) {
       // Infinite reference line: extend far past the viewport in both directions.
       const a = e.pts[0],
         b = e.pts[1];
@@ -86,7 +99,7 @@ export function drawEntities(f: DrawFrame, scene: DrawScene): void {
       if (!isConst || showConstruction) {
         const editable =
           tool === 'select' && !displayOnly && !isConst && e.role !== 'domain_boundary';
-        for (const pt of e.pts) {
+        for (const pt of editPoints(e)) {
           const ps = ws(pt.x, pt.y);
           if (isSel && editable) {
             ctx.beginPath();

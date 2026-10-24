@@ -2,7 +2,7 @@ import type { DrawScene } from './types';
 import { drawGrid } from './grid';
 import { drawMeshView } from './meshView';
 import { drawEntities } from './entities';
-import { drawTempGeometry, drawTrimPreview } from './sketchPreview';
+import { drawTempGeometry, drawTrimPreview, drawTransformPreview } from './sketchPreview';
 import { drawSnapGuides, drawSnapMarker, drawCrosshair, drawMarquee } from './snapOverlays';
 import { drawDomain } from './domain';
 import { drawBoundaryTags } from './boundaryTags';
@@ -70,6 +70,7 @@ export function drawScene(canvas: HTMLCanvasElement | null, scene: DrawScene): v
   drawEntities(f, scene);
   drawTempGeometry(f, scene);
   drawTrimPreview(f, scene);
+  drawTransformPreview(f, scene);
   drawSnapGuides(f, scene);
   drawSnapMarker(f, scene);
   drawCrosshair(f, scene);

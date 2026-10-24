@@ -131,13 +131,15 @@ export function collectSnapKeyPoints(
   };
 
   for (const e of entities) {
-    const pts = e.pts;
+    // A spline snaps at its fit points, not at every sample of the curve.
+    const spline = e.type === 'spline' && !!e.ctrl?.length;
+    const pts = spline ? e.ctrl! : e.pts;
     if (!pts.length) continue;
 
     if (settings.endpoint) {
       for (const p of pts) push(p, 'endpoint');
     }
-    if (settings.midpoint) {
+    if (settings.midpoint && !spline) {
       for (let i = 0; i < pts.length - 1; i++) push(midpt(pts[i], pts[i + 1]), 'midpoint');
     }
 

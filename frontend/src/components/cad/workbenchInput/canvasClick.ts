@@ -24,6 +24,7 @@ export function onCanvasClick(e: React.MouseEvent, wb: CanvasClickContext) {
     setDimPrompt,
     setHoveredTrim,
     commitPoint,
+    transformPick,
   } = wb;
   if (displayOnly) return;
   if (panning.current) return;
@@ -54,6 +55,12 @@ export function onCanvasClick(e: React.MouseEvent, wb: CanvasClickContext) {
         return;
       }
     }
+  }
+
+  // Move / Scale / Rotate / Mirror take objects and points from the canvas.
+  if (transformPick) {
+    transformPick(snapPt, findEntityAt(rawPt), e.shiftKey);
+    return;
   }
 
   if (tool === 'select') {
@@ -154,4 +161,5 @@ export interface CanvasClickContext {
     React.SetStateAction<{ p0: Point2D; p1: Point2D; polyline?: Point2D[] }>
   >;
   commitPoint: (pt: Point2D) => void;
+  transformPick: ((pt: Point2D, hitId: string | null, shift: boolean) => void) | null;
 }

@@ -23,6 +23,7 @@ export type CadTool =
   | 'arc_center'
   | 'arc_3pt'
   | 'spline'
+  | 'point'
   | 'construction_line' // infinite reference line through two points
   | 'fillet'
   | 'chamfer'
@@ -33,6 +34,7 @@ export type CadTool =
   | 'move'
   | 'copy_entity'
   | 'rotate'
+  | 'scale'
   | 'dimension_linear';
 
 export interface GuideLine {

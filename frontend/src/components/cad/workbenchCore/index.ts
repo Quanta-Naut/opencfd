@@ -64,5 +64,17 @@ export {
   segEllipseIntersect,
 } from './intersections';
 
+export { sampleSpline, splineEntity, editPoints } from './spline';
+export type { Affine } from './transform';
+export {
+  apply,
+  translation,
+  scaling,
+  rotation,
+  mirroring,
+  transformEntity,
+  entitiesCenter,
+} from './transform';
+
 export type { TrimTarget } from './trim';
 export { getTrimTarget } from './trim';

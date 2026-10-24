@@ -109,6 +109,10 @@ export interface DrawScene {
   splitHover: { edgeId: string; pt: Point2D; cut: Point2D[][] };
   tempPts: Point2D[];
   tool: CadTool;
+  /** Move / Scale / Rotate / Mirror: where the shapes would go, and the
+   *  command's reference points (base, mirror line). */
+  xformGhost: CadEntity[] | null;
+  xformMarks: { pts: Point2D[]; line: [Point2D, Point2D] | null };
   unpatchedEdgeIds: Set<string>;
   upstreamChordFactor: number;
   zoom: number;

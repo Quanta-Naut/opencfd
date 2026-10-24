@@ -2,7 +2,7 @@ import type { CadAction } from '../workbenchCore';
 import React from 'react';
 import { Point2D } from '../../../types/cadWorkflow';
 import type { CadTool, DynamicDimPrompt } from '../workbenchCore';
-import { uid, dist } from '../workbenchCore';
+import { uid, dist, splineEntity } from '../workbenchCore';
 
 /** Commit one picked point for the active drawing / modify tool. */
 export function commitPointImpl(pt: Point2D, wb: CommitPointContext) {
@@ -27,7 +27,33 @@ export function commitPointImpl(pt: Point2D, wb: CommitPointContext) {
   } = wb;
   const layer = constructionMode ? 'construction' : 'default';
 
-  if (tool === 'line') {
+  if (tool === 'point') {
+    // A reference point: always construction, so it guides snapping and
+    // never becomes geometry.
+    dispatch({
+      type: 'ADD_ENTITY',
+      entity: { id: uid(), type: 'point', layer: 'construction', pts: [{ ...pt }] },
+    });
+    setCmdText(
+      `POINT: Placed at (${pt.x.toFixed(4)}, ${pt.y.toFixed(4)}). Click or type the next.`,
+    );
+  } else if (tool === 'spline') {
+    // Click fit points; the curve passes through each. Click the first point
+    // to close it, Enter to finish it open.
+    if (!isDrawing) {
+      setTempPts([pt]);
+      setIsDrawing(true);
+      setCmdText('SPLINE: Click the next fit point.');
+    } else if (tempPts.length >= 3 && dist(pt, tempPts[0]) < 12 / zoom) {
+      dispatch({ type: 'ADD_ENTITY', entity: splineEntity({ id: uid(), layer }, tempPts, true) });
+      setIsDrawing(false);
+      setTempPts([]);
+      setCmdText('SPLINE: Closed. Click the first point of the next spline.');
+    } else {
+      setTempPts((prev) => [...prev, pt]);
+      setCmdText('SPLINE: Next fit point. Enter finishes, click the first point to close.');
+    }
+  } else if (tool === 'line') {
     if (!isDrawing) {
       setTempPts([pt]);
       setIsDrawing(true);

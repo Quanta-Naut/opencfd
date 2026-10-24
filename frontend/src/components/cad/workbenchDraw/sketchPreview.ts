@@ -1,5 +1,5 @@
-import { Point2D } from '../../../types/cadWorkflow';
-import { dist } from '../workbenchCore';
+import { Point2D, CadEntity } from '../../../types/cadWorkflow';
+import { dist, sampleSpline } from '../workbenchCore';
 import type { DrawFrame, DrawScene } from './types';
 
 /** The entity being drawn, before it is committed. */
@@ -71,6 +71,22 @@ export function drawTempGeometry(f: DrawFrame, scene: DrawScene): void {
         Math.abs(b.x - a.x),
         Math.abs(b.y - a.y),
       );
+    } else if (tool === 'spline') {
+      // The curve through the fit points so far and the cursor, plus the
+      // fit points themselves.
+      const curve = sampleSpline([...tempPts, snap.pt]);
+      ctx.beginPath();
+      curve.forEach((q, i) => {
+        const p = ws(q.x, q.y);
+        if (i) ctx.lineTo(p.x, p.y);
+        else ctx.moveTo(p.x, p.y);
+      });
+      ctx.stroke();
+      ctx.fillStyle = C.accent;
+      for (const q of tempPts) {
+        const p = ws(q.x, q.y);
+        ctx.fillRect(p.x - 2.5, p.y - 2.5, 5, 5);
+      }
     } else {
       const p0 = ws(tempPts[0].x, tempPts[0].y);
       ctx.beginPath();
@@ -131,4 +147,98 @@ export function drawTrimPreview(f: DrawFrame, scene: DrawScene): void {
     ctx.lineTo(mid.x - 5, mid.y + 5);
     ctx.stroke();
   }
+}
+
+/** A shape's outline as world points (circles, ellipses and arcs sampled). */
+function outline(e: CadEntity): { pts: Point2D[]; closed: boolean } {
+  const ring = (c: Point2D, rx: number, ry: number, rot: number, a0: number, a1: number) =>
+    Array.from({ length: 65 }, (_, i) => {
+      const t = a0 + ((a1 - a0) * i) / 64;
+      const x = rx * Math.cos(t),
+        y = ry * Math.sin(t);
+      return {
+        x: c.x + x * Math.cos(rot) - y * Math.sin(rot),
+        y: c.y + x * Math.sin(rot) + y * Math.cos(rot),
+      };
+    });
+  const c = e.pts[0];
+  if (e.type === 'circle' && e.pts.length >= 2) {
+    const r = e.radius ?? dist(c, e.pts[1]);
+    return { pts: ring(c, r, r, 0, 0, 2 * Math.PI), closed: true };
+  }
+  if (e.type === 'ellipse' && e.pts.length >= 2)
+    return {
+      pts: ring(c, e.rx ?? dist(c, e.pts[1]), e.ry ?? 0, e.rotation ?? 0, 0, 2 * Math.PI),
+      closed: true,
+    };
+  if (e.type === 'arc' && e.pts.length >= 3) {
+    const r = dist(c, e.pts[1]);
+    const sa = e.startAngle ?? Math.atan2(e.pts[1].y - c.y, e.pts[1].x - c.x);
+    let ea = e.endAngle ?? Math.atan2(e.pts[2].y - c.y, e.pts[2].x - c.x);
+    while (ea <= sa) ea += 2 * Math.PI;
+    return { pts: ring(c, r, r, 0, sa, ea), closed: false };
+  }
+  return { pts: e.pts, closed: !!e.isClosed || e.type === 'rectangle' };
+}
+
+/** Move / Scale / Rotate / Mirror: a dashed ghost of the result, the base
+ *  point and the mirror line. */
+export function drawTransformPreview(f: DrawFrame, scene: DrawScene): void {
+  const { ctx, ws, cw, ch } = f;
+  const { C, xformGhost, xformMarks } = scene;
+  ctx.save();
+  ctx.strokeStyle = C.accent;
+  if (xformMarks.line) {
+    // The mirror axis, drawn across the view.
+    const [a, b] = xformMarks.line;
+    const sa = ws(a.x, a.y),
+      sb = ws(b.x, b.y);
+    const len = Math.hypot(sb.x - sa.x, sb.y - sa.y);
+    if (len > 1e-6) {
+      const ux = (sb.x - sa.x) / len,
+        uy = (sb.y - sa.y) / len,
+        ext = cw + ch;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([10, 3, 2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(sa.x - ux * ext, sa.y - uy * ext);
+      ctx.lineTo(sa.x + ux * ext, sa.y + uy * ext);
+      ctx.stroke();
+    }
+  }
+  if (xformGhost) {
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    for (const e of xformGhost) {
+      const { pts, closed } = outline(e);
+      if (!pts.length) continue;
+      if (pts.length === 1) {
+        const p = ws(pts[0].x, pts[0].y);
+        ctx.beginPath();
+        ctx.moveTo(p.x - 5, p.y - 5);
+        ctx.lineTo(p.x + 5, p.y + 5);
+        ctx.moveTo(p.x - 5, p.y + 5);
+        ctx.lineTo(p.x + 5, p.y - 5);
+        ctx.stroke();
+        continue;
+      }
+      ctx.beginPath();
+      pts.forEach((q, i) => {
+        const p = ws(q.x, q.y);
+        if (i) ctx.lineTo(p.x, p.y);
+        else ctx.moveTo(p.x, p.y);
+      });
+      if (closed) ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  ctx.setLineDash([]);
+  ctx.fillStyle = C.accent;
+  for (const q of xformMarks.pts) {
+    const p = ws(q.x, q.y);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+  ctx.restore();
 }

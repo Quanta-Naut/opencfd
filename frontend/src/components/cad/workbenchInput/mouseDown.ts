@@ -25,6 +25,7 @@ import {
 import { activeFieldOf, pickInto } from '../workbenchUi/blockEditor/toolFields';
 import type { ToolPicks } from '../workbenchUi/blockEditor/toolFields';
 import type { CadTool } from '../workbenchCore';
+import { editPoints } from '../workbenchCore';
 
 /** Canvas mouse down: starts pans, drags, marquees and block-editor picks. */
 export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
@@ -278,12 +279,14 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
     let grabbedDist = Infinity;
     let grabbedId: string | null = null;
     for (const en of cadState.entities) {
-      if (en.layer === 'construction' || en.type === 'circle' || en.type === 'ellipse') continue;
-      for (let i = 0; i < en.pts.length; i++) {
-        const d = Math.hypot(en.pts[i].x - raw.x, en.pts[i].y - raw.y);
+      if (en.type === 'circle' || en.type === 'ellipse') continue;
+      if (en.layer === 'construction' && en.type !== 'point') continue;
+      const grips = editPoints(en);
+      for (let i = 0; i < grips.length; i++) {
+        const d = Math.hypot(grips[i].x - raw.x, grips[i].y - raw.y);
         if (d < vHit && d < grabbedDist) {
           grabbedDist = d;
-          grabbed = en.pts[i];
+          grabbed = grips[i];
           grabbedId = en.id;
         }
       }
@@ -292,8 +295,8 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
       const glue = Math.max(1e-4, 3 / zoom); // vertices within ~3px count as joined
       const targets: { id: string; idx: number }[] = [];
       for (const en of cadState.entities) {
-        if (en.layer === 'construction' || en.autoDomain) continue;
-        en.pts.forEach((p, i) => {
+        if ((en.layer === 'construction' && en.type !== 'point') || en.autoDomain) continue;
+        editPoints(en).forEach((p, i) => {
           if (Math.hypot(p.x - grabbed!.x, p.y - grabbed!.y) <= glue)
             targets.push({ id: en.id, idx: i });
         });
@@ -304,7 +307,8 @@ export function onMouseDown(e: React.MouseEvent, wb: MouseDownContext) {
       editDrag.current = {
         mode: 'vertex',
         targets,
-        startWorld: raw,
+        // Ortho and Angle measure the drag from where the vertex was.
+        startWorld: { ...grabbed },
         snapshot: cadState.entities.map((x) => ({ ...x, pts: x.pts.map((p) => ({ ...p })) })),
       };
       setEditDragActive(true);

@@ -4,8 +4,9 @@ import React from 'react';
 import { Point2D } from '../../../types/cadWorkflow';
 import { Blocking } from '../../../types/blocking';
 import type { CadTool, DynamicDimPrompt } from '../workbenchCore';
-import { uid } from '../workbenchCore';
+import { uid, splineEntity } from '../workbenchCore';
 import type { SnapSettings } from '../workbenchCore';
+import type { TransformCommand } from '../workbenchUi/useTransformCommand';
 
 /** Workbench keyboard shortcuts (tools, Delete, Escape, Enter, undo / redo, F-keys). */
 export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
@@ -44,6 +45,7 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
     setSnapSettings,
     setDimPrompt,
     setManualDim,
+    xform,
   } = wb;
   // Never let canvas shortcuts (Delete, tool letters, Space/Enter, F-keys) fire
   // while the user is typing in a form field anywhere in the app. This is what
@@ -98,6 +100,13 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
     }
     return;
   }
+  // A transform command owns Enter (OK) and Esc (Cancel).
+  if (xform.active && (e.key === 'Escape' || e.key === 'Enter')) {
+    e.preventDefault();
+    if (e.key === 'Enter') xform.commit();
+    else xform.cancel();
+    return;
+  }
   if (e.key === 'Escape') {
     if (isDrawing || tempPts.length > 0) {
       setIsDrawing(false);
@@ -122,6 +131,13 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
       setIsDrawing(false);
       setTempPts([]);
       setCmdText('POLYLINE: Done. Pick first point.');
+    }
+    if (tool === 'spline' && isDrawing && tempPts.length >= 2) {
+      const layer = constructionMode ? 'construction' : 'default';
+      dispatch({ type: 'ADD_ENTITY', entity: splineEntity({ id: uid(), layer }, tempPts, false) });
+      setIsDrawing(false);
+      setTempPts([]);
+      setCmdText('SPLINE: Done. Click the first fit point of the next spline.');
     }
     if (tool === 'line' && isDrawing) {
       setIsDrawing(false);
@@ -197,6 +213,23 @@ export function onKeyDown(e: KeyboardEvent, wb: KeyDownContext) {
     setDimPrompt(null);
     setManualDim(false);
   }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const pick: Record<string, CadTool> = {
+    b: 'spline',
+    o: 'point',
+    m: 'move',
+    k: 'scale',
+    q: 'rotate',
+    i: 'mirror',
+  };
+  const picked = pick[e.key.toLowerCase()];
+  if (picked) {
+    setTool(picked);
+    setIsDrawing(false);
+    setTempPts([]);
+    setDimPrompt(null);
+    setManualDim(false);
+  }
   if (e.key === 't' || e.key === 'T') {
     setTool('trim');
     setIsDrawing(false);
@@ -244,4 +277,5 @@ export interface KeyDownContext {
   setSnapSettings: React.Dispatch<React.SetStateAction<SnapSettings>>;
   setDimPrompt: React.Dispatch<React.SetStateAction<DynamicDimPrompt>>;
   setManualDim: React.Dispatch<React.SetStateAction<boolean>>;
+  xform: Pick<TransformCommand, 'active' | 'commit' | 'cancel'>;
 }

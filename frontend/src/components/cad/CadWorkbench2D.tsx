@@ -87,6 +87,8 @@ import { BlockEditorTools } from './workbenchUi/BlockEditorTools';
 import { ViewModeBar } from './workbenchUi/ViewModeBar';
 import { DraftingStrip } from './workbenchUi/DraftingStrip';
 import { ToolRail } from './workbenchUi/ToolRail';
+import { TransformDialog } from './workbenchUi/TransformDialog';
+import { useTransformCommand, isTransformTool } from './workbenchUi/useTransformCommand';
 import { autoCenterInitialGeometry } from './workbenchView/camera';
 import { buildGlScene } from './workbenchView/meshScene';
 import { snapBlockVertexImpl } from './workbenchInput/hitTest';
@@ -791,6 +793,81 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
 
   const [isLoading, setIsLoading] = useState(false);
   const [cmdText, setCmdText] = useState('Pick a tool or press L / P / R / C to start drawing.');
+  // Move / Scale / Rotate / Mirror: one command at a time, with a live ghost.
+  const xform = useTransformCommand({
+    tool,
+    setTool,
+    entities: cadState.entities,
+    dispatch,
+    setCmdText,
+  });
+  const xformGhost = useMemo(
+    () => (xform.active ? xform.preview(snap.pt) : null),
+    [xform.active, xform.preview, snap.pt],
+  );
+  const xformMarks = useMemo(() => {
+    if (!xform.active) return { pts: [], line: null };
+    const { base, m1, m2, pick } = xform.xf;
+    const pts = [base ?? (tool === 'scale' || tool === 'rotate' ? xform.pivot : null), m1, m2];
+    const end = m2 ?? (pick === 'm2' ? snap.pt : null);
+    return {
+      pts: pts.filter((q): q is Point2D => !!q),
+      line: m1 && end ? ([m1, end] as [Point2D, Point2D]) : null,
+    };
+  }, [xform.active, xform.xf, xform.pivot, tool, snap.pt]);
+
+  // Say what a drafting toggle does when it is switched, from the strip or
+  // its F-key, so a mode that only acts mid-command is never silent.
+  const draftingFlags = {
+    ortho,
+    polar: snapSettings.polar,
+    gridSnap: snapSettings.grid,
+    snap: snapEnabled,
+    construction: constructionMode,
+  };
+  const prevDrafting = useRef(draftingFlags);
+  useEffect(() => {
+    const prev = prevDrafting.current;
+    prevDrafting.current = draftingFlags;
+    const say = (title: string, description: string) =>
+      toast.info(title, { id: 'drafting', description, duration: 2600 });
+    if (prev.ortho !== ortho)
+      say(
+        `Ortho ${ortho ? 'on' : 'off'}`,
+        ortho
+          ? 'From the last point, lines, moves and drags go straight across or straight up.'
+          : 'Points go where you click.',
+      );
+    else if (prev.polar !== snapSettings.polar)
+      say(
+        `Angle tracking ${snapSettings.polar ? 'on' : 'off'}`,
+        snapSettings.polar
+          ? `From the last point, directions lock to ${snapSettings.polarStepDeg}° steps.`
+          : 'Directions are free.',
+      );
+    else if (prev.gridSnap !== snapSettings.grid)
+      say(
+        `Grid snap ${snapSettings.grid ? 'on' : 'off'}`,
+        snapSettings.grid
+          ? 'Points land on grid crossings when nothing else is near.'
+          : 'Points no longer land on the grid.',
+      );
+    else if (prev.snap !== snapEnabled)
+      say(
+        `Object snap ${snapEnabled ? 'on' : 'off'}`,
+        snapEnabled
+          ? 'Points catch ends, midpoints, centres and crossings.'
+          : 'Nothing snaps; points go exactly where you click.',
+      );
+    else if (prev.construction !== constructionMode)
+      say(
+        `Construction ${constructionMode ? 'on' : 'off'}`,
+        constructionMode
+          ? 'New shapes are dashed reference lines, never walls.'
+          : 'New shapes are solid geometry again.',
+      );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ortho, snapSettings.polar, snapSettings.grid, snapEnabled, constructionMode]);
 
   // ── HUD ─────────────────────────────────────────────────────────────────────
   const [hud, setHud] = useState({ length: '0.000', angle: '0.0', x: '0.0000', y: '0.0000' });
@@ -1440,12 +1517,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // supply the current view/state plus the viewport extent so guide lines can
   // reach across the canvas.
   const computeSnap = useCallback(
-    (raw: Point2D): Snap => {
+    (raw: Point2D, anchor?: Point2D): Snap => {
       const cw = containerRef.current?.clientWidth || 800;
       const ch = containerRef.current?.clientHeight || 600;
       return computeSnapPoint(raw, {
         entities: cadState.entities,
-        tempPts,
+        tempPts: anchor ? [anchor] : tempPts,
         zoom,
         ortho,
         settings: snapSettings,
@@ -1534,10 +1611,14 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       tool,
       unpatchedEdgeIds,
       upstreamChordFactor,
+      xformGhost,
+      xformMarks,
       zoom,
     });
   }, [
     cadState.entities,
+    xformGhost,
+    xformMarks,
     tempPts,
     snap,
     isDrawing,
@@ -1645,6 +1726,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         hoveredBlockIdx,
         setHoveredBlockIdx,
         computeSnap,
+        snapAnchor: xform.anchor,
         isDrawing,
         dimPrompt,
         manualDim,
@@ -1722,6 +1804,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       pickCurve,
       hoverCurveId,
       hoverEdgeId,
+      xform.anchor,
     ],
   );
 
@@ -2050,8 +2133,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         setDimPrompt,
         setHoveredTrim,
         commitPoint,
+        transformPick: xform.active ? xform.onPick : null,
       }),
-    [snap, tool, cadState.entities, commitPoint, zoom, toWorld],
+    [snap, tool, cadState.entities, commitPoint, zoom, toWorld, xform.active, xform.onPick],
   );
 
   const handleKeyDown = useCallback(
@@ -2093,9 +2177,11 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         setSnapSettings,
         setDimPrompt,
         setManualDim,
+        xform,
       }),
     [
       tool,
+      xform,
       isDrawing,
       tempPts,
       constructionMode,
@@ -2472,6 +2558,12 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       ellipse_center: 'pick center, then major axis endpoint, then minor axis',
       arc_center: 'pick center, then start point, then end point',
       construction_line: 'pick two points for an infinite reference line',
+      spline: 'click fit points, Enter to finish, click the first point to close',
+      point: 'click to place, or type X and Y',
+      move: 'pick the shapes, then a base point and where it goes',
+      scale: 'pick the shapes, then type the factor',
+      rotate: 'pick the shapes, then type the angle',
+      mirror: 'pick the shapes, then two points on the mirror line',
       trim: 'click a line to remove it (or the piece between two crossings)',
     };
     return m[t] ?? '';
@@ -2550,6 +2642,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             fitView,
           }}
         />
+
+        {!displayOnly && (xform.active || tool === 'point') && (
+          <TransformDialog
+            tool={tool}
+            cmd={xform}
+            clearSelection={() => dispatch({ type: 'SELECT_ENTITY', id: null })}
+            addPoint={(pt) => commitPoint(pt)}
+            done={() => setTool('select')}
+          />
+        )}
 
         <ViewModeBar
           {...{

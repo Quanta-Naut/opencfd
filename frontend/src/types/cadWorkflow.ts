@@ -51,9 +51,11 @@ export interface BoundaryEdge {
 
 export interface CadEntity {
   id: string;
-  type: 'line' | 'polyline' | 'circle' | 'ellipse' | 'arc' | 'rectangle' | 'spline' | 'construction';
+  type: 'line' | 'polyline' | 'circle' | 'ellipse' | 'arc' | 'rectangle' | 'spline' | 'construction' | 'point';
   layer: string;
   pts: Point2D[];
+  /** Spline fit points (the curve passes through each); `pts` is the curve sampled. */
+  ctrl?: Point2D[];
   selected?: boolean;
   isClosed?: boolean;
   radius?: number;

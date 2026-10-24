@@ -61,6 +61,7 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
     hoveredBlockIdx,
     setHoveredBlockIdx,
     computeSnap,
+    snapAnchor,
     isDrawing,
     dimPrompt,
     manualDim,
@@ -192,7 +193,10 @@ export function onMouseMove(e: React.MouseEvent, wb: MouseMoveContext) {
     if (hb !== hoveredBlockIdx) setHoveredBlockIdx(hb);
   }
 
-  const s = computeSnap(raw);
+  // Ortho and Angle measure from the dragged vertex's start, the move's grab
+  // point, or a transform command's base point, as well as from the last
+  // point placed while drawing.
+  const s = computeSnap(raw, editDrag.current?.startWorld ?? snapAnchor ?? undefined);
   // Once the user has typed into the live dimension box, the mouse no
   // longer drives the preview - the typed-value sync effect owns `snap`.
   const dimIsManual = isDrawing && dimPrompt?.live && manualDim;
@@ -501,7 +505,8 @@ export interface MouseMoveContext {
   setHoveredBlockVtx: React.Dispatch<React.SetStateAction<string>>;
   hoveredBlockIdx: number;
   setHoveredBlockIdx: React.Dispatch<React.SetStateAction<number>>;
-  computeSnap: (raw: Point2D) => Snap;
+  computeSnap: (raw: Point2D, anchor?: Point2D) => Snap;
+  snapAnchor: Point2D | null;
   isDrawing: boolean;
   dimPrompt: DynamicDimPrompt;
   manualDim: boolean;

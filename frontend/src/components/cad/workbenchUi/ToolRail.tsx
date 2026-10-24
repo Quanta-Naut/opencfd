@@ -16,6 +16,12 @@ import {
   ScanLine,
   Eraser,
   ArrowUpRight,
+  Spline,
+  Crosshair,
+  Move,
+  Scaling,
+  RotateCw,
+  FlipHorizontal2,
 } from 'lucide-react';
 import { IS_MAC, MOD_LABEL } from '../../../utils/platform';
 import { Tooltip } from '../../ui/Tooltip';
@@ -46,7 +52,7 @@ export function ToolRail(p: ToolRailProps) {
     <>
       {/* Tool rail: floats over the viewport so drawing gets the full height. */}
       {!displayOnly && (
-        <div className="absolute top-3 left-3 z-20 flex flex-col items-center gap-0.5 p-1 bg-surface border border-line rounded select-none">
+        <div className="absolute top-3 left-3 z-20 flex flex-col items-center gap-0.5 p-1 bg-surface border border-line rounded select-none max-h-[calc(100%-5rem)] overflow-y-auto">
           <Tooltip
             content={tip('Undo', IS_MAC ? `${MOD_LABEL}Z` : `${MOD_LABEL}+Z`)}
             delay={350}
@@ -74,7 +80,14 @@ export function ToolRail(p: ToolRailProps) {
           {toolBtn('circle_center_radius', <Circle className="w-4 h-4" />, 'Circle', 'C')}
           {toolBtn('ellipse_center', <CircleDot className="w-4 h-4" />, 'Ellipse', 'E')}
           {toolBtn('arc_center', <TriangleRight className="w-4 h-4" />, 'Arc', 'A')}
+          {toolBtn('spline', <Spline className="w-4 h-4" />, 'Spline', 'B')}
+          {toolBtn('point', <Crosshair className="w-4 h-4" />, 'Point', 'O')}
           {toolBtn('construction_line', <ScanLine className="w-4 h-4" />, 'Construction line')}
+          {railSep}
+          {toolBtn('move', <Move className="w-4 h-4" />, 'Move', 'M')}
+          {toolBtn('scale', <Scaling className="w-4 h-4" />, 'Scale', 'K')}
+          {toolBtn('rotate', <RotateCw className="w-4 h-4" />, 'Rotate', 'Q')}
+          {toolBtn('mirror', <FlipHorizontal2 className="w-4 h-4" />, 'Mirror', 'I')}
           {railSep}
           {modifyBtn(
             'fillet',

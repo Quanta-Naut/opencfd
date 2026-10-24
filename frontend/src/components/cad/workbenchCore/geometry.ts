@@ -1,4 +1,5 @@
 import { Point2D, CadEntity } from '../../../types/cadWorkflow';
+import { sampleSpline } from './spline';
 
 export function uid(): string {
   return `e_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -7,6 +8,11 @@ export function uid(): string {
 /** Move vertex `idx` of an entity to `np`, keeping the shape's kind sane
  *  (rectangles stay axis-aligned; a circle centre translates, its rim resizes). */
 export function moveEntityVertex(ent: CadEntity, idx: number, np: Point2D): CadEntity {
+  // A spline's grips are its fit points; the curve is resampled through them.
+  if (ent.type === 'spline' && ent.ctrl) {
+    const ctrl = ent.ctrl.map((p, i) => (i === idx ? { ...np } : { ...p }));
+    return { ...ent, ctrl, pts: sampleSpline(ctrl, !!ent.isClosed) };
+  }
   const pts = ent.pts.map(p => ({ ...p }));
   if (ent.type === 'rectangle' && pts.length === 4) {
     const opp = pts[(idx + 2) % 4];
@@ -44,7 +50,8 @@ export function moveEntityVertex(ent: CadEntity, idx: number, np: Point2D): CadE
 }
 
 export function translateEntity(ent: CadEntity, dx: number, dy: number): CadEntity {
-  return { ...ent, pts: ent.pts.map(p => ({ x: p.x + dx, y: p.y + dy })) };
+  const move = (ps: Point2D[]) => ps.map(p => ({ x: p.x + dx, y: p.y + dy }));
+  return { ...ent, pts: move(ent.pts), ...(ent.ctrl ? { ctrl: move(ent.ctrl) } : {}) };
 }
 
 export function dist(a: Point2D, b: Point2D): number {
