@@ -228,12 +228,12 @@ export const StructuredMeshPanel: React.FC<{
               className={field}
             />
           </label>
-          <Tooltip content="Half the cells everywhere, gradings kept (ICEM Scale sizes).">
+          <Tooltip content="Half the cells everywhere, gradings kept.">
             <button onClick={() => scale(0.5)} className={btn}>
               Coarser
             </button>
           </Tooltip>
-          <Tooltip content="Twice the cells everywhere, gradings kept (ICEM Scale sizes).">
+          <Tooltip content="Twice the cells everywhere, gradings kept.">
             <button onClick={() => scale(2)} className={btn}>
               Finer
             </button>
@@ -350,7 +350,7 @@ export const StructuredMeshPanel: React.FC<{
           ) : (
             <span className="text-fg-2">No spacing jumps at block joins</span>
           )}
-          <Tooltip content="Match the cell size on both sides of every block join (Pointwise Sync spacings).">
+          <Tooltip content="Match the cell size on both sides of every block join.">
             <button
               onClick={() => onUpdateBlocking?.(syncSpacings(bkNow).blocking)}
               disabled={!jumps.length}

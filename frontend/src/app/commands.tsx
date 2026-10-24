@@ -111,7 +111,7 @@ export function buildCommands(wb: CommandsContext): Command[] {
       id: 'mesh-blocks-init',
       group: 'Mesh',
       title: 'Initialize Blocking',
-      keywords: 'blocking hexa structured icem block',
+      keywords: 'blocking hexa structured block quad grid',
       icon: <Layers className="w-4 h-4" />,
       run: handleInitializeBlocking,
     },
