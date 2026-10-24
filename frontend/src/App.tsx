@@ -13,7 +13,7 @@ import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
 import { defaultPatchBC } from './caseSetup/bcCatalog';
 import { directionsForAoA } from './solver/solverConfig';
-import { CFDProjectState, SolverRunRecord, PlotDefinition } from './types/cfd';
+import { CFDProjectState, SolverRunRecord, PlotDefinition, TrackSeed } from './types/cfd';
 import {
   generateCaseFiles,
   uploadAndParseAirfoil,
@@ -1041,22 +1041,72 @@ export function App({
   const [probePicking, setProbePicking] = useState(false);
   // Clip box picking: null when off, then the first corner once clicked.
   const [clipPicking, setClipPicking] = useState<{ p1: [number, number] | null } | null>(null);
+  // Particle track seeding: points (until Done) or a line (two clicks).
+  const [trackPicking, setTrackPicking] = useState<{
+    kind: 'point' | 'line';
+    p1: [number, number] | null;
+  } | null>(null);
   useEffect(() => {
     if (activeStage !== 'results') {
       setProbePicking(false);
       setClipPicking(null);
+      setTrackPicking(null);
     }
   }, [activeStage]);
   useEffect(() => {
-    if (!probePicking && !clipPicking) return;
+    if (!probePicking && !clipPicking && !trackPicking) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       setProbePicking(false);
       setClipPicking(null);
+      setTrackPicking(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [probePicking, clipPicking]);
+  }, [probePicking, clipPicking, trackPicking]);
+  const pickTrackSeed = useCallback(
+    (pt: [number, number]) => {
+      if (!trackPicking) return;
+      const r = (v: number) => Number(v.toPrecision(5));
+      let seed: TrackSeed;
+      const id = `tr_${Date.now().toString(36)}`;
+      if (trackPicking.kind === 'point') {
+        seed = {
+          id,
+          kind: 'point',
+          x0: r(pt[0]),
+          y0: r(pt[1]),
+          x1: r(pt[0]),
+          y1: r(pt[1]),
+          count: 1,
+        };
+      } else if (!trackPicking.p1) {
+        setTrackPicking({ kind: 'line', p1: pt });
+        return;
+      } else {
+        const p1 = trackPicking.p1;
+        setTrackPicking(null);
+        if (Math.hypot(pt[0] - p1[0], pt[1] - p1[1]) < 1e-12) return;
+        seed = {
+          id,
+          kind: 'line',
+          x0: r(p1[0]),
+          y0: r(p1[1]),
+          x1: r(pt[0]),
+          y1: r(pt[1]),
+          count: 12,
+        };
+      }
+      setState((prev) => ({
+        ...prev,
+        postprocess: {
+          ...prev.postprocess,
+          tracks: [...(prev.postprocess.tracks ?? []), seed],
+        },
+      }));
+    },
+    [trackPicking],
+  );
   const pickClipCorner = useCallback(
     (pt: [number, number]) => {
       const p1 = clipPicking?.p1;
@@ -1487,6 +1537,7 @@ export function App({
                     onToggleProbePicking: () => {
                       setPickingPointsState(null);
                       setClipPicking(null);
+                      setTrackPicking(null);
                       setProbePicking((v) => !v);
                     },
                     clipPicking: !!clipPicking,
@@ -1499,7 +1550,15 @@ export function App({
                     onToggleClipPicking: () => {
                       setPickingPointsState(null);
                       setProbePicking(false);
+                      setTrackPicking(null);
                       setClipPicking((v) => (v ? null : { p1: null }));
+                    },
+                    trackPicking: trackPicking?.kind ?? null,
+                    onTrackPicking: (kind: 'point' | 'line') => {
+                      setPickingPointsState(null);
+                      setProbePicking(false);
+                      setClipPicking(null);
+                      setTrackPicking((v) => (v?.kind === kind ? null : { kind, p1: null }));
                     },
                     onAddBoundaryPlot: handleAddBoundaryPlot,
                     runForces: viewedRun
@@ -1602,11 +1661,21 @@ export function App({
                 }
                 onRestoreLive={selectLatestFinishedRun}
                 activePlotLine={activePlotLineForCanvas}
-                isPickingPlotPoints={!!pickingPointsState || probePicking || !!clipPicking}
-                onPickPlotPoint={
-                  clipPicking ? pickClipCorner : probePicking ? addProbe : handlePickPlotPoint
+                isPickingPlotPoints={
+                  !!pickingPointsState || probePicking || !!clipPicking || !!trackPicking
                 }
-                plotPickPreviewP1={clipPicking?.p1 ?? pickingPointsState?.p1 ?? null}
+                onPickPlotPoint={
+                  trackPicking
+                    ? pickTrackSeed
+                    : clipPicking
+                      ? pickClipCorner
+                      : probePicking
+                        ? addProbe
+                        : handlePickPlotPoint
+                }
+                plotPickPreviewP1={
+                  trackPicking?.p1 ?? clipPicking?.p1 ?? pickingPointsState?.p1 ?? null
+                }
               />
               {clipPicking && (
                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
@@ -1622,6 +1691,25 @@ export function App({
                     className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
                   >
                     Cancel
+                  </button>
+                </div>
+              )}
+              {trackPicking && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
+                  <Crosshair className="w-4 h-4 text-accent" />
+                  <span>
+                    {trackPicking.kind === 'point'
+                      ? 'Click on the field to release particles'
+                      : trackPicking.p1
+                        ? 'Click the other end of the line'
+                        : 'Click one end of the release line'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTrackPicking(null)}
+                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
+                  >
+                    {trackPicking.kind === 'point' ? 'Done' : 'Cancel'}
                   </button>
                 </div>
               )}

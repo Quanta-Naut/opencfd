@@ -14,6 +14,7 @@ import {
 import { buildMeshLocator } from '../utils/meshLocator';
 import { patchReports, type PatchReport } from '../utils/boundaryData';
 import { isoSegments } from '../utils/isoLines';
+import { seedPoints, traceTrack, type Track } from '../utils/particleTracks';
 
 interface FieldPayload {
   fields?: Record<string, number[]>;
@@ -186,14 +187,70 @@ export function useResultsView(
     };
   }, [fieldData, activeVals, range, active]);
 
-  const hasProbes = pp.probes.length > 0;
+  const seeds = pp.tracks ?? [];
+  const needLocator = pp.probes.length > 0 || seeds.length > 0;
   const probeLocator = useMemo(
     () =>
-      hasProbes && mesh?.nodes?.length && mesh?.elements?.length
+      needLocator && mesh?.nodes?.length && mesh?.elements?.length
         ? buildMeshLocator(mesh.nodes, mesh.elements)
         : null,
-    [hasProbes, mesh?.nodes, mesh?.elements],
+    [needLocator, mesh?.nodes, mesh?.elements],
   );
+
+  // Particle tracks from each seed, through this run's own velocity.
+  const tracks = useMemo<Track[]>(() => {
+    const ux = fields?.Ux,
+      uy = fields?.Uy,
+      nodes = mesh?.nodes;
+    if (!seeds.length || !probeLocator || !ux || !uy || !nodes?.length) return [];
+    if (ux.length !== nodes.length) return [];
+    let x0 = Infinity,
+      y0 = Infinity,
+      x1 = -Infinity,
+      y1 = -Infinity;
+    for (const n of nodes) {
+      if (n[0] < x0) x0 = n[0];
+      if (n[0] > x1) x1 = n[0];
+      if (n[1] < y0) y0 = n[1];
+      if (n[1] > y1) y1 = n[1];
+    }
+    const maxLength = 4 * Math.hypot(x1 - x0, y1 - y0);
+    const out: Track[] = [];
+    for (const s of seeds)
+      for (const [x, y] of seedPoints(s)) {
+        const t = traceTrack(probeLocator, nodes, ux, uy, x, y, maxLength);
+        if (t) out.push(t);
+      }
+    return out;
+  }, [seeds, probeLocator, fields?.Ux, fields?.Uy, mesh?.nodes]);
+
+  // The value that colours each track point, and the range over all tracks.
+  const colorBy = pp.trackColorBy ?? 'time';
+  const trackColors = useMemo(() => {
+    if (!tracks.length || !colorBy) return null;
+    let vals: Float32Array[];
+    if (colorBy === 'time') vals = tracks.map((t) => t.time);
+    else {
+      const v = fieldValues(fields, colorBy, ref);
+      if (!v || !probeLocator) return null;
+      vals = tracks.map((t) => {
+        const out = new Float32Array(t.pts.length / 2);
+        for (let i = 0; i < out.length; i++)
+          out[i] = probeLocator.sample(v, t.pts[2 * i], t.pts[2 * i + 1]) ?? NaN;
+        return out;
+      });
+    }
+    let lo = Infinity,
+      hi = -Infinity;
+    for (const a of vals)
+      for (const x of a)
+        if (Number.isFinite(x)) {
+          if (x < lo) lo = x;
+          if (x > hi) hi = x;
+        }
+    if (!(hi > lo)) return null;
+    return { vals, range: [lo, hi] as [number, number] };
+  }, [tracks, colorBy, fields, ref, probeLocator]);
 
   // Every available field at every probe.
   const allVals = useMemo(() => {
@@ -282,8 +339,21 @@ export function useResultsView(
       clipOutside: pp.clipOutside ?? false,
       clipBox: pp.clipBox ?? null,
       isoLines,
+      tracks: tracks.map((t, i) => ({ pts: t.pts, vals: trackColors?.vals[i] ?? null })),
+      trackRange: trackColors?.range ?? null,
+      trackLegend: trackColors
+        ? (() => {
+            const [lo, hi] = trackColors.range;
+            const d = colorBy === 'time' ? null : fieldDef(colorBy);
+            const unit = d ? d.unit : 's';
+            const name = d ? d.label : 'Time since release';
+            return `${name}  ${fmtValue(lo)} to ${fmtValue(hi)}${unit ? ` ${unit}` : ''}`;
+          })()
+        : null,
+      trackSeeds: pp.tracks ?? [],
+      colormap: pp.colormap,
     }),
-    [pp, available, probeRows, active, def, isoLines, diffing],
+    [pp, available, probeRows, active, def, isoLines, diffing, tracks, trackColors, colorBy],
   );
 
   return {

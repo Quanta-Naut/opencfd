@@ -1,11 +1,13 @@
 import type { MeshLocator } from '../../../utils/meshLocator';
+import { colormapRGB } from '../workbenchCore/colormap';
 import type { ResultsOverlay } from '../workbenchCore';
 import type { DrawFrame } from './types';
 
 /**
  * Results overlays on the 2D canvas, over the field colours: velocity
  * vectors on an even screen-space grid (so their density stays readable at
- * any zoom) and probe markers with their value.
+ * any zoom), lines at values, particle tracks and probe markers with their
+ * value.
  */
 export function drawResultsOverlay(
   f: DrawFrame,
@@ -119,6 +121,8 @@ export function drawResultsOverlay(
     }
   }
 
+  if (ov.tracks.length || ov.trackSeeds.length) drawTracks(f, ov);
+
   // Probes: a ringed dot and a numbered tag with the active field's value.
   ctx.font = '600 10px ui-monospace, monospace';
   ctx.textBaseline = 'middle';
@@ -142,4 +146,144 @@ export function drawResultsOverlay(
     ctx.textAlign = 'left';
     ctx.fillText(text, bx + 5, by + 8);
   });
+}
+
+/** Particle tracks, coloured along their length on a light outline (a
+ *  single-colour track is white on a dark one), with chevrons showing which
+ *  way they run, and the seeds they start from. */
+function drawTracks(f: DrawFrame, ov: ResultsOverlay): void {
+  const { ctx, ws } = f;
+  const range = ov.trackRange;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = range ? 'rgba(255,255,255,0.9)' : 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  for (const t of ov.tracks) {
+    const p = t.pts;
+    let s = ws(p[0], p[1]);
+    ctx.moveTo(s.x, s.y);
+    for (let i = 2; i + 1 < p.length; i += 2) {
+      s = ws(p[i], p[i + 1]);
+      ctx.lineTo(s.x, s.y);
+    }
+  }
+  ctx.stroke();
+
+  ctx.lineWidth = 2;
+  for (const t of ov.tracks) {
+    const p = t.pts;
+    if (!t.vals || !range) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.beginPath();
+      let s = ws(p[0], p[1]);
+      ctx.moveTo(s.x, s.y);
+      for (let i = 2; i + 1 < p.length; i += 2) {
+        s = ws(p[i], p[i + 1]);
+        ctx.lineTo(s.x, s.y);
+      }
+      ctx.stroke();
+      continue;
+    }
+    // One stroke per run of points in the same of 48 colour steps.
+    const span = range[1] - range[0];
+    const bucket = (v: number) =>
+      Number.isFinite(v) ? Math.max(0, Math.min(47, Math.floor(((v - range[0]) / span) * 48))) : -1;
+    let i = 0;
+    const n = p.length / 2;
+    while (i < n - 1) {
+      const b = bucket(t.vals[i]);
+      let j = i + 1;
+      while (j < n - 1 && bucket(t.vals[j]) === b) j++;
+      if (b >= 0) {
+        ctx.strokeStyle = colormapRGB((b + 0.5) / 48, ov.colormap);
+        ctx.beginPath();
+        let s = ws(p[2 * i], p[2 * i + 1]);
+        ctx.moveTo(s.x, s.y);
+        for (let k = i + 1; k <= j; k++) {
+          s = ws(p[2 * k], p[2 * k + 1]);
+          ctx.lineTo(s.x, s.y);
+        }
+        ctx.stroke();
+      }
+      i = j;
+    }
+  }
+
+  // Direction chevrons about every 120 screen pixels along each track,
+  // staggered so neighbouring tracks do not line them up in columns.
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = range ? 'rgba(17,17,17,0.85)' : 'rgba(255,255,255,0.95)';
+  ctx.beginPath();
+  ov.tracks.forEach((t, ti) => {
+    const p = t.pts;
+    let run = 60 + ((ti * 47) % 120) - 120;
+    let a = ws(p[0], p[1]);
+    for (let i = 2; i + 1 < p.length; i += 2) {
+      const b = ws(p[i], p[i + 1]);
+      const L = Math.hypot(b.x - a.x, b.y - a.y);
+      run += L;
+      if (run >= 120 && L > 0) {
+        run = 0;
+        const ux = (b.x - a.x) / L,
+          uy = (b.y - a.y) / L;
+        ctx.moveTo(b.x - 5 * ux + 3.5 * uy, b.y - 5 * uy - 3.5 * ux);
+        ctx.lineTo(b.x, b.y);
+        ctx.lineTo(b.x - 5 * ux - 3.5 * uy, b.y - 5 * uy + 3.5 * ux);
+      }
+      a = b;
+    }
+  });
+  ctx.stroke();
+
+  // Seeds: a ring for a point, a dashed line for a line.
+  for (const sd of ov.trackSeeds) {
+    const a = ws(sd.x0, sd.y0);
+    ctx.lineWidth = 1.5;
+    if (sd.kind === 'line') {
+      const b = ws(sd.x1, sd.y1);
+      ctx.setLineDash([4, 3]);
+      for (const pass of [0, 1]) {
+        ctx.strokeStyle = pass ? '#ffffff' : 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = pass ? 1.4 : 3;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+    const ends = sd.kind === 'line' ? [a, ws(sd.x1, sd.y1)] : [a];
+    for (const e of ends) {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#111111';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(e.x, e.y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+
+/** What the track colours mean, top left; drawn outside any clip box. */
+export function drawTrackLegend(f: DrawFrame, ov: ResultsOverlay): void {
+  const { ctx } = f;
+  if (ov.trackLegend && ov.trackRange && ov.tracks.length) {
+    ctx.font = '600 10px ui-monospace, monospace';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    const text = `Tracks: ${ov.trackLegend}`;
+    const w = ctx.measureText(text).width;
+    const x = 12,
+      y = 12;
+    ctx.fillStyle = 'rgba(17,17,17,0.85)';
+    ctx.fillRect(x, y, w + 74, 20);
+    for (let k = 0; k < 56; k++) {
+      ctx.fillStyle = colormapRGB(k / 55, ov.colormap);
+      ctx.fillRect(x + 6 + k, y + 6, 1.2, 8);
+    }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, x + 68, y + 10.5);
+  }
 }

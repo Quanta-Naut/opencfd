@@ -160,6 +160,8 @@ export function buildInitialCFDState(savedState: Partial<CFDProjectState> | unde
       clipOutside: false,
       clipBox: null,
       diffRunId: null,
+      tracks: [],
+      trackColorBy: 'time',
       ...(savedState?.postprocess || {}),
     },
     executionStatus: savedState?.executionStatus === 'completed' ? 'completed' : 'idle',

@@ -1,7 +1,7 @@
 import { arrayRange } from '../../../utils/numeric';
 import { colormapRGB } from '../workbenchCore';
 import type { DrawFrame, DrawScene } from './types';
-import { drawResultsOverlay } from './resultsOverlay';
+import { drawResultsOverlay, drawTrackLegend } from './resultsOverlay';
 
 /** The Mesh stage view: the generated mesh on the CAD camera. Returns true when it drew, in which case nothing else is drawn this frame. */
 export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
@@ -206,6 +206,7 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
       drawResultsOverlay(f, resultsOverlay, fieldData?.fields, meshLocator);
     }
     ctx.restore();
+    if (showField && resultsOverlay) drawTrackLegend(f, resultsOverlay);
 
     if (clipBox) {
       const a = ws(clipBox[0], clipBox[1]);

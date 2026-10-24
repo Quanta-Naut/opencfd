@@ -222,6 +222,22 @@ export interface PostProcessConfig {
   clipBox: [number, number, number, number] | null;
   /** Show the viewed run minus this run (null = off). */
   diffRunId: string | null;
+  /** Where particle tracks are released, model coordinates. */
+  tracks: TrackSeed[];
+  /** What colours the tracks: '' one colour, 'time' time since release,
+   *  else a field id. */
+  trackColorBy: string;
+}
+
+/** A particle track release: one point, or `count` points along a line. */
+export interface TrackSeed {
+  id: string;
+  kind: 'point' | 'line';
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  count: number;
 }
 
 export interface SolverRunRecord {

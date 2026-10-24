@@ -121,6 +121,14 @@ export interface ResultsOverlay {
   clipBox: [number, number, number, number] | null;
   /** Lines at typed values: world segments [x1, y1, x2, y2, ...]. */
   isoLines: { level: number; label: string; segs: Float32Array }[];
+  /** Particle tracks: world points [x, y, ...] and, when coloured, a value
+   *  per point mapped through `trackRange` and the colormap. */
+  tracks: { pts: Float32Array; vals: Float32Array | null }[];
+  trackRange: [number, number] | null;
+  /** What the track colours mean, e.g. "Time since release 0 to 0.12 s". */
+  trackLegend: string | null;
+  trackSeeds: { kind: 'point' | 'line'; x0: number; y0: number; x1: number; y1: number }[];
+  colormap: string;
 }
 
 export interface CadWorkbenchProps {

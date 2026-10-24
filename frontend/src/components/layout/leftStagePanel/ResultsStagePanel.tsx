@@ -1,5 +1,16 @@
 import React, { useState } from 'react';
-import { Calculator, ChevronDown, Crop, Crosshair, ImageDown, Pencil, Plus, X } from 'lucide-react';
+import {
+  Calculator,
+  ChevronDown,
+  CircleDot,
+  Crop,
+  Crosshair,
+  ImageDown,
+  Pencil,
+  Plus,
+  Spline,
+  X,
+} from 'lucide-react';
 import type { StageId, StageStatus } from '../stages';
 import { CFDProjectState, PostProcessConfig } from '../../../types/cfd';
 import { StageGate } from './StageGate';
@@ -144,6 +155,7 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const inflow = flows.reduce((s, r) => s + Math.min(0, r.flow!), 0);
   const net = flows.reduce((s, r) => s + r.flow!, 0);
   const custom = pp.customFields ?? [];
+  const tracks = pp.tracks ?? [];
   const allIds: ResultFieldId[] = [...RESULT_FIELDS.map((f) => f.id), ...custom.map((f) => f.id)];
   const saveCustom = (f: CustomField) => {
     const exists = custom.some((c) => c.id === f.id);
@@ -562,6 +574,123 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
                 </label>
               </div>
             )
+          )}
+        </Section>
+
+        <Section
+          id="tracks"
+          title="Particle tracks"
+          open={open}
+          setOpen={setOpen}
+          aside={
+            tracks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => set({ tracks: [] })}
+                className="text-[10px] text-fg-2 hover:text-fg"
+              >
+                Clear
+              </button>
+            )
+          }
+        >
+          <div className="grid grid-cols-2 gap-1.5">
+            {(
+              [
+                ['point', 'From points', CircleDot],
+                ['line', 'From a line', Spline],
+              ] as const
+            ).map(([kind, text, Icon]) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => p.onTrackPicking(kind)}
+                disabled={!p.hasField || !view.available.has('Ux')}
+                className={`${ghostBtn} disabled:opacity-40 ${
+                  p.trackPicking === kind
+                    ? '!bg-accent-soft !text-accent-fg !border-accent-line'
+                    : ''
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {text}
+              </button>
+            ))}
+          </div>
+          {tracks.length > 0 && (
+            <>
+              <div>
+                <span className={`${lbl} block mb-1`}>Colour by</span>
+                <select
+                  value={pp.trackColorBy ?? 'time'}
+                  onChange={(e) => set({ trackColorBy: e.target.value })}
+                  className={select}
+                  aria-label="Colour tracks by"
+                >
+                  <option value="">One colour</option>
+                  <option value="time">Time since release (s)</option>
+                  {allIds
+                    .filter((id) => view.available.has(id) && !fieldDef(id).wallOnly)
+                    .map((id) => {
+                      const f = fieldDef(id);
+                      return (
+                        <option key={id} value={id}>
+                          {f.label}
+                          {f.unit ? ` (${f.unit})` : ''}
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+              <ul className="space-y-1">
+                {tracks.map((t) => (
+                  <li
+                    key={t.id}
+                    className="flex items-center gap-1.5 rounded-sm border border-line bg-surface-2 px-2 py-1 text-[10px]"
+                  >
+                    {t.kind === 'point' ? (
+                      <CircleDot className="w-3 h-3 text-fg-3 shrink-0" />
+                    ) : (
+                      <Spline className="w-3 h-3 text-fg-3 shrink-0" />
+                    )}
+                    <span className="font-mono text-fg-2 truncate">
+                      ({fmtValue(t.x0)}, {fmtValue(t.y0)})
+                      {t.kind === 'line' ? ` to (${fmtValue(t.x1)}, ${fmtValue(t.y1)})` : ''}
+                    </span>
+                    {t.kind === 'line' && (
+                      <Tooltip content="Particles released along the line" delay={300}>
+                        <span className="ml-auto w-12 shrink-0">
+                          <NumberField
+                            value={t.count}
+                            min={2}
+                            max={100}
+                            integer
+                            onChange={(n) =>
+                              set({
+                                tracks: tracks.map((x) =>
+                                  x.id === t.id
+                                    ? { ...x, count: Math.max(2, Math.min(100, Math.round(n))) }
+                                    : x,
+                                ),
+                              })
+                            }
+                            className={field}
+                          />
+                        </span>
+                      </Tooltip>
+                    )}
+                    <button
+                      type="button"
+                      aria-label="Remove release"
+                      onClick={() => set({ tracks: tracks.filter((x) => x.id !== t.id) })}
+                      className={`${t.kind === 'line' ? '' : 'ml-auto'} text-fg-3 hover:text-fg`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </Section>
 
@@ -1001,6 +1130,9 @@ export interface ResultsStagePanelProps {
   onToggleProbePicking: () => void;
   clipPicking: boolean;
   onToggleClipPicking: () => void;
+  /** Seeding particle tracks: by point, by line, or not. */
+  trackPicking: 'point' | 'line' | null;
+  onTrackPicking: (kind: 'point' | 'line') => void;
   /** Runs that can be subtracted from the viewed one. */
   diffRuns: { id: string; label: string }[];
   viewedRunLabel: string;
