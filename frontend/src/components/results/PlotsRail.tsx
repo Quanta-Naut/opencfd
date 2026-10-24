@@ -1,12 +1,15 @@
 import React from 'react';
 import { LineChart } from 'lucide-react';
 import { PlotDefinition, SolverRunRecord } from '../../types/cfd';
+import type { FlowReference } from '../../utils/resultFields';
 import { PlotThumbnail } from './PlotThumbnail';
 
 export interface PlotsRailProps {
   plots: PlotDefinition[];
   selectedPlotId?: string | null;
   onSelectPlot: (plot: PlotDefinition) => void;
+  onOpenPlot: (plot: PlotDefinition) => void;
+  flowRef: FlowReference;
   solverRuns?: SolverRunRecord[];
 }
 
@@ -14,6 +17,8 @@ export const PlotsRail: React.FC<PlotsRailProps> = ({
   plots,
   selectedPlotId = null,
   onSelectPlot,
+  onOpenPlot,
+  flowRef,
   solverRuns,
 }) => {
   return (
@@ -47,6 +52,8 @@ export const PlotsRail: React.FC<PlotsRailProps> = ({
               plot={plot}
               isSelected={selectedPlotId === plot.id}
               onClick={() => onSelectPlot(plot)}
+              onExpand={() => onOpenPlot(plot)}
+              flowRef={flowRef}
               solverRuns={solverRuns}
             />
           ))

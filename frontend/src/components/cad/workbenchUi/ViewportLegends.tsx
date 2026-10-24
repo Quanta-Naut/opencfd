@@ -7,6 +7,8 @@ export function ViewportLegends(p: ViewportLegendsProps) {
     fieldData,
     activeField,
     colormap,
+    legend,
+    levels = 0,
     meshOnly,
     canvasMode,
     showMeshQuality,
@@ -24,7 +26,13 @@ export function ViewportLegends(p: ViewportLegendsProps) {
         Array.isArray(fieldData?.fields?.[activeField]) &&
         (() => {
           const r = fieldData?.ranges?.[activeField] || [0, 1];
-          const stops = Array.from({ length: 12 }, (_, i) => colormapRGB(1 - i / 11, colormap));
+          // Banded contours: hard stops, one flat colour per band.
+          const gradient = levels
+            ? Array.from({ length: levels }, (_, i) => {
+                const c = colormapRGB(1 - (i + 0.5) / levels, colormap);
+                return `${c} ${(i / levels) * 100}%, ${c} ${((i + 1) / levels) * 100}%`;
+              }).join(',')
+            : Array.from({ length: 12 }, (_, i) => colormapRGB(1 - i / 11, colormap)).join(',');
           const labels: Record<string, { name: string; unit: string }> = {
             U_mag: { name: '[U]', unit: 'm/s' },
             p: { name: '[p]', unit: 'Pa' },
@@ -32,7 +40,9 @@ export function ViewportLegends(p: ViewportLegendsProps) {
             omega: { name: '[ω]', unit: '1/s' },
             vorticity: { name: '[∇×U]', unit: '1/s' },
           };
-          const fieldLabel = labels[activeField] || { name: activeField, unit: '' };
+          const fieldLabel = legend
+            ? { name: legend.title, unit: legend.unit }
+            : labels[activeField] || { name: activeField, unit: '' };
           return (
             <div
               className="absolute right-3 w-fit bg-surface/95 border border-line rounded p-1.5 pr-2 text-[10px] font-mono text-fg-2 pointer-events-none"
@@ -49,7 +59,7 @@ export function ViewportLegends(p: ViewportLegendsProps) {
                 </div>
                 <div
                   className="ml-1 w-2.5 shrink-0 rounded-sm border border-line"
-                  style={{ background: `linear-gradient(to bottom, ${stops.join(',')})` }}
+                  style={{ background: `linear-gradient(to bottom, ${gradient})` }}
                 />
               </div>
             </div>
@@ -134,6 +144,10 @@ export interface ViewportLegendsProps {
   fieldData: any;
   activeField: string;
   colormap: string;
+  /** Results legend title and unit, when the Results tab sets them. */
+  legend?: { title: string; unit: string };
+  /** Flat colour bands in the field (0 = smooth). */
+  levels?: number;
   meshOnly: boolean;
   canvasMode: 'cad' | 'mesh';
   showMeshQuality: boolean;

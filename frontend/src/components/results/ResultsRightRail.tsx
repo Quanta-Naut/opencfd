@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { LineChart, History, ChevronRight } from 'lucide-react';
 import { SolverRunRecord, PlotDefinition } from '../../types/cfd';
+import type { FlowReference } from '../../utils/resultFields';
 import { PlotsRail } from './PlotsRail';
 import { RunHistoryRail } from './RunHistoryRail';
 
@@ -9,6 +10,8 @@ export interface ResultsRightRailProps {
   plots: PlotDefinition[];
   selectedPlotId: string | null;
   onSelectPlot: (plot: PlotDefinition) => void;
+  onOpenPlot: (plot: PlotDefinition) => void;
+  flowRef: FlowReference;
 
   // Runs panel props
   runs: SolverRunRecord[];
@@ -55,6 +58,8 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
   plots,
   selectedPlotId,
   onSelectPlot,
+  onOpenPlot,
+  flowRef,
   runs,
   executionStatus,
   selectedRunId,
@@ -266,6 +271,8 @@ export const ResultsRightRail: React.FC<ResultsRightRailProps> = ({
             plots={plots}
             selectedPlotId={selectedPlotId}
             onSelectPlot={onSelectPlot}
+            onOpenPlot={onOpenPlot}
+            flowRef={flowRef}
             solverRuns={runs}
           />
         ) : (

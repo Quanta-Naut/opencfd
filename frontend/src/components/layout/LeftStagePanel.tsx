@@ -13,7 +13,7 @@ import {
 } from '../../types/cadWorkflow';
 import { Blocking } from '../../types/blocking';
 import { StageGate } from './leftStagePanel/StageGate';
-import { ResultsStagePanel } from './leftStagePanel/ResultsStagePanel';
+import { ResultsStagePanel, type ResultsStagePanelProps } from './leftStagePanel/ResultsStagePanel';
 import { YPlusStagePanel } from './leftStagePanel/YPlusStagePanel';
 import { PhysicsStagePanel } from './leftStagePanel/PhysicsStagePanel';
 import { MeshStagePanel } from './leftStagePanel/MeshStagePanel';
@@ -112,6 +112,17 @@ interface LeftStagePanelProps {
   onWidthChange?: (w: number) => void;
   projectId?: string;
   onCreatePlot?: () => void;
+  /** Results tab: computed views and handlers (field, probes, reports, plots). */
+  resultsPanel?: Omit<
+    ResultsStagePanelProps,
+    | 'activeStage'
+    | 'stageStatus'
+    | 'onSelectStage'
+    | 'state'
+    | 'updatePostProcess'
+    | 'onCreatePlot'
+    | 'projectId'
+  >;
 }
 
 export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
@@ -200,6 +211,7 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
   onWidthChange,
   projectId,
   onCreatePlot,
+  resultsPanel,
 }) => {
   // Drag the right edge to resize; the width is shared across every stage.
   const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -442,17 +454,20 @@ export const LeftStagePanel: React.FC<LeftStagePanelProps> = ({
         />
       )}
 
-      <ResultsStagePanel
-        {...{
-          activeStage,
-          stageStatus,
-          onSelectStage,
-          state,
-          updatePostProcess,
-          onCreatePlot,
-          projectId,
-        }}
-      />
+      {resultsPanel && (
+        <ResultsStagePanel
+          {...{
+            activeStage,
+            stageStatus,
+            onSelectStage,
+            state,
+            updatePostProcess,
+            onCreatePlot: onCreatePlot ?? (() => {}),
+            projectId: projectId ?? '',
+          }}
+          {...resultsPanel}
+        />
+      )}
     </aside>
   );
 };

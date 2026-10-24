@@ -79,10 +79,14 @@ def _assemble_from_cells(nodes, elements: List, centres: np.ndarray,
             "k": [round(float(v), 5) for v in kn],
             "omega": [round(float(v), 3) for v in on],
             "vorticity": [round(float(v), 4) for v in vort],
+            # components, for vectors, probes and the Ux / Uy contours
+            "Ux": [round(float(v), 4) for v in node_u[:, 0]],
+            "Uy": [round(float(v), 4) for v in node_u[:, 1]],
         },
         "ranges": {
             "U_mag": rng(umag), "p": rng(pn), "k": rng(kn),
             "omega": rng(on), "vorticity": rng(vort, symmetric=True),
+            "Ux": rng(node_u[:, 0]), "Uy": rng(node_u[:, 1]),
         },
         "streamlines": streamlines,
     }

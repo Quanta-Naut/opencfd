@@ -69,12 +69,24 @@ precision highp float;
 precision highp int;
 uniform int u_mode;
 uniform sampler2D u_colormap;
+uniform float u_levels;
+uniform float u_lines;
 in float v_t;
 in vec4 v_col;
 out vec4 outColor;
 void main() {
   if (u_mode == 1 || u_mode == 2) {
-    outColor = texture(u_colormap, vec2(clamp(v_t, 0.0, 1.0), 0.5));
+    float t = clamp(v_t, 0.0, 1.0);
+    // Banded contours: N flat colours, each the middle of its band.
+    if (u_levels > 0.5) t = (min(floor(t * u_levels), u_levels - 1.0) + 0.5) / u_levels;
+    vec4 c = texture(u_colormap, vec2(t, 0.5));
+    // Iso-lines at the band edges, one pixel wide at any zoom.
+    if (u_lines > 0.5) {
+      float g = v_t * max(u_levels, 10.0);
+      float d = abs(fract(g - 0.5) - 0.5) / max(fwidth(g), 1e-6);
+      c.rgb = mix(c.rgb * 0.25, c.rgb, clamp(d - 0.5, 0.0, 1.0));
+    }
+    outColor = c;
   } else {
     outColor = v_col;
   }
@@ -104,7 +116,16 @@ export type RGBA = [number, number, number, number];
 
 export type MeshGLFill =
   | { kind: 'solid'; color: RGBA }
-  | { kind: 'node'; vals: ArrayLike<number>; lo: number; hi: number; colormap: string }
+  | {
+      kind: 'node';
+      vals: ArrayLike<number>;
+      lo: number;
+      hi: number;
+      colormap: string;
+      /** Flat colour bands (0 = smooth) and iso-lines over them. */
+      levels?: number;
+      lines?: boolean;
+    }
   | { kind: 'cell'; vals: ArrayLike<number>; lo: number; hi: number; colormap: string }
   | {
       kind: 'cellRGBA';
@@ -315,7 +336,7 @@ export function useMeshGL() {
       const gl = canvas.getContext('webgl2', {
         antialias: true,
         premultipliedAlpha: false,
-        preserveDrawingBuffer: false,
+        preserveDrawingBuffer: true, // "Save image" reads it back
       }) as WebGL2RenderingContext | null;
       if (!gl) return false;
 
@@ -436,6 +457,8 @@ export function useMeshGL() {
             lo: u('u_lo'),
             span: u('u_span'),
             solid: u('u_solid'),
+            levels: u('u_levels'),
+            lines: u('u_lines'),
           },
           lineUniforms: {
             transform: gl.getUniformLocation(lineProg, 'u_transform'),
@@ -525,6 +548,8 @@ export function useMeshGL() {
     gl.uniform1f(U.lo, lo);
     gl.uniform1f(U.span, span);
     gl.uniform4fv(U.solid, f.kind === 'solid' ? f.color : [1, 1, 1, 1]);
+    gl.uniform1f(U.levels, f.kind === 'node' ? (f.levels ?? 0) : 0);
+    gl.uniform1f(U.lines, f.kind === 'node' && f.lines ? 1 : 0);
     const bind = (unit: number, tex: WebGLTexture, loc: WebGLUniformLocation | null) => {
       gl.activeTexture(gl.TEXTURE0 + unit);
       gl.bindTexture(gl.TEXTURE_2D, tex);

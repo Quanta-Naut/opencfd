@@ -1,15 +1,29 @@
-import React, { useState, useMemo } from 'react';
-import { X, Trash2, RefreshCw, Sliders, Check, Loader2 } from 'lucide-react';
-import { PlotDefinition, FlowVariable, MonitorField, SolverRunRecord } from '../../types/cfd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  X,
+  Trash2,
+  RefreshCw,
+  Sliders,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  Layers,
+  Download,
+  Loader2,
+} from 'lucide-react';
+import { PlotDefinition, FlowVariable, SolverRunRecord } from '../../types/cfd';
 import { CanvasChart, ChartSeries } from '../solver/CanvasChart';
 import {
-  FLOW_VARIABLES,
   MONITOR_FIELDS,
   getVariableLabel,
   getMonitorLabel,
   monitorResidualsFor,
+  runLabel,
 } from './PlotThumbnail';
-import { sampleSolverRunLine } from '../../utils/api';
+import { loadPlotSamples, plotXLabel, plotXY, type PlotSamples } from './plotData';
+import { RESULT_FIELDS, fieldValues, type FlowReference } from '../../utils/resultFields';
+import { toast } from '../ui/Toast';
 
 export interface PlotViewDialogProps {
   plot: PlotDefinition | null;
@@ -19,6 +33,13 @@ export interface PlotViewDialogProps {
   onDeletePlot: (id: string) => void;
   projectId: string;
   solverRuns?: SolverRunRecord[];
+  /** The plots the arrows step through: this plot's run, in rail order. */
+  siblings: PlotDefinition[];
+  onNavigate: (plot: PlotDefinition) => void;
+  /** Freestream reference for pressure in Pa and derived fields. */
+  flowRef: FlowReference;
+  /** The project mesh, for older runs stored without patch lists. */
+  currentMesh?: { nodes?: ArrayLike<unknown>; boundaries?: Record<string, number[]> } | null;
 }
 
 const MULTI_SERIES_COLORS = ['#DC2626', '#2563EB', '#059669', '#D97706', '#7C3AED', '#DB2777'];
@@ -33,6 +54,18 @@ const COLORMAP_COLORS: Record<string, string> = {
   rainbow: '#7C3AED',
 };
 
+type Loaded =
+  | { status: 'loading' }
+  | { status: 'ok'; data: PlotSamples }
+  | { status: 'error'; detail: string };
+
+/** Cache key for another run's samples of this plot's line or boundary. */
+const samplesKey = (plot: PlotDefinition, runId: string) =>
+  `${runId}|${plot.kind ?? 'line'}|${JSON.stringify(plot.boundary ?? plot.line ?? null)}`;
+
+const isTyping = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName));
+
 export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   plot,
   open,
@@ -41,77 +74,176 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   onDeletePlot,
   projectId,
   solverRuns,
+  siblings,
+  onNavigate,
+  flowRef,
+  currentMesh,
 }) => {
   const [editingName, setEditingName] = useState(false);
   const [nameVal, setNameVal] = useState('');
   const [reSampling, setReSampling] = useState(false);
   const [reSampleError, setReSampleError] = useState<string | null>(null);
+  // Other runs drawn over this plot. Kept while stepping through plots, so a
+  // comparison carries across every plot of the run.
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [runsMenuOpen, setRunsMenuOpen] = useState(false);
+  const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
+  const inFlight = useRef(new Set<string>());
+  const runsMenuRef = useRef<HTMLDivElement>(null);
 
-  // Hooks must run unconditionally on every render, so the chart data/series
-  // memos (and their null-safe inputs) live here, above the early return
-  // below - do not move them after the `if (!open || !plot)` guard.
+  // Hooks must run unconditionally on every render, so everything the chart
+  // needs lives here, above the early return below.
   const isMonitor = plot?.kind === 'monitor';
-  const distances = plot?.data?.distance ?? [];
-  const rawValues = plot?.data?.values ?? [];
   const xAxis = plot?.xAxis ?? 'distance';
-  const xValues = xAxis !== 'distance' ? (plot?.data?.fields?.[xAxis] ?? []) : distances;
   const monitorX = plot?.monitorX ?? 'iteration';
-  const monitorRows = useMemo(
-    () => (isMonitor ? monitorResidualsFor(plot?.runId ?? null, solverRuns) : []),
-    [isMonitor, plot?.runId, solverRuns],
+  const runs = solverRuns ?? [];
+
+  useEffect(() => {
+    setEditingName(false);
+    setReSampleError(null);
+  }, [plot?.id]);
+
+  useEffect(() => {
+    if (!open) {
+      setRunsMenuOpen(false);
+      setCompareIds([]);
+    }
+  }, [open]);
+
+  // Runs another run can be compared from: finished ones with something to
+  // show (residuals for a monitor plot, a stored field for the others).
+  const candidates = useMemo(
+    () =>
+      runs.filter(
+        (r) =>
+          r.id !== plot?.runId &&
+          r.status !== 'running' &&
+          (isMonitor ? r.residuals.length > 1 : r.status !== 'error'),
+      ),
+    [runs, plot?.runId, isMonitor],
   );
+  const shownCompare = compareIds.filter((id) => candidates.some((r) => r.id === id));
+  const shownRuns = [plot?.runId ?? null, ...shownCompare];
 
-  const chartData = useMemo(() => {
-    if (isMonitor) {
-      return monitorRows.map(
-        (r) => ({ x: Number((r as any)[monitorX] ?? r.iteration), ...r }) as Record<string, number>,
-      );
-    }
-    const rows: Array<Record<string, number>> = [];
-    for (let i = 0; i < rawValues.length; i++) {
-      let v = rawValues[i];
-      const x = xValues[i];
-      if (typeof x !== 'number' || !isFinite(x)) continue;
-      if (typeof v !== 'number' || !isFinite(v)) {
-        v = NaN;
-      } else {
-        if (plot?.rangeMin != null && v < plot.rangeMin) v = NaN;
-        if (plot?.rangeMax != null && v > plot.rangeMax) v = NaN;
-      }
-      rows.push({ x, [plot?.variable ?? 'value']: v });
-    }
-    return rows;
-  }, [
-    isMonitor,
-    monitorRows,
-    monitorX,
-    rawValues,
-    xValues,
-    plot?.variable,
-    plot?.rangeMin,
-    plot?.rangeMax,
-  ]);
-
-  const series: ChartSeries[] = useMemo(() => {
-    if (!plot) return [];
-    if (isMonitor) {
-      return (plot.monitorFields ?? []).map((f, i) => {
-        const def = MONITOR_FIELDS.find((m) => m.id === f);
-        return {
-          key: def?.residualKey ?? f,
-          name: getMonitorLabel(f),
-          color: MULTI_SERIES_COLORS[i % MULTI_SERIES_COLORS.length],
-        };
+  // Fetch the compared runs' samples of this plot's line or boundary.
+  useEffect(() => {
+    if (!open || !plot || isMonitor) return;
+    for (const runId of shownCompare) {
+      const key = samplesKey(plot, runId);
+      if (loaded[key] || inFlight.current.has(key)) continue;
+      inFlight.current.add(key);
+      setLoaded((m) => ({ ...m, [key]: { status: 'loading' } }));
+      loadPlotSamples(plot, projectId, runId, currentMesh).then((res) => {
+        inFlight.current.delete(key);
+        setLoaded((m) => ({
+          ...m,
+          [key]: res.data
+            ? { status: 'ok', data: res.data }
+            : { status: 'error', detail: res.detail || 'Could not load' },
+        }));
       });
     }
-    return [
-      {
-        key: plot.variable,
-        name: getVariableLabel(plot.variable),
-        color: COLORMAP_COLORS[plot.colormap] || '#2563EB',
-      },
-    ];
-  }, [plot, isMonitor]);
+  }, [open, plot, isMonitor, shownCompare.join(','), projectId, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!runsMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!runsMenuRef.current?.contains(e.target as Node)) setRunsMenuOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [runsMenuOpen]);
+
+  const index = plot ? siblings.findIndex((p) => p.id === plot.id) : -1;
+  const prev = index > 0 ? siblings[index - 1] : null;
+  const next = index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : null;
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (runsMenuOpen) setRunsMenuOpen(false);
+        else if (!isTyping(e.target)) onClose();
+        return;
+      }
+      if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'ArrowLeft' && prev) {
+        e.preventDefault();
+        onNavigate(prev);
+      } else if (e.key === 'ArrowRight' && next) {
+        e.preventDefault();
+        onNavigate(next);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, prev, next, onNavigate, onClose, runsMenuOpen]);
+
+  const multi = shownRuns.length > 1;
+  const runColor = (i: number) => MULTI_SERIES_COLORS[i % MULTI_SERIES_COLORS.length];
+
+  // Rows for every shown run, concatenated: each run writes its own series
+  // keys, and the chart skips rows without a series' key.
+  const { chartData, series } = useMemo(() => {
+    const rows: Array<Record<string, number>> = [];
+    const ser: ChartSeries[] = [];
+    if (!plot) return { chartData: rows, series: ser };
+    if (isMonitor) {
+      const fields = plot.monitorFields ?? [];
+      shownRuns.forEach((runId, i) => {
+        const res = monitorResidualsFor(runId, solverRuns);
+        fields.forEach((f, j) => {
+          const def = MONITOR_FIELDS.find((m) => m.id === f);
+          ser.push({
+            key: `${def?.residualKey ?? f}__${i}`,
+            name: multi ? `${getMonitorLabel(f)} · ${runLabel(runId, runs)}` : getMonitorLabel(f),
+            color: MULTI_SERIES_COLORS[(i * fields.length + j) % MULTI_SERIES_COLORS.length],
+          });
+        });
+        for (const r of res) {
+          const row: Record<string, number> = { x: Number((r as any)[monitorX] ?? r.iteration) };
+          fields.forEach((f) => {
+            const k = MONITOR_FIELDS.find((m) => m.id === f)?.residualKey ?? f;
+            const v = (r as any)[k];
+            if (typeof v === 'number') row[`${k}__${i}`] = v;
+          });
+          rows.push(row);
+        }
+      });
+      return { chartData: rows, series: ser };
+    }
+    shownRuns.forEach((runId, i) => {
+      const entry = i === 0 ? null : loaded[samplesKey(plot, runId!)];
+      const data = i === 0 ? plot.data : entry?.status === 'ok' ? entry.data : null;
+      // A run still loading or without this data stays out of the legend;
+      // the runs menu says why.
+      if (i > 0 && !data) return;
+      const key = `v${i}`;
+      ser.push({
+        key,
+        name: multi ? runLabel(runId, runs) : getVariableLabel(plot.variable),
+        color: multi ? runColor(i) : COLORMAP_COLORS[plot.colormap] || '#2563EB',
+      });
+      const { xs, ys } = plotXY(plot, data, flowRef);
+      for (let n = 0; n < ys.length; n++) {
+        const x = xs[n];
+        if (typeof x !== 'number' || !isFinite(x)) continue;
+        let v = ys[n];
+        if (!isFinite(v)) v = NaN;
+        else if (plot.rangeMin != null && v < plot.rangeMin) v = NaN;
+        else if (plot.rangeMax != null && v > plot.rangeMax) v = NaN;
+        rows.push({ x, [key]: v });
+      }
+    });
+    return { chartData: rows, series: ser };
+  }, [plot, isMonitor, shownRuns.join(','), solverRuns, monitorX, loaded, flowRef, multi]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fields this plot's samples can show, raw or derived.
+  const available = useMemo(() => {
+    const f = plot?.data?.fields;
+    if (!f) return null;
+    return new Set(RESULT_FIELDS.filter((d) => fieldValues(f, d.id, flowRef)).map((d) => d.id));
+  }, [plot?.data?.fields, flowRef]);
 
   const isResidualMonitor =
     isMonitor && (plot?.monitorFields ?? []).some((f) => f.startsWith('residual_'));
@@ -131,50 +263,37 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
     setEditingName(false);
   };
 
-  const handleVariableChange = async (newVar: FlowVariable) => {
-    // If all fields are cached, instant switch without network request
-    if (plot.data?.fields && plot.data.fields[newVar]) {
-      onUpdatePlot({
-        ...plot,
-        variable: newVar,
-        data: {
-          ...plot.data,
-          values: plot.data.fields[newVar],
-        },
-      });
-      return;
-    }
-
-    // Fallback: re-fetch from backend
-    if (!plot.runId || !plot.line) return;
+  const reSample = async (variable: FlowVariable) => {
+    if (!plot.runId) return;
     setReSampling(true);
     setReSampleError(null);
     try {
-      const res = await sampleSolverRunLine(
-        projectId,
-        plot.runId,
-        plot.line.p1,
-        plot.line.p2,
-        plot.line.samples,
-      );
+      const res = await loadPlotSamples(plot, projectId, plot.runId, currentMesh);
       if (res.data) {
+        const vals = fieldValues(res.data.fields, variable, flowRef);
         onUpdatePlot({
           ...plot,
-          variable: newVar,
-          data: {
-            distance: res.data.distance,
-            values: res.data.fields[newVar] ?? [],
-            fields: res.data.fields,
-          },
+          variable,
+          data: { ...res.data, values: vals ? Array.from(vals) : [] },
         });
       } else {
-        setReSampleError(res.detail || 'Failed to re-sample variable.');
+        setReSampleError(res.detail || 'Failed to re-sample.');
       }
     } catch (err: any) {
-      setReSampleError(err?.message || 'Re-sampling error.');
+      setReSampleError(err?.message || 'Re-sampling request failed.');
     } finally {
       setReSampling(false);
     }
+  };
+
+  const handleVariableChange = (newVar: FlowVariable) => {
+    // Computable from the cached samples: switch instantly.
+    const vals = fieldValues(plot.data?.fields, newVar, flowRef);
+    if (vals && plot.data) {
+      onUpdatePlot({ ...plot, variable: newVar, data: { ...plot.data, values: Array.from(vals) } });
+      return;
+    }
+    reSample(newVar);
   };
 
   const handleXAxisChange = (newX: 'distance' | FlowVariable) => {
@@ -199,47 +318,49 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
     onUpdatePlot({ ...plot, rangeMin: null, rangeMax: null });
   };
 
-  const handleReSample = async () => {
-    if (!plot.runId || !plot.line) return;
-    setReSampling(true);
-    setReSampleError(null);
-    try {
-      const res = await sampleSolverRunLine(
-        projectId,
-        plot.runId,
-        plot.line.p1,
-        plot.line.p2,
-        plot.line.samples,
-      );
-      if (res.data) {
-        onUpdatePlot({
-          ...plot,
-          data: {
-            distance: res.data.distance,
-            values: res.data.fields[plot.variable] ?? [],
-            fields: res.data.fields,
-          },
-        });
-      } else {
-        setReSampleError(res.detail || 'Failed to re-sample line data.');
-      }
-    } catch (err: any) {
-      setReSampleError(err?.message || 'Re-sampling request failed.');
-    } finally {
-      setReSampling(false);
+  const handleDelete = () => {
+    if (confirm(`Delete plot "${plot.name}"?`)) {
+      // Land on a neighbour rather than closing, so stepping through and
+      // pruning plots stays in the viewer.
+      const after = next ?? prev;
+      onDeletePlot(plot.id);
+      if (after) onNavigate(after);
+      else onClose();
     }
   };
 
-  const handleDelete = () => {
-    if (confirm(`Delete plot "${plot.name}"?`)) {
-      onDeletePlot(plot.id);
-      onClose();
+  const handleExportCsv = () => {
+    const xName = isMonitor ? monitorX : xAxis === 'distance' ? plotXLabel(plot) : xAxis;
+    const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+    const lines = [[xName, ...series.map((s) => s.name)].map(esc).join(',')];
+    for (const r of chartData) {
+      lines.push(
+        [r.x, ...series.map((s) => r[s.key])]
+          .map((v) => (typeof v === 'number' && isFinite(v) ? String(v) : ''))
+          .join(','),
+      );
     }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+    a.download = `${plot.name.replace(/[^\w.-]+/g, '_') || 'plot'}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast.success(`Saved ${a.download}`);
   };
+
+  const toggleCompare = (id: string) =>
+    setCompareIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
 
   const lineLength = plot.line
     ? Math.hypot(plot.line.p2[0] - plot.line.p1[0], plot.line.p2[1] - plot.line.p1[1])
     : 0;
+
+  const navBtn =
+    'p-1.5 rounded border border-line bg-surface text-fg-2 hover:text-fg hover:bg-app transition-colors disabled:opacity-40 disabled:pointer-events-none';
+  const toolBtn =
+    'inline-flex items-center gap-1 text-xs font-medium text-fg-2 hover:text-fg bg-surface border border-line px-2.5 py-1.5 rounded-sm hover:bg-app transition-colors disabled:opacity-50';
 
   return (
     <div
@@ -252,11 +373,36 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
         className="w-full max-w-5xl h-[82vh] rounded bg-surface border border-line flex flex-col overflow-hidden"
         role="dialog"
         aria-modal="true"
-        aria-label="Plot Details"
+        aria-label="Plot"
       >
         {/* Header */}
-        <div className="px-5 py-3 border-b border-line-soft bg-surface-2 flex items-center justify-between shrink-0">
+        <div className="px-4 py-2.5 border-b border-line-soft bg-surface-2 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3 min-w-0">
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                className={navBtn}
+                disabled={!prev}
+                onClick={() => prev && onNavigate(prev)}
+                title="Previous plot of this run (Left arrow)"
+                aria-label="Previous plot"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="min-w-[44px] text-center text-[11px] font-mono text-fg-2">
+                {index >= 0 ? `${index + 1} / ${siblings.length}` : '-'}
+              </span>
+              <button
+                type="button"
+                className={navBtn}
+                disabled={!next}
+                onClick={() => next && onNavigate(next)}
+                title="Next plot of this run (Right arrow)"
+                aria-label="Next plot"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
             {editingName ? (
               <div className="flex items-center gap-1.5">
                 <input
@@ -268,47 +414,135 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                     if (e.key === 'Escape') setEditingName(false);
                   }}
                   autoFocus
-                  className="px-2 py-1 text-sm font-bold text-fg border border-accent rounded bg-surface focus:outline-none"
+                  className="px-2 py-1 text-sm font-semibold text-fg border border-accent rounded bg-surface focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={handleSaveRename}
-                  className="p-1 text-success hover:bg-green-50 rounded"
+                  className="p-1 text-success hover:bg-success-soft rounded"
+                  aria-label="Save name"
                 >
                   <Check className="w-4 h-4" />
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-2 min-w-0">
-                <h2
-                  onClick={handleStartRename}
-                  title="Click to rename"
-                  className="text-base font-bold text-fg truncate cursor-pointer hover:text-accent transition-colors"
-                >
-                  {plot.name}
-                </h2>
-                <button
-                  type="button"
-                  onClick={handleStartRename}
-                  className="text-[11px] text-fg-3 hover:text-accent underline"
-                >
-                  rename
-                </button>
-              </div>
+              <h2
+                onClick={handleStartRename}
+                title="Click to rename"
+                className="text-sm font-semibold text-fg truncate cursor-text hover:text-accent transition-colors"
+              >
+                {plot.name}
+              </h2>
             )}
-            <span className="text-[11px] text-fg-3 font-mono bg-surface-3 px-2 py-0.5 rounded border border-line">
-              {plot.runId ? `Run: ${plot.runId}` : 'Current Run'}
+            <span className="shrink-0 text-[11px] text-fg-2 font-mono bg-surface-3 px-2 py-0.5 rounded border border-line">
+              {runLabel(plot.runId, runs)}
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Runs to draw: this plot's run always, others overlaid. */}
+            <div className="relative" ref={runsMenuRef}>
+              <button
+                type="button"
+                onClick={() => setRunsMenuOpen((o) => !o)}
+                className={`${toolBtn} ${shownCompare.length ? 'bg-accent-soft text-accent-fg border-accent-line' : ''}`}
+                title="Overlay this plot from other runs"
+                aria-haspopup="listbox"
+                aria-expanded={runsMenuOpen}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>
+                  {shownCompare.length ? `${shownCompare.length + 1} runs` : 'Compare runs'}
+                </span>
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+              {runsMenuOpen && (
+                <div
+                  role="listbox"
+                  aria-multiselectable="true"
+                  className="absolute right-0 top-full mt-1 z-10 w-72 max-h-80 overflow-y-auto rounded border border-line bg-surface p-1"
+                >
+                  <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-fg-3">
+                    <span
+                      className="w-3.5 h-3.5 rounded-sm border border-line-strong bg-surface-3 flex items-center justify-center"
+                      aria-hidden
+                    >
+                      <Check className="w-3 h-3" />
+                    </span>
+                    <span className="truncate flex-1">{runLabel(plot.runId, runs)}</span>
+                    <span className="text-[10px]">this plot</span>
+                  </div>
+                  {candidates.length === 0 && (
+                    <div className="px-2 py-2 text-[11px] text-fg-3">No other finished runs.</div>
+                  )}
+                  {candidates.map((r) => {
+                    const on = compareIds.includes(r.id);
+                    const st = on && !isMonitor ? loaded[samplesKey(plot, r.id)] : undefined;
+                    const i = shownRuns.indexOf(r.id);
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        role="option"
+                        aria-selected={on}
+                        onClick={() => toggleCompare(r.id)}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-xs text-fg hover:bg-surface-2 text-left"
+                      >
+                        <span
+                          className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center ${
+                            on
+                              ? 'bg-accent-soft border-accent-line text-accent-fg'
+                              : 'border-line-strong'
+                          }`}
+                        >
+                          {on && <Check className="w-3 h-3" />}
+                        </span>
+                        <span className="truncate flex-1">{r.label || r.id.slice(0, 6)}</span>
+                        {st?.status === 'loading' && (
+                          <Loader2 className="w-3 h-3 animate-spin text-fg-3" />
+                        )}
+                        {st?.status === 'error' && (
+                          <span
+                            className="text-[10px] text-danger truncate max-w-[140px]"
+                            title={st.detail}
+                          >
+                            {st.detail}
+                          </span>
+                        )}
+                        {on && i > 0 && !isMonitor && (
+                          <span
+                            className="w-2.5 h-2.5 rounded-full"
+                            style={{ backgroundColor: runColor(i) }}
+                          />
+                        )}
+                        <span className="text-[10px] text-fg-3 font-mono">
+                          {new Date(r.startedAt).toLocaleDateString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                          })}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              title="Save the plotted data as CSV"
+              className={toolBtn}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>CSV</span>
+            </button>
             {!isMonitor && (
               <button
                 type="button"
-                onClick={handleReSample}
-                disabled={reSampling}
-                title="Re-sample line data from solver run"
-                className="inline-flex items-center gap-1 text-xs font-medium text-fg-2 hover:text-fg bg-surface border border-line px-2.5 py-1.5 rounded-sm hover:bg-app transition-colors disabled:opacity-50"
+                onClick={() => reSample(plot.variable)}
+                disabled={reSampling || !plot.runId}
+                title="Sample again from this plot's run"
+                className={toolBtn}
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${reSampling ? 'animate-spin' : ''}`} />
                 <span>Re-sample</span>
@@ -318,7 +552,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
               type="button"
               onClick={handleDelete}
               title="Delete this plot"
-              className="inline-flex items-center gap-1 text-xs font-medium text-danger hover:text-danger bg-surface border border-danger-line px-2.5 py-1.5 rounded-sm hover:bg-danger-soft transition-colors"
+              className="inline-flex items-center gap-1 text-xs font-medium text-danger bg-surface border border-danger-line px-2.5 py-1.5 rounded-sm hover:bg-danger-soft transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>Delete</span>
@@ -327,6 +561,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
               type="button"
               onClick={onClose}
               className="p-1.5 text-fg-2 hover:bg-surface-3 rounded transition-colors"
+              aria-label="Close"
             >
               <X className="w-4 h-4" />
             </button>
@@ -342,19 +577,6 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
         {/* Controls Toolbar */}
         {isMonitor ? (
           <div className="px-5 py-2.5 border-b border-line-soft bg-surface-2 flex flex-wrap items-center gap-4 text-xs shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
-                Quantities:
-              </span>
-              <div className="flex items-center gap-2">
-                {series.map((s) => (
-                  <span key={s.key} className="inline-flex items-center gap-1 font-medium text-fg">
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: s.color }} />
-                    {s.name}
-                  </span>
-                ))}
-              </div>
-            </div>
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 X axis:
@@ -379,7 +601,6 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
           </div>
         ) : (
           <div className="px-5 py-2.5 border-b border-line-soft bg-surface-2 flex flex-wrap items-center justify-between gap-4 text-xs shrink-0">
-            {/* X axis Picker */}
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 X axis:
@@ -389,16 +610,15 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                 onChange={(e) => handleXAxisChange(e.target.value as 'distance' | FlowVariable)}
                 className="px-2.5 py-1 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
-                <option value="distance">Distance along line</option>
-                {FLOW_VARIABLES.map((v) => (
+                <option value="distance">{plotXLabel(plot)}</option>
+                {RESULT_FIELDS.filter((v) => !available || available.has(v.id)).map((v) => (
                   <option key={v.id} value={v.id}>
-                    {v.label}
+                    {getVariableLabel(v.id)}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* Variable Picker */}
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
                 Y axis:
@@ -408,42 +628,47 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                 onChange={(e) => handleVariableChange(e.target.value as FlowVariable)}
                 className="px-2.5 py-1 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
               >
-                {FLOW_VARIABLES.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.label}
+                {RESULT_FIELDS.map((v) => (
+                  <option key={v.id} value={v.id} disabled={!!available && !available.has(v.id)}>
+                    {getVariableLabel(v.id)}
                   </option>
                 ))}
               </select>
             </div>
 
-            {/* Colormap Selector */}
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
-                Colormap:
-              </span>
-              <div className="flex items-center gap-1">
-                {COLORMAPS.map((map) => (
-                  <button
-                    key={map}
-                    type="button"
-                    onClick={() => handleColormapChange(map)}
-                    className={`px-2 py-0.5 rounded capitalize text-xs font-medium border transition-colors ${
-                      plot.colormap === map
-                        ? 'bg-accent-soft text-accent-fg border-accent-line'
-                        : 'bg-surface text-fg-2 border-line hover:bg-app'
-                    }`}
-                  >
-                    {map}
-                  </button>
-                ))}
+            {!multi && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider">
+                  Colour:
+                </span>
+                <div className="flex items-center gap-1">
+                  {COLORMAPS.map((map) => (
+                    <button
+                      key={map}
+                      type="button"
+                      onClick={() => handleColormapChange(map)}
+                      title={map}
+                      aria-label={map}
+                      className={`w-6 h-6 rounded border flex items-center justify-center transition-colors ${
+                        plot.colormap === map
+                          ? 'border-accent-line bg-accent-soft'
+                          : 'border-line bg-surface hover:bg-app'
+                      }`}
+                    >
+                      <span
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: COLORMAP_COLORS[map] }}
+                      />
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Min / Max Range Controls */}
             <div className="flex items-center gap-2">
               <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider flex items-center gap-1">
                 <Sliders className="w-3 h-3 text-fg-2" />
-                Clip Range:
+                Clip:
               </span>
               <div className="flex items-center gap-1.5 font-mono">
                 <input
@@ -477,7 +702,6 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
           </div>
         )}
 
-        {/* Chart Area */}
         <div className="flex-1 min-h-0 relative p-4 bg-surface">
           <CanvasChart
             data={chartData}
@@ -501,26 +725,24 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
           />
         </div>
 
-        {/* Footer: Probe Line / Monitor Specifications */}
-        <div className="px-5 py-2.5 border-t border-line-soft bg-surface-2 flex items-center justify-between text-[11px] text-fg-3 font-mono shrink-0">
+        <div className="px-5 py-2.5 border-t border-line-soft bg-surface-2 flex items-center justify-between gap-4 text-[11px] text-fg-3 font-mono shrink-0">
           {isMonitor ? (
-            <span>{monitorRows.length} iterations</span>
+            <span>{monitorResidualsFor(plot.runId, solverRuns).length} iterations</span>
+          ) : plot.kind === 'boundary' && plot.boundary ? (
+            <span>
+              Boundary {plot.boundary.patch}, {plotXLabel(plot).toLowerCase()},{' '}
+              {plot.data?.distance.length ?? 0} points
+            </span>
           ) : plot.line ? (
-            <>
-              <div className="flex items-center gap-4">
-                <span>
-                  P1: ({plot.line.p1[0].toFixed(3)}m, {plot.line.p1[1].toFixed(3)}m)
-                </span>
-                <span>
-                  P2: ({plot.line.p2[0].toFixed(3)}m, {plot.line.p2[1].toFixed(3)}m)
-                </span>
-                <span>Length: {lineLength.toFixed(3)}m</span>
-              </div>
-              <div>
-                <span>{plot.line.samples} samples</span>
-              </div>
-            </>
-          ) : null}
+            <span>
+              P1 ({plot.line.p1[0].toFixed(3)}, {plot.line.p1[1].toFixed(3)}) m, P2 (
+              {plot.line.p2[0].toFixed(3)}, {plot.line.p2[1].toFixed(3)}) m, length{' '}
+              {lineLength.toFixed(3)} m, {plot.line.samples} samples
+            </span>
+          ) : (
+            <span />
+          )}
+          <span className="text-fg-4">Left and right arrows step through this run's plots</span>
         </div>
       </div>
     </div>

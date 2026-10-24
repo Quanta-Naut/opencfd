@@ -1,120 +1,612 @@
+import React, { useState } from 'react';
+import { ChevronDown, Crosshair, ImageDown, Plus, X } from 'lucide-react';
 import type { StageId, StageStatus } from '../stages';
-import { CFDProjectState } from '../../../types/cfd';
-import { Plus } from 'lucide-react';
+import { CFDProjectState, PostProcessConfig } from '../../../types/cfd';
 import { StageGate } from './StageGate';
+import { NumberField } from './NumberField';
+import { Tooltip } from '../../ui/Tooltip';
+import { toast } from '../../ui/Toast';
+import { colormapRGB } from '../../cad/workbenchCore';
+import { RESULT_FIELDS, fieldDef, fmtValue, type ResultFieldId } from '../../../utils/resultFields';
+import type { ProbeRow } from '../../../hooks/useResultsView';
+import type { PatchReport } from '../../../utils/boundaryData';
 
-/** Results stage: field, colormap and export controls (or the stage gate while locked). */
-export function ResultsStagePanel(p: ResultsStagePanelProps) {
-  const {
-    activeStage,
-    stageStatus,
-    onSelectStage,
-    state,
-    updatePostProcess,
-    onCreatePlot,
-    projectId,
-  } = p;
+const COLORMAPS: PostProcessConfig['colormap'][] = [
+  'viridis',
+  'coolwarm',
+  'turbo',
+  'jet',
+  'rainbow',
+];
+const GROUPS = ['Velocity', 'Pressure', 'Turbulence', 'Derived'] as const;
+const OPEN_KEY = 'opencfd_results_sections';
+
+const lbl = 'text-[10px] text-fg-2';
+const field =
+  'w-full px-2 py-1 bg-surface border border-line rounded-sm text-[11px] text-fg font-mono focus:outline-none focus:border-accent';
+const select =
+  'w-full px-2 py-1.5 bg-surface border border-line rounded-sm text-[11px] font-medium text-fg focus:outline-none focus:border-accent';
+const seg = (on: boolean) =>
+  `flex-1 py-1 rounded-sm text-[10px] font-medium border transition-colors ${
+    on
+      ? 'bg-accent-soft text-accent-fg border-accent-line'
+      : 'bg-surface text-fg-2 border-line hover:text-fg hover:border-line-strong'
+  }`;
+const ghostBtn =
+  'w-full py-1.5 rounded-sm border border-line bg-surface text-fg-2 hover:text-fg hover:border-line-strong text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors';
+
+/** A titled, collapsible block of the sidebar; open state is remembered. */
+function Section(p: {
+  id: string;
+  title: string;
+  open: Record<string, boolean>;
+  setOpen: (id: string, v: boolean) => void;
+  aside?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const isOpen = p.open[p.id] ?? true;
   return (
-    <>
-      {/* 07 RESULTS */}
-      {activeStage === 'results' && stageStatus?.results?.locked && (
-        <StageGate
-          title="Results are locked"
-          reason={stageStatus.results.reason || 'Generate a mesh first.'}
-          ctaLabel="Go to Mesh"
-          onCta={onSelectStage ? () => onSelectStage('mesh') : undefined}
-        />
-      )}
+    <section className="border-b border-line">
+      <div className="flex items-center gap-2 px-4 py-2.5">
+        <button
+          type="button"
+          onClick={() => p.setOpen(p.id, !isOpen)}
+          aria-expanded={isOpen}
+          className="flex-1 flex items-center gap-1.5 text-[11px] font-semibold text-fg-2 uppercase tracking-wider hover:text-fg"
+        >
+          <ChevronDown
+            className={`w-3.5 h-3.5 transition-transform ${isOpen ? '' : '-rotate-90'}`}
+          />
+          {p.title}
+        </button>
+        {p.aside}
+      </div>
+      {isOpen && <div className="px-4 pb-3.5 space-y-2.5">{p.children}</div>}
+    </section>
+  );
+}
 
-      {activeStage === 'results' && !stageStatus?.results?.locked && (
-        <div className="flex-1 min-h-0 flex flex-col justify-between">
-          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 text-xs text-fg">
-            <div>
-              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-1.5">
-                Scalar Field Variable
-              </span>
-              <select
-                value={state.postprocess.activeField}
-                onChange={(e) => updatePostProcess({ activeField: e.target.value as any })}
-                className="w-full px-2.5 py-1.5 bg-surface border border-line rounded-sm font-medium text-fg focus:outline-none focus:border-accent"
-              >
-                <option value="U_mag">Velocity Magnitude (|U|)</option>
-                <option value="p">Static Pressure (p)</option>
-                <option value="k">Turbulent Kinetic Energy (k)</option>
-                <option value="omega">Specific Dissipation (ω)</option>
-                <option value="vorticity">Vorticity (∇×U)</option>
-              </select>
-            </div>
+function Check(p: { label: string; on: boolean; onChange: (v: boolean) => void; hint?: string }) {
+  const box = (
+    <label className="flex items-center gap-2 text-[11px] text-fg cursor-pointer select-none">
+      <input
+        type="checkbox"
+        checked={p.on}
+        onChange={(e) => p.onChange(e.target.checked)}
+        className="accent-accent"
+      />
+      {p.label}
+    </label>
+  );
+  return p.hint ? (
+    <Tooltip content={p.hint} delay={300}>
+      {box}
+    </Tooltip>
+  ) : (
+    box
+  );
+}
 
-            <div className="border-t border-line pt-3 space-y-1.5">
-              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block mb-1">
-                Scientific Colormap
-              </span>
-              <div className="grid grid-cols-3 gap-1">
-                {(['viridis', 'coolwarm', 'turbo'] as const).map((map) => (
+/** Results stage: the native post-processor (contours, overlays, probes,
+ *  boundary reports, plots, image export), or the stage gate while locked. */
+export function ResultsStagePanel(p: ResultsStagePanelProps) {
+  const { activeStage, stageStatus, onSelectStage, state, updatePostProcess: set, view } = p;
+  const pp = state.postprocess;
+  const [open, setOpenState] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(OPEN_KEY) || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const setOpen = (id: string, v: boolean) =>
+    setOpenState((s) => {
+      const n = { ...s, [id]: v };
+      try {
+        localStorage.setItem(OPEN_KEY, JSON.stringify(n));
+      } catch {
+        /* per-viewer convenience only */
+      }
+      return n;
+    });
+  const [bPatch, setBPatch] = useState('');
+  const [bVar, setBVar] = useState<ResultFieldId>('Cp');
+  const [bAxis, setBAxis] = useState<'x' | 'y' | 's'>('x');
+
+  if (activeStage !== 'results') return null;
+  if (stageStatus?.results?.locked)
+    return (
+      <StageGate
+        title="Results are locked"
+        reason={stageStatus.results.reason || 'Generate a mesh first.'}
+        ctaLabel="Go to Mesh"
+        onCta={onSelectStage ? () => onSelectStage('mesh') : undefined}
+      />
+    );
+
+  const def = fieldDef(pp.activeField);
+  const unit = def.unit ? ` ${def.unit}` : '';
+  const patch = bPatch || p.patches.find((x) => x === 'wall') || p.patches[0] || '';
+  const flows = view.reports.filter((r) => r.flow !== null);
+  const inflow = flows.reduce((s, r) => s + Math.min(0, r.flow!), 0);
+  const net = flows.reduce((s, r) => s + r.flow!, 0);
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 overflow-y-auto text-xs text-fg">
+        {!p.hasField && (
+          <p className="px-4 py-3 text-[11px] text-fg-2 border-b border-line leading-snug">
+            No field loaded. Run the solver, or pick a finished run on the right.
+          </p>
+        )}
+
+        <Section id="contours" title="Contours" open={open} setOpen={setOpen}>
+          <div>
+            <span className={`${lbl} block mb-1`}>Field</span>
+            <select
+              value={pp.activeField}
+              onChange={(e) => set({ activeField: e.target.value as ResultFieldId })}
+              className={select}
+            >
+              {GROUPS.map((g) => (
+                <optgroup key={g} label={g}>
+                  {RESULT_FIELDS.filter((f) => f.group === g).map((f) => (
+                    <option
+                      key={f.id}
+                      value={f.id}
+                      disabled={p.hasField && !view.available.has(f.id)}
+                    >
+                      {f.label}
+                      {f.unit ? ` (${f.unit})` : ''}
+                      {p.hasField && !view.available.has(f.id) ? ' - not in this run' : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <span className={`${lbl} block mb-1`}>Colormap</span>
+            <div className="grid grid-cols-5 gap-1">
+              {COLORMAPS.map((m) => (
+                <Tooltip key={m} content={m[0].toUpperCase() + m.slice(1)} delay={250}>
                   <button
-                    key={map}
-                    onClick={() => updatePostProcess({ colormap: map })}
-                    className={`py-1 rounded capitalize text-xs font-medium border transition-colors ${
-                      state.postprocess.colormap === map
-                        ? 'bg-accent-soft text-accent-fg border-accent-line'
-                        : 'bg-surface text-fg-2 border-line hover:bg-app'
+                    type="button"
+                    aria-label={m}
+                    aria-pressed={pp.colormap === m}
+                    onClick={() => set({ colormap: m })}
+                    className={`h-5 rounded-sm border ${
+                      pp.colormap === m ? 'border-accent ring-1 ring-accent' : 'border-line'
                     }`}
+                    style={{
+                      background: `linear-gradient(to right, ${Array.from({ length: 6 }, (_, i) =>
+                        colormapRGB(i / 5, m),
+                      ).join(',')})`,
+                    }}
+                  />
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-baseline justify-between mb-1">
+              <span className={lbl}>Range</span>
+              {view.range && (
+                <span className="text-[10px] font-mono text-fg-3">
+                  {fmtValue(view.range[0])} to {fmtValue(view.range[1])}
+                  {unit}
+                </span>
+              )}
+            </div>
+            <div className="flex gap-1">
+              {(
+                [
+                  [
+                    'auto',
+                    'Auto',
+                    'Clips the top and bottom 1% so a few extreme cells do not wash out the colours.',
+                  ],
+                  ['full', 'Min to max', 'The true lowest and highest value.'],
+                  ['custom', 'Custom', 'Type the range, for comparing runs on the same scale.'],
+                ] as const
+              ).map(([id, text, hint]) => (
+                <Tooltip key={id} content={hint} delay={350}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      set(
+                        id === 'custom' && view.range
+                          ? {
+                              rangeMode: id,
+                              rangeMin: pp.rangeMin ?? Number(view.range[0].toPrecision(4)),
+                              rangeMax: pp.rangeMax ?? Number(view.range[1].toPrecision(4)),
+                            }
+                          : { rangeMode: id },
+                      )
+                    }
+                    className={seg(pp.rangeMode === id)}
                   >
-                    {map}
+                    {text}
                   </button>
+                </Tooltip>
+              ))}
+            </div>
+            {pp.rangeMode === 'custom' && (
+              <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                <label>
+                  <span className={`${lbl} block mb-0.5`}>Min</span>
+                  <NumberField
+                    value={pp.rangeMin ?? view.autoRange?.[0] ?? 0}
+                    onChange={(n) => set({ rangeMin: n })}
+                    className={field}
+                  />
+                </label>
+                <label>
+                  <span className={`${lbl} block mb-0.5`}>Max</span>
+                  <NumberField
+                    value={pp.rangeMax ?? view.autoRange?.[1] ?? 1}
+                    onChange={(n) => set({ rangeMax: n })}
+                    className={field}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+
+          <div>
+            <span className={`${lbl} block mb-1`}>Colouring</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => set({ levels: 0 })}
+                className={seg(pp.levels === 0)}
+              >
+                Smooth
+              </button>
+              <button
+                type="button"
+                onClick={() => set({ levels: pp.levels || 12 })}
+                className={seg(pp.levels > 0)}
+              >
+                Bands
+              </button>
+              {pp.levels > 0 && (
+                <NumberField
+                  value={pp.levels}
+                  integer
+                  min={2}
+                  max={64}
+                  fallback={12}
+                  onChange={(n) => set({ levels: n })}
+                  className={`${field} !w-12 text-right`}
+                />
+              )}
+            </div>
+          </div>
+          <Check
+            label="Contour lines"
+            on={pp.contourLines}
+            onChange={(v) => set({ contourLines: v })}
+            hint="Lines of equal value, at the band edges (or 10 lines when smooth)."
+          />
+        </Section>
+
+        <Section id="overlays" title="Overlays" open={open} setOpen={setOpen}>
+          <Check
+            label="Mesh"
+            on={pp.showMeshWireframe}
+            onChange={(v) => set({ showMeshWireframe: v })}
+          />
+          <Check
+            label="Streamlines"
+            on={pp.showStreamlines}
+            onChange={(v) => set({ showStreamlines: v })}
+          />
+          <Check
+            label="Velocity vectors"
+            on={pp.showVectors}
+            onChange={(v) => set({ showVectors: v })}
+            hint="Arrows on an even screen grid, sized by speed."
+          />
+          {pp.showVectors && p.hasField && !view.available.has('Ux') ? (
+            <p className="pl-5 text-[10px] leading-snug text-warning">
+              This run was solved before velocity components were saved. Run the solver again to see
+              vectors.
+            </p>
+          ) : (
+            pp.showVectors && (
+              <div className="grid grid-cols-2 gap-1.5 pl-5">
+                <label>
+                  <span className={`${lbl} block mb-0.5`}>Spacing (px)</span>
+                  <NumberField
+                    value={pp.vectorSpacing}
+                    integer
+                    min={10}
+                    max={120}
+                    fallback={28}
+                    onChange={(n) => set({ vectorSpacing: n })}
+                    className={field}
+                  />
+                </label>
+                <label>
+                  <span className={`${lbl} block mb-0.5`}>Length</span>
+                  <NumberField
+                    value={pp.glyphScale}
+                    min={0.1}
+                    max={5}
+                    fallback={1}
+                    onChange={(n) => set({ glyphScale: n })}
+                    className={field}
+                  />
+                </label>
+              </div>
+            )
+          )}
+        </Section>
+
+        <Section
+          id="probes"
+          title="Probes"
+          open={open}
+          setOpen={setOpen}
+          aside={
+            pp.probes.length > 0 && (
+              <button
+                type="button"
+                onClick={() => set({ probes: [] })}
+                className="text-[10px] text-fg-2 hover:text-fg"
+              >
+                Clear
+              </button>
+            )
+          }
+        >
+          <button
+            type="button"
+            onClick={p.onToggleProbePicking}
+            disabled={!p.hasField}
+            className={`${ghostBtn} disabled:opacity-40 ${
+              p.probePicking ? '!bg-accent-soft !text-accent-fg !border-accent-line' : ''
+            }`}
+          >
+            <Crosshair className="w-3.5 h-3.5" />
+            {p.probePicking ? 'Click on the field. Done' : 'Add probe points'}
+          </button>
+          {view.probeRows.map((r, i) => (
+            <div key={r.id} className="rounded-sm border border-line bg-surface-2 px-2 py-1.5">
+              <div className="flex items-center gap-1.5 text-[10px]">
+                <span className="w-4 h-4 rounded-full bg-fg text-surface font-semibold flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <span className="font-mono text-fg-2">
+                  ({fmtValue(r.x)}, {fmtValue(r.y)})
+                </span>
+                <button
+                  type="button"
+                  aria-label="Remove probe"
+                  onClick={() => set({ probes: pp.probes.filter((x) => x.id !== r.id) })}
+                  className="ml-auto text-fg-3 hover:text-fg"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              {r.values ? (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 mt-1 text-[10px]">
+                  {RESULT_FIELDS.filter((f) => r.values![f.id] !== undefined).map((f) => (
+                    <React.Fragment key={f.id}>
+                      <dt
+                        className={f.id === pp.activeField ? 'text-fg font-semibold' : 'text-fg-2'}
+                      >
+                        {f.short}
+                      </dt>
+                      <dd
+                        className={`font-mono text-right ${
+                          f.id === pp.activeField ? 'text-fg font-semibold' : 'text-fg-2'
+                        }`}
+                      >
+                        {fmtValue(r.values![f.id]!)}
+                        {f.unit ? ` ${f.unit}` : ''}
+                      </dd>
+                    </React.Fragment>
+                  ))}
+                </dl>
+              ) : (
+                <p className="mt-1 text-[10px] text-fg-3">Outside the mesh.</p>
+              )}
+            </div>
+          ))}
+        </Section>
+
+        <Section id="reports" title="Reports" open={open} setOpen={setOpen}>
+          {p.runForces && (p.runForces.cd !== undefined || p.runForces.cl !== undefined) && (
+            <div>
+              <span className={`${lbl} block mb-1`}>Forces · {p.runForces.label}</span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {(
+                  [
+                    ['Cd', p.runForces.cd],
+                    ['Cl', p.runForces.cl],
+                    [
+                      'L/D',
+                      p.runForces.cd && p.runForces.cl !== undefined
+                        ? p.runForces.cl / p.runForces.cd
+                        : undefined,
+                    ],
+                  ] as const
+                ).map(([k, v]) => (
+                  <div key={k} className="rounded-sm border border-line bg-surface-2 px-2 py-1">
+                    <div className="text-[10px] text-fg-2">{k}</div>
+                    <div className="font-mono text-[12px] text-fg">
+                      {v !== undefined ? fmtValue(v) : '-'}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
-
-            {/* Line Plot Probe */}
-            <div className="border-t border-line pt-3 space-y-2">
-              <span className="text-[11px] font-semibold text-fg-2 uppercase tracking-wider block">
-                Line Plot Probe
+          )}
+          {view.reports.length > 0 ? (
+            <div>
+              <span className={`${lbl} block mb-1`}>
+                {def.label} on each boundary{unit && ` (${def.unit})`}
               </span>
-              <button
-                type="button"
-                onClick={onCreatePlot}
-                className="w-full py-2 px-3 rounded bg-accent hover:bg-accent-hover text-white font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Create Plot</span>
-              </button>
-              {/* moved out of the live UI - see layout/LeftStagePanel.tsx (Line Plot Probe), kept for a future tutorial
-              <p className="text-[10px] text-fg-2 leading-relaxed">
-                Sample flow variables along a 2D line probe and visualize XY convergence or field
-                profiles.
-              </p>
-              */}
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="text-fg-3">
+                    <th className="text-left font-medium pb-0.5">Patch</th>
+                    <th className="text-right font-medium">Avg</th>
+                    <th className="text-right font-medium">Min</th>
+                    <th className="text-right font-medium">Max</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  {view.reports.map((r) => (
+                    <tr key={r.patch} className="border-t border-line-soft">
+                      <td className="py-0.5 font-sans text-fg">{r.patch}</td>
+                      <td className="text-right text-fg">{fmtValue(r.avg)}</td>
+                      <td className="text-right text-fg-2">{fmtValue(r.min)}</td>
+                      <td className="text-right text-fg-2">{fmtValue(r.max)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {flows.length > 0 && (
+                <>
+                  <Tooltip
+                    content="Volume flow through each boundary per metre of depth; positive leaves the domain. In a converged run, what comes in goes out."
+                    delay={300}
+                  >
+                    <span className={`${lbl} block mt-2 mb-1 cursor-help`}>Flow out (m²/s)</span>
+                  </Tooltip>
+                  <table className="w-full text-[10px] font-mono">
+                    <tbody>
+                      {flows
+                        .filter((r) => Math.abs(r.flow!) > 1e-9 * (Math.abs(inflow) || 1))
+                        .map((r) => (
+                          <tr key={r.patch} className="border-t border-line-soft">
+                            <td className="py-0.5 font-sans text-fg">{r.patch}</td>
+                            <td className="text-right text-fg">{fmtValue(r.flow!)}</td>
+                          </tr>
+                        ))}
+                      <tr className="border-t border-line">
+                        <td className="py-0.5 font-sans text-fg-2">Imbalance</td>
+                        <td className="text-right text-fg-2">
+                          {inflow < 0 ? `${((Math.abs(net) / -inflow) * 100).toFixed(2)}%` : '-'}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </>
+              )}
             </div>
-          </div>
+          ) : (
+            <p className="text-[10px] text-fg-2">Load a field to see boundary values.</p>
+          )}
+        </Section>
 
-          {/* Pinned ParaView Footer */}
-          <div className="px-4 py-4 border-t border-line bg-surface shrink-0">
+        <Section id="plots" title="Plots" open={open} setOpen={setOpen}>
+          <button type="button" onClick={p.onCreatePlot} className={ghostBtn}>
+            <Plus className="w-3.5 h-3.5" />
+            Plot along a line
+          </button>
+          <div className="rounded-sm border border-line p-2 space-y-1.5">
+            <span className={`${lbl} block`}>Plot along a boundary</span>
+            <div className="grid grid-cols-2 gap-1.5">
+              <select
+                aria-label="Boundary"
+                value={patch}
+                onChange={(e) => setBPatch(e.target.value)}
+                className={select}
+              >
+                {p.patches.map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+              <select
+                aria-label="Value"
+                value={bVar}
+                onChange={(e) => setBVar(e.target.value as ResultFieldId)}
+                className={select}
+              >
+                {RESULT_FIELDS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.short}
+                    {f.unit ? ` (${f.unit})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className={`${lbl} mr-1`}>Along</span>
+              {(
+                [
+                  ['x', 'x'],
+                  ['y', 'y'],
+                  ['s', 'length'],
+                ] as const
+              ).map(([id, text]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setBAxis(id)}
+                  className={seg(bAxis === id)}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
-              onClick={async () => {
-                const { launchParaview, checkParaviewStatus } = await import('../../../utils/api');
-                const status = await checkParaviewStatus();
-                if (!status.available) {
-                  alert(
-                    'ParaView was not found on your system. Please install ParaView to use external 3D visualization.',
-                  );
-                  return;
-                }
-                const res = await launchParaview(projectId);
-                if (!res.success) {
-                  alert(`Failed to launch ParaView: ${res.detail}`);
-                }
+              disabled={!patch || !p.hasField}
+              onClick={() => {
+                const ok = p.onAddBoundaryPlot(patch, bVar, bAxis);
+                if (!ok)
+                  toast.error('Nothing to plot', {
+                    description: `No ${patch} edges in this mesh.`,
+                  });
               }}
-              className="w-full py-2 px-3 rounded border border-line bg-surface text-fg hover:bg-app font-semibold text-[11px] flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              className={`${ghostBtn} disabled:opacity-40`}
             >
-              <span>Open in ParaView</span>
+              <Plus className="w-3.5 h-3.5" />
+              Add plot
             </button>
           </div>
-        </div>
-      )}
-    </>
+        </Section>
+      </div>
+
+      <div className="px-4 py-3 border-t border-line bg-surface shrink-0 grid grid-cols-2 gap-1.5">
+        <button
+          type="button"
+          onClick={p.onSaveImage}
+          disabled={!p.hasField}
+          className={`${ghostBtn} disabled:opacity-40`}
+        >
+          <ImageDown className="w-3.5 h-3.5" />
+          Save image
+        </button>
+        <button
+          type="button"
+          onClick={async () => {
+            const { launchParaview, checkParaviewStatus } = await import('../../../utils/api');
+            const status = await checkParaviewStatus();
+            if (!status.available) {
+              toast.error('ParaView not found', {
+                description: 'Install ParaView to open the case in it.',
+              });
+              return;
+            }
+            const res = await launchParaview(p.projectId);
+            if (!res.success) toast.error('Could not open ParaView', { description: res.detail });
+          }}
+          className={ghostBtn}
+        >
+          Open in ParaView
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -123,7 +615,22 @@ export interface ResultsStagePanelProps {
   stageStatus: Partial<Record<StageId, StageStatus>>;
   onSelectStage: (stage: StageId) => void;
   state: CFDProjectState;
-  updatePostProcess: (p: any) => void;
+  updatePostProcess: (p: Partial<PostProcessConfig>) => void;
   onCreatePlot: () => void;
   projectId: string;
+  hasField: boolean;
+  view: {
+    available: Set<ResultFieldId>;
+    range: [number, number] | null;
+    autoRange: [number, number] | null;
+    probeRows: ProbeRow[];
+    reports: PatchReport[];
+  };
+  patches: string[];
+  probePicking: boolean;
+  onToggleProbePicking: () => void;
+  /** Returns false when the patch has no edges to plot. */
+  onAddBoundaryPlot: (patch: string, variable: ResultFieldId, axis: 'x' | 'y' | 's') => boolean;
+  runForces: { label: string; cd?: number; cl?: number } | null;
+  onSaveImage: () => void;
 }

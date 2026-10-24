@@ -82,6 +82,8 @@ class RunRecorder:
         self.mesh_snapshot: Dict[str, Any] = {
             "nodes": mesh.get("nodes") or [],
             "elements": mesh.get("elements") or [],
+            # Patch node lists, for boundary reports and plots on old runs.
+            "boundaries": mesh.get("boundaries") or {},
         }
         self.has_field = False
 

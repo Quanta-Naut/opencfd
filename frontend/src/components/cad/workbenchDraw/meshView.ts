@@ -1,6 +1,7 @@
 import { arrayRange } from '../../../utils/numeric';
 import { colormapRGB } from '../workbenchCore';
 import type { DrawFrame, DrawScene } from './types';
+import { drawResultsOverlay } from './resultsOverlay';
 
 /** The Mesh stage view: the generated mesh on the CAD camera. Returns true when it drew, in which case nothing else is drawn this frame. */
 export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
@@ -29,7 +30,10 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
     showResultsStreamlines,
     tool,
     zoom,
+    resultsOverlay,
+    meshLocator,
   } = scene;
+  const levels = resultsOverlay?.levels ?? 0;
   // Mesh mode reuses this CAD canvas, including its camera, pan and zoom.
   // Only the backend mesh is drawn; fields and streamlines are intentionally absent.
   if (
@@ -110,7 +114,11 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
         } else if (haveField) {
           let s = 0;
           for (const ni of element) s += (vals as number[])[ni] ?? 0;
-          const t = (s / element.length - lo) / (hi - lo);
+          let t = (s / element.length - lo) / (hi - lo);
+          if (levels > 0) {
+            const c = Math.max(0, Math.min(1, t));
+            t = (Math.min(Math.floor(c * levels), levels - 1) + 0.5) / levels;
+          }
           const col = colormapRGB(t, colormap);
           ctx.fillStyle = col;
           ctx.strokeStyle = shouldDrawWireframe ? 'rgba(255,255,255,0.30)' : col;
@@ -175,6 +183,10 @@ export function drawMeshView(f: DrawFrame, scene: DrawScene): boolean {
         }
         ctx.stroke();
       }
+    }
+
+    if (showField && resultsOverlay) {
+      drawResultsOverlay(f, resultsOverlay, fieldData?.fields, meshLocator);
     }
 
     return true;

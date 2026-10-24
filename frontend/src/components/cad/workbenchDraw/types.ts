@@ -13,7 +13,15 @@ import type {
   GeometryBBox,
 } from '../../../types/cadWorkflow';
 import type { Blocking, BlockPremesh, SpacingJump, VertexKind } from '../../../types/blocking';
-import type { CadTool, CanvasPalette, Snap, GizmoKind, GizmoHandle } from '../workbenchCore';
+import type {
+  CadTool,
+  CanvasPalette,
+  Snap,
+  GizmoKind,
+  GizmoHandle,
+  ResultsOverlay,
+} from '../workbenchCore';
+import type { MeshLocator } from '../../../utils/meshLocator';
 
 /** Per-frame drawing context shared by every pass. */
 export interface DrawFrame {
@@ -59,6 +67,10 @@ export interface DrawScene {
   downstreamChordFactor: number;
   draggingDomainHandle: 'upstream' | 'downstream' | 'top' | 'bottom' | 'radial';
   fieldData: any;
+  /** Results contour style, overlays and probes (null outside Results). */
+  resultsOverlay: ResultsOverlay | null;
+  /** Point lookup on the mesh, built only when vectors or probes need it. */
+  meshLocator: MeshLocator | null;
   flowType: FlowType;
   geometryBBox: GeometryBBox;
   glMeshActive: boolean;

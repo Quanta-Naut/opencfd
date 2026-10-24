@@ -101,6 +101,22 @@ export type CadAction =
   | { type: 'SELECT_ENTITY'; id: string | null; multi?: boolean }
   | { type: 'CLEAR' };
 
+/** How the Results tab draws the field: contour style, overlays, probes and
+ *  the legend title. Null outside Results. */
+export interface ResultsOverlay {
+  levels: number;
+  contourLines: boolean;
+  showMesh: boolean;
+  showStreamlines: boolean;
+  showVectors: boolean;
+  /** Screen pixels between vector arrows. */
+  vectorSpacing: number;
+  vectorScale: number;
+  /** Probe points (model coordinates) and the text shown beside each. */
+  probes: { id: string; x: number; y: number; label: string }[];
+  legend: { title: string; unit: string };
+}
+
 export interface CadWorkbenchProps {
   onApplySketchMesh: (mesh: any, name: string) => void;
   domainLength: number;
@@ -192,4 +208,5 @@ export interface CadWorkbenchProps {
   isPickingPlotPoints?: boolean;
   onPickPlotPoint?: (pt: [number, number]) => void;
   plotPickPreviewP1?: [number, number] | null;
+  resultsOverlay?: ResultsOverlay | null;
 }

@@ -11,6 +11,7 @@ export type {
   CadState,
   CadAction,
   CadWorkbenchProps,
+  ResultsOverlay,
 } from './types';
 
 export {

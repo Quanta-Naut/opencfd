@@ -22,6 +22,8 @@ export function buildGlScene(wb: GlSceneContext): MeshGLScene {
     liveMeshOn,
     showMeshWireframe,
     colormap,
+    levels,
+    contourLines,
   } = wb;
   const nodes: number[][] | undefined = meshData?.nodes;
   const elements: number[][] | undefined = meshData?.elements;
@@ -71,7 +73,7 @@ export function buildGlScene(wb: GlSceneContext): MeshGLScene {
     }
     return {
       visible: true,
-      fill: { kind: 'node', vals: vals!, lo, hi, colormap },
+      fill: { kind: 'node', vals: vals!, lo, hi, colormap, levels, lines: contourLines },
       wire: showMeshWireframe ? [1, 1, 1, 0.3] : null,
     };
   }
@@ -99,4 +101,7 @@ export interface GlSceneContext {
   liveRange: [number, number];
   liveMeshOn: boolean;
   showMeshWireframe: boolean;
+  /** Results contour style: flat bands (0 = smooth) and iso-lines. */
+  levels: number;
+  contourLines: boolean;
 }

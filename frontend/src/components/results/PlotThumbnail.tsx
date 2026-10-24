@@ -1,5 +1,8 @@
 import React, { useEffect, useRef } from 'react';
+import { Maximize2 } from 'lucide-react';
 import { cssVar, useResolvedTheme } from '../../utils/theme';
+import { RESULT_FIELDS, fieldDef, type FlowReference } from '../../utils/resultFields';
+import { plotXY } from './plotData';
 import {
   PlotDefinition,
   FlowVariable,
@@ -8,16 +11,17 @@ import {
   SolverRunRecord,
 } from '../../types/cfd';
 
-export const FLOW_VARIABLES: { id: FlowVariable; label: string; unit: string }[] = [
-  { id: 'U_mag', label: 'Velocity Magnitude (|U|)', unit: 'm/s' },
-  { id: 'p', label: 'Static Pressure (p)', unit: 'Pa' },
-  { id: 'k', label: 'Turbulent Kinetic Energy (k)', unit: 'm²/s²' },
-  { id: 'omega', label: 'Specific Dissipation (ω)', unit: '1/s' },
-  { id: 'vorticity', label: 'Vorticity (∇×U)', unit: '1/s' },
-];
+export const FLOW_VARIABLES: { id: FlowVariable; label: string; unit: string }[] =
+  RESULT_FIELDS.map((f) => ({ id: f.id, label: `${f.label} (${f.short})`, unit: f.unit }));
 
 export function getVariableLabel(v: FlowVariable): string {
-  return FLOW_VARIABLES.find((item) => item.id === v)?.label ?? v;
+  return FLOW_VARIABLES.find((item) => item.id === v)?.label ?? fieldDef(v).label;
+}
+
+/** Display name of a run, or a short id when the run is gone. */
+export function runLabel(runId: string | null, runs: SolverRunRecord[] | undefined): string {
+  if (!runId) return 'Current run';
+  return runs?.find((r) => r.id === runId)?.label || `Run ${runId.slice(0, 6)}`;
 }
 
 /** A 'monitor' plot's quantity, and which key on `ResidualDataPoint` it reads. */
@@ -62,6 +66,10 @@ interface PlotThumbnailProps {
   plot: PlotDefinition;
   isSelected?: boolean;
   onClick: () => void;
+  /** Open the plot in the full-size viewer. */
+  onExpand: () => void;
+  /** Freestream reference for pressure in Pa and derived fields. */
+  flowRef: FlowReference;
   /** Needed only for 'monitor' plots, which read a run's residuals live
    * rather than caching sampled data. */
   solverRuns?: SolverRunRecord[];
@@ -71,6 +79,8 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
   plot,
   isSelected = false,
   onClick,
+  onExpand,
+  flowRef,
   solverRuns,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -94,10 +104,7 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
         return { color: MULTI_SERIES_COLORS[i % MULTI_SERIES_COLORS.length], pts };
       });
     }
-    const values = plot.data?.values ?? [];
-    const distances = plot.data?.distance ?? [];
-    const xs =
-      plot.xAxis && plot.xAxis !== 'distance' ? plot.data?.fields?.[plot.xAxis] : distances;
+    const { xs, ys: values } = plotXY(plot, plot.data, flowRef);
     const pts: { x: number; y: number }[] = [];
     for (let i = 0; i < values.length; i++) {
       let y = values[i];
@@ -219,11 +226,15 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
     // seriesList is derived fresh each render from plot/solverRuns, so those
     // are the real dependencies - spreading it as a dep would just thrash.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plot, theme, solverRuns, uiTheme]);
+  }, [plot, theme, solverRuns, uiTheme, flowRef]);
 
   return (
     <div
       onClick={onClick}
+      onDoubleClick={onExpand}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onExpand();
+      }}
       role="button"
       tabIndex={0}
       className={`group relative rounded border p-2.5 transition-all cursor-pointer text-left ${
@@ -233,8 +244,20 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
       }`}
     >
       {/* 65px sparkline thumbnail canvas */}
-      <div className="w-full h-[64px] bg-surface-2 rounded border border-line-soft overflow-hidden mb-2">
+      <div className="relative w-full h-[64px] bg-surface-2 rounded border border-line-soft overflow-hidden mb-2">
         <canvas ref={canvasRef} className="w-full h-full block" />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onExpand();
+          }}
+          title="Open plot"
+          aria-label="Open plot"
+          className="absolute top-1 right-1 p-1 rounded border border-line bg-surface text-fg-2 opacity-70 group-hover:opacity-100 hover:text-fg hover:border-line-strong transition-opacity"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       <div className="flex items-center justify-between gap-1">
@@ -256,11 +279,22 @@ export const PlotThumbnail: React.FC<PlotThumbnailProps> = ({
 
       <div className="flex items-center justify-between text-[10px] text-fg-3 mt-1 font-mono">
         {isMonitor ? (
-          <span>vs {plot.monitorX === 'time' ? 'time' : 'iteration'}</span>
+          <>
+            <span>vs {plot.monitorX === 'time' ? 'time' : 'iteration'}</span>
+            <span className="truncate">{runLabel(plot.runId, solverRuns)}</span>
+          </>
+        ) : plot.kind === 'boundary' ? (
+          <>
+            <span className="truncate">
+              on {plot.boundary?.patch} vs{' '}
+              {plot.boundary?.axis === 's' ? 'length' : plot.boundary?.axis}
+            </span>
+            <span className="truncate">{runLabel(plot.runId, solverRuns)}</span>
+          </>
         ) : (
           <>
-            <span>{plot.line?.samples ?? 0} samples</span>
-            <span>
+            <span className="truncate">{runLabel(plot.runId, solverRuns)}</span>
+            <span className="shrink-0">
               {plot.xAxis && plot.xAxis !== 'distance'
                 ? `vs ${getVariableLabel(plot.xAxis)}`
                 : plot.line

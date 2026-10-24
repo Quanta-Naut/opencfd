@@ -24,6 +24,10 @@ import { saveProjectSession, saveProjectBlob, renameProject } from './utils/proj
 import { buildInitialCFDState } from './hooks/appInitialState';
 import { useHistoricalRunField } from './hooks/useHistoricalRunField';
 import { useResultsPlayback } from './hooks/useResultsPlayback';
+import { useResultsView } from './hooks/useResultsView';
+import { fieldDef, fieldValues, type ResultFieldId } from './utils/resultFields';
+import { patchSamples, snapshotBoundaries } from './utils/boundaryData';
+import { exportViewImage } from './utils/exportView';
 import { useSolverRun } from './hooks/useSolverRun';
 import { toast } from './components/ui/Toast';
 import { CommandPalette, Command } from './components/ui/CommandPalette';
@@ -884,7 +888,7 @@ export function App({
           elements: historicalFieldData.mesh.elements,
           num_nodes: historicalFieldData.mesh.nodes.length,
           num_elements: historicalFieldData.mesh.elements.length,
-          boundaries: historicalFieldData.mesh.boundaries || {},
+          boundaries: snapshotBoundaries(historicalFieldData.mesh, meshData),
         }
       : null
     : meshData;
@@ -940,10 +944,21 @@ export function App({
     setActiveDialogPlot(newPlot);
   }, []);
 
+  // A card click picks the plot (its line shows on the canvas); the expand
+  // button opens it full size.
   const handleSelectPlot = useCallback((plot: PlotDefinition) => {
+    setSelectedPlotId(plot.id);
+  }, []);
+  const handleOpenPlot = useCallback((plot: PlotDefinition) => {
     setSelectedPlotId(plot.id);
     setActiveDialogPlot(plot);
   }, []);
+  // The viewer's arrows step through the open plot's run, in rail order.
+  const dialogSiblings = useMemo(
+    () =>
+      activeDialogPlot ? (state.plots ?? []).filter((p) => p.runId === activeDialogPlot.runId) : [],
+    [state.plots, activeDialogPlot],
+  );
 
   const handleUpdatePlot = useCallback((updated: PlotDefinition) => {
     setState((prev) => ({
@@ -980,6 +995,92 @@ export function App({
     }
     return null;
   }, [activeStage, activeDialogPlot, selectedPlotId, state.plots]);
+
+  // ── Results post-processing (contours, overlays, probes, reports) ────────
+  const resultsView = useResultsView(
+    effectiveFieldData,
+    effectiveMesh,
+    state.postprocess,
+    state.physics,
+  );
+  const [probePicking, setProbePicking] = useState(false);
+  useEffect(() => {
+    if (activeStage !== 'results') setProbePicking(false);
+  }, [activeStage]);
+  useEffect(() => {
+    if (!probePicking) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setProbePicking(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [probePicking]);
+  const addProbe = useCallback((pt: [number, number]) => {
+    setState((prev) => ({
+      ...prev,
+      postprocess: {
+        ...prev.postprocess,
+        probes: [
+          ...prev.postprocess.probes,
+          { id: `pr_${Date.now().toString(36)}`, x: pt[0], y: pt[1] },
+        ],
+      },
+    }));
+  }, []);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const viewedRun = (state.solverRuns ?? []).find((r) => r.id === targetRunForPlot.id) ?? null;
+
+  const handleAddBoundaryPlot = useCallback(
+    (patch: string, variable: ResultFieldId, axis: 'x' | 'y' | 's') => {
+      const mesh = effectiveMesh;
+      const fd = effectiveFieldData;
+      if (!mesh?.nodes?.length || !fd?.fields) return false;
+      const s = patchSamples(mesh, fd.fields, patch, axis);
+      if (!s || s.distance.length < 2) return false;
+      const plot: PlotDefinition = {
+        id: `plot_${Date.now().toString(36)}`,
+        name: `${fieldDef(variable).short} on ${patch}`,
+        kind: 'boundary',
+        boundary: { patch, axis },
+        runId: targetRunForPlot.id,
+        variable,
+        xAxis: 'distance',
+        colormap: 'viridis',
+        rangeMin: null,
+        rangeMax: null,
+        data: {
+          distance: s.distance,
+          values: Array.from(fieldValues(s.fields, variable, resultsView.ref) ?? []),
+          fields: s.fields,
+        },
+        createdAt: Date.now(),
+      };
+      handleCreatePlot(plot);
+      return true;
+    },
+    [effectiveMesh, effectiveFieldData, targetRunForPlot.id, resultsView.ref, handleCreatePlot],
+  );
+
+  const handleSaveImage = useCallback(() => {
+    const root = viewportRef.current;
+    if (!root) return;
+    const def = fieldDef(state.postprocess.activeField);
+    const r = resultsView.range;
+    exportViewImage(
+      root,
+      r
+        ? {
+            title: def.short,
+            unit: def.unit,
+            lo: r[0],
+            hi: r[1],
+            colormap: state.postprocess.colormap,
+            levels: state.postprocess.levels,
+          }
+        : null,
+      `${projectName || 'results'}-${state.postprocess.activeField}`,
+    );
+  }, [projectName, state.postprocess, resultsView.range]);
 
   const { handleRunSolver, handleStopSolver } = useSolverRun({
     state,
@@ -1299,6 +1400,27 @@ export function App({
             boundaryEdgesCount={boundaryEdges.length}
             geometryEntitiesCount={geometryEntitiesCount}
             onCreatePlot={() => setCreatePlotModalOpen(true)}
+            resultsPanel={
+              activeStage === 'results'
+                ? {
+                    hasField: !!effectiveFieldData?.fields,
+                    view: resultsView,
+                    patches: Object.keys(effectiveMesh?.boundaries ?? {}).filter(
+                      (b) => b !== 'frontAndBack',
+                    ),
+                    probePicking,
+                    onToggleProbePicking: () => {
+                      setPickingPointsState(null);
+                      setProbePicking((v) => !v);
+                    },
+                    onAddBoundaryPlot: handleAddBoundaryPlot,
+                    runForces: viewedRun
+                      ? { label: viewedRun.label, cd: viewedRun.finalCd, cl: viewedRun.finalCl }
+                      : null,
+                    onSaveImage: handleSaveImage,
+                  }
+                : undefined
+            }
           />
         </div>
 
@@ -1306,7 +1428,7 @@ export function App({
         <div className="flex-1 min-w-0 h-full relative overflow-hidden bg-surface">
           {/* Center: one shared CAD canvas; fills entire workspace without getting squished */}
           <main className="absolute inset-0 w-full h-full bg-surface overflow-hidden">
-            <div className="w-full h-full">
+            <div ref={viewportRef} className="w-full h-full">
               <CadWorkbench2D
                 displayOnly={activeStage !== 'geometry'}
                 meshData={effectiveMesh}
@@ -1331,7 +1453,10 @@ export function App({
                 meshOnly={activeStage === 'solver' || activeStage === 'results'}
                 showField={activeStage === 'results'}
                 livePreview={activeStage === 'solver' ? livePreview : null}
-                fieldData={effectiveFieldData}
+                fieldData={
+                  activeStage === 'results' ? resultsView.displayFieldData : effectiveFieldData
+                }
+                resultsOverlay={activeStage === 'results' ? resultsView.overlay : null}
                 activeField={state.postprocess.activeField}
                 colormap={state.postprocess.colormap}
                 initialEntities={cadEntities}
@@ -1389,10 +1514,23 @@ export function App({
                 }
                 onRestoreLive={selectLatestFinishedRun}
                 activePlotLine={activePlotLineForCanvas}
-                isPickingPlotPoints={!!pickingPointsState}
-                onPickPlotPoint={handlePickPlotPoint}
+                isPickingPlotPoints={!!pickingPointsState || probePicking}
+                onPickPlotPoint={probePicking ? addProbe : handlePickPlotPoint}
                 plotPickPreviewP1={pickingPointsState?.p1 ?? null}
               />
+              {probePicking && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
+                  <Crosshair className="w-4 h-4 text-accent" />
+                  <span>Click on the field to add probe points</span>
+                  <button
+                    type="button"
+                    onClick={() => setProbePicking(false)}
+                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
+              )}
               {pickingPointsState && (
                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
                   <Crosshair className="w-4 h-4 text-accent animate-pulse" />
@@ -1445,6 +1583,8 @@ export function App({
             plots={state.plots ?? []}
             selectedPlotId={selectedPlotId}
             onSelectPlot={handleSelectPlot}
+            onOpenPlot={handleOpenPlot}
+            flowRef={resultsView.ref}
             runs={state.solverRuns ?? []}
             executionStatus={state.executionStatus}
             open={runsRailOpen}
@@ -1497,6 +1637,10 @@ export function App({
         onDeletePlot={handleDeletePlot}
         projectId={projectId}
         solverRuns={state.solverRuns ?? []}
+        siblings={dialogSiblings}
+        onNavigate={handleOpenPlot}
+        flowRef={resultsView.ref}
+        currentMesh={meshData}
       />
 
       {paletteOpen && (

@@ -189,7 +189,7 @@ export interface ResidualDataPoint {
 }
 
 export interface PostProcessConfig {
-  activeField: 'U_mag' | 'p' | 'k' | 'omega' | 'vorticity';
+  activeField: import('../utils/resultFields').ResultFieldId;
   colormap: 'coolwarm' | 'viridis' | 'turbo' | 'jet' | 'rainbow';
   showMeshWireframe: boolean;
   showStreamlines: boolean;
@@ -197,8 +197,21 @@ export interface PostProcessConfig {
   sliceAxis: 'x' | 'y' | 'z';
   slicePosition: number;
   numStreamlines: number;
+  /** Vector arrow length multiplier. */
   glyphScale: number;
   showVectors: boolean;
+  /** Colour range: percentile-clipped ('auto'), true min/max, or typed in. */
+  rangeMode: 'auto' | 'full' | 'custom';
+  rangeMin: number | null;
+  rangeMax: number | null;
+  /** 0 = smooth colours; N = N flat bands. */
+  levels: number;
+  /** Iso-lines over the colours (at the band edges, or 10 when smooth). */
+  contourLines: boolean;
+  /** Screen pixels between vector arrows. */
+  vectorSpacing: number;
+  /** Probe points on the field, in model coordinates. */
+  probes: { id: string; x: number; y: number }[];
 }
 
 export interface SolverRunRecord {
@@ -226,7 +239,7 @@ export interface SolverRunRecord {
   iterationsRun?: number;
 }
 
-export type FlowVariable = 'U_mag' | 'p' | 'k' | 'omega' | 'vorticity';
+export type FlowVariable = import('../utils/resultFields').ResultFieldId;
 
 /** A convergence-monitor quantity, read live from a run's `residuals` stream -
  * the same source the Solver tab's own residuals chart already uses. */
@@ -259,7 +272,10 @@ export interface PlotDefinition {
    * vs distance or field vs field. 'monitor': one or more solver-run quantities
    * (residuals, Cd, Cl) vs iteration/time - no sampling, reads the run's own
    * already-captured residuals stream live. */
-  kind?: 'line' | 'monitor';
+  kind?: 'line' | 'monitor' | 'boundary';
+  /** 'boundary' plots: a field along one patch, against x, y or arc length
+   * (`data.distance` holds that coordinate). */
+  boundary?: { patch: string; axis: 'x' | 'y' | 's' };
   runId: string | null; // which solver run this was sampled from
   variable: FlowVariable; // 'line' plots: the Y axis
   xAxis?: 'distance' | FlowVariable; // 'line' plots: the X axis; default 'distance'

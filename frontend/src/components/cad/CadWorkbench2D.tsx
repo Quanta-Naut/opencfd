@@ -101,6 +101,7 @@ import { importPendingFile } from './workbenchActions/importFile';
 import { generateDomain } from './workbenchActions/workflow';
 import { meshHandoff } from './workbenchActions/workflow';
 import { downloadBlockMeshDict } from './workbenchActions/workflow';
+import { buildMeshLocator } from '../../utils/meshLocator';
 
 const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   onApplySketchMesh,
@@ -172,6 +173,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   isPickingPlotPoints = false,
   onPickPlotPoint,
   plotPickPreviewP1 = null,
+  resultsOverlay = null,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -660,6 +662,18 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   const [showConstruction, setShowConstruction] = useState(true);
   const [constructionMode, setConstructionMode] = useState(false); // draw to construction layer
   const [showResultsStreamlines, setShowResultsStreamlines] = useState(true); // toggle streamlines overlay in Results
+  // The Results sidebar owns the overlays when it passes them in.
+  const resOv = showField ? resultsOverlay : null;
+  const meshWireOn = resOv ? resOv.showMesh : showMeshWireframe;
+  const streamOn = resOv ? resOv.showStreamlines : showResultsStreamlines;
+  const needLocator = !!resOv && (resOv.showVectors || resOv.probes.length > 0);
+  const meshLocator = useMemo(
+    () =>
+      needLocator && meshData?.nodes?.length && meshData?.elements?.length
+        ? buildMeshLocator(meshData.nodes, meshData.elements)
+        : null,
+    [needLocator, meshData?.nodes, meshData?.elements],
+  );
   const [showMeshQuality, setShowMeshQuality] = useState(false); // colour cells by skewness in the Mesh tab
   const [liveField, setLiveField] = useState<'U_mag' | 'p' | 'k' | null>('U_mag'); // solver live preview - null means no field colouring
   const [liveMeshOn, setLiveMeshOn] = useState(true); // solver live preview - independent mesh wireframe toggle
@@ -730,8 +744,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
         liveVals,
         liveRange,
         liveMeshOn,
-        showMeshWireframe,
+        showMeshWireframe: meshWireOn,
         colormap,
+        levels: resOv?.levels ?? 0,
+        contourLines: resOv?.contourLines ?? false,
       }),
     [
       meshData?.nodes,
@@ -750,7 +766,9 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       liveRange,
       liveMeshOn,
       colormap,
-      showMeshWireframe,
+      meshWireOn,
+      resOv?.levels,
+      resOv?.contourLines,
       C,
     ],
   );
@@ -1620,8 +1638,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
       showGrid,
       showMesh,
       showMeshQuality,
-      showMeshWireframe,
-      showResultsStreamlines,
+      showMeshWireframe: meshWireOn,
+      showResultsStreamlines: streamOn,
+      resultsOverlay: resOv,
+      meshLocator,
       snap,
       splitHover,
       tempPts,
@@ -1692,8 +1712,10 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
     fieldData,
     activeField,
     colormap,
-    showMeshWireframe,
-    showResultsStreamlines,
+    meshWireOn,
+    streamOn,
+    resOv,
+    meshLocator,
     showMeshQuality,
     meshSkew,
     viewport.w,
@@ -2717,7 +2739,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           {...{
             displayOnly,
             meshOnly,
-            showField,
+            // The Results sidebar has the overlay toggles; no pill here then.
+            showField: showField && !resOv,
             showBlocking,
             canvasMode,
             setCanvasMode,
@@ -2825,6 +2848,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             fieldData,
             activeField,
             colormap,
+            legend: resOv?.legend,
+            levels: resOv?.levels ?? 0,
             meshOnly,
             canvasMode: meshLayer ? 'mesh' : 'cad',
             showMeshQuality,
