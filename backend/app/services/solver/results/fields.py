@@ -164,6 +164,16 @@ def read_field_results(case_dir: str | Path, mesh: Dict, time_value: Optional[st
         raise ResultsUnavailable("no mesh nodes supplied")
 
     n_cells = len(np.atleast_2d(U))
+    if n_cells == 1 or np.size(p) == 1:
+        raise ResultsUnavailable(
+            f"{tdir.name}/ holds only the initial uniform fields; the solver stopped "
+            "before writing a result, see the Console for why"
+        )
+    if np.size(p) != n_cells:
+        raise ResultsUnavailable(
+            f"U has {n_cells} cells but p has {np.size(p)} in {tdir.name}/; "
+            "the case was written by a different mesh, run again"
+        )
     centres = _cell_centres(tdir, mesh, n_cells)
     elements = mesh.get("elements") or []
     owner = tdir.parent / "constant" / "polyMesh" / "owner"

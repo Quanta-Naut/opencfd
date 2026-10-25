@@ -39,6 +39,9 @@ def _read_field(path: Path) -> Optional[np.ndarray]:
         close = _matching_paren(text, open_idx)
         chunk = text[open_idx + 1:close]
         nums = np.fromstring(chunk.replace("(", " ").replace(")", " "), sep=" ")
+        # A file cut short (run stopped mid-write) must not pass for a result.
+        if nums.size < n * (3 if kind == "vector" else 1):
+            return None
         if kind == "vector":
             return nums.reshape(-1, 3)[:n]
         return nums[:n]

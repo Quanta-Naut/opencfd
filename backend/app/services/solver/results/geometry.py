@@ -48,7 +48,8 @@ def _cell_centres(tdir: Path, mesh: Dict, n_cells: int) -> np.ndarray:
     or reconstructed from constant/polyMesh geometry, otherwise the mesh element centroids."""
     cx = _read_field(tdir / "Cx") if (tdir / "Cx").is_file() else _read_field(tdir / "Ccx")
     cy = _read_field(tdir / "Cy") if (tdir / "Cy").is_file() else _read_field(tdir / "Ccy")
-    if cx is not None and cy is not None:
+    # A leftover centre file from another mesh would not match the fields.
+    if cx is not None and cy is not None and np.size(cx) == n_cells and np.size(cy) == n_cells:
         return np.column_stack([np.asarray(cx).ravel(), np.asarray(cy).ravel()])
 
     # Try polyMesh reconstruction from constant/polyMesh. The mesh is static over a
@@ -156,6 +157,11 @@ def _node_averager(nodes_xy: np.ndarray, elements: List, centres: np.ndarray,
         cell_of_elem = np.clip(_nearest(ec, centres), 0, nc - 1)
 
     flat_nodes = np.concatenate([np.asarray(el, dtype=int) for el in elements])
+    if flat_nodes.size and (flat_nodes.max() >= nn or flat_nodes.min() < 0):
+        raise ResultsUnavailable(
+            f"the mesh has an element pointing at node {int(flat_nodes.max())} "
+            f"but only {nn} nodes; generate the mesh again"
+        )
     per_elem = np.array([len(el) for el in elements], dtype=int)
     cnt = np.zeros(nn)
     np.add.at(cnt, flat_nodes, 1.0)
@@ -166,6 +172,11 @@ def _node_averager(nodes_xy: np.ndarray, elements: List, centres: np.ndarray,
 
     def to_nodes(cell_vals: np.ndarray) -> np.ndarray:
         cell_vals = np.asarray(cell_vals, dtype=float).ravel()
+        if cell_vals.size != nc:
+            raise ResultsUnavailable(
+                f"the solver wrote {cell_vals.size} cells but the viewer mesh matches {nc}; "
+                "generate the mesh again and re-run"
+            )
         acc = np.zeros(nn)
         np.add.at(acc, flat_nodes, np.repeat(cell_vals[cell_of_elem], per_elem))
         out = acc * inv_cnt
