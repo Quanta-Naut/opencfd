@@ -236,6 +236,17 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
     );
   }
 
+  const removeRun = (run: { id: string; label: string }) => {
+    if (!window.confirm(`Delete "${run.label}"? Its saved result is removed.`)) return;
+    onDeleteRun(run.id);
+    if (expandedId === run.id) setExpandedId(null);
+    setPinnedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(run.id);
+      return next;
+    });
+  };
+
   return (
     <div
       className={
@@ -496,18 +507,10 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (window.confirm(`Delete "${run.label}"?`)) {
-                          onDeleteRun(run.id);
-                          if (expandedId === run.id) setExpandedId(null);
-                          setPinnedIds((prev) => {
-                            const next = new Set(prev);
-                            next.delete(run.id);
-                            return next;
-                          });
-                        }
+                        removeRun(run);
                       }}
                       title="Delete run"
-                      className="p-0.5 rounded text-fg-3 hover:text-danger hover:bg-danger-soft opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="p-0.5 rounded text-fg-3 hover:text-danger hover:bg-danger-soft transition-colors"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -573,6 +576,16 @@ export const RunHistoryRail: React.FC<RunHistoryRailProps> = ({
                           <span className="text-fg-3 text-[10px]">Stored snapshot</span>
                         )}
                       </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeRun(run);
+                        }}
+                        className="ml-auto mr-1.5 px-2 py-0.5 text-fg-3 hover:text-danger hover:bg-danger-soft rounded text-[10px] font-medium transition-colors cursor-pointer"
+                      >
+                        Delete
+                      </button>
                       {selectedRunId === run.id ? (
                         <span className="px-2 py-0.5 bg-app text-fg-3 rounded text-[10px] font-medium">
                           Viewing
