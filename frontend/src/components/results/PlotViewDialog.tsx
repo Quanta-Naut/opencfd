@@ -11,6 +11,7 @@ import {
   Layers,
   Download,
   Loader2,
+  Upload,
 } from 'lucide-react';
 import { PlotDefinition, FlowVariable, SolverRunRecord } from '../../types/cfd';
 import { CanvasChart, ChartSeries } from '../solver/CanvasChart';
@@ -24,6 +25,7 @@ import {
 import { loadPlotSamples, plotXLabel, plotXY, withLineXY, type PlotSamples } from './plotData';
 import { RESULT_FIELDS, fieldValues, type FlowReference } from '../../utils/resultFields';
 import { toast } from '../ui/Toast';
+import { parseXYText } from '../../utils/xyCsv';
 
 export interface PlotViewDialogProps {
   plot: PlotDefinition | null;
@@ -90,6 +92,9 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({});
   const inFlight = useRef(new Set<string>());
   const runsMenuRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [dataMenuOpen, setDataMenuOpen] = useState(false);
+  const dataMenuRef = useRef<HTMLDivElement>(null);
 
   // Hooks must run unconditionally on every render, so everything the chart
   // needs lives here, above the early return below.
@@ -106,6 +111,7 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
   useEffect(() => {
     if (!open) {
       setRunsMenuOpen(false);
+      setDataMenuOpen(false);
       setCompareIds([]);
     }
   }, [open]);
@@ -153,6 +159,15 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
   }, [runsMenuOpen]);
+
+  useEffect(() => {
+    if (!dataMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!dataMenuRef.current?.contains(e.target as Node)) setDataMenuOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [dataMenuOpen]);
 
   const index = plot ? siblings.findIndex((p) => p.id === plot.id) : -1;
   const prev = index > 0 ? siblings[index - 1] : null;
@@ -234,6 +249,17 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
         else if (plot.rangeMax != null && v > plot.rangeMax) v = NaN;
         rows.push({ x, [key]: v });
       }
+    });
+    // Imported measurements, as points over the lines.
+    (plot.experimental ?? []).forEach((e, j) => {
+      const key = `e${j}`;
+      ser.push({
+        key,
+        name: e.name,
+        color: MULTI_SERIES_COLORS[(shownRuns.length + j) % MULTI_SERIES_COLORS.length],
+        markers: true,
+      });
+      for (let n = 0; n < e.x.length; n++) rows.push({ x: e.x[n], [key]: e.y[n] });
     });
     return { chartData: rows, series: ser };
   }, [plot, isMonitor, shownRuns.join(','), solverRuns, monitorX, loaded, flowRef, multi]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -332,6 +358,18 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
       if (after) onNavigate(after);
       else onClose();
     }
+  };
+
+  const handleImportData = async (file: File | undefined) => {
+    if (!file) return;
+    const { data, error } = parseXYText(await file.text(), file.name.replace(/\.[^.]+$/, ''));
+    if (!data) {
+      toast.error('Could not read the data', { description: error ?? undefined });
+      return;
+    }
+    const entry = { id: `ex_${Date.now().toString(36)}`, name: data.name, x: data.x, y: data.y };
+    onUpdatePlot({ ...plot, experimental: [...(plot.experimental ?? []), entry] });
+    toast.success(`Added ${data.name}`, { description: `${data.x.length} points` });
   };
 
   const handleExportCsv = () => {
@@ -532,6 +570,87 @@ export const PlotViewDialog: React.FC<PlotViewDialogProps> = ({
                 </div>
               )}
             </div>
+            {!isMonitor && (
+              <div className="relative" ref={dataMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setDataMenuOpen((o) => !o)}
+                  className={`${toolBtn} ${plot.experimental?.length ? 'bg-accent-soft text-accent-fg border-accent-line' : ''}`}
+                  title="Draw measured data over this plot"
+                  aria-haspopup="menu"
+                  aria-expanded={dataMenuOpen}
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>
+                    {plot.experimental?.length ? `Data (${plot.experimental.length})` : 'Add data'}
+                  </span>
+                </button>
+                {dataMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full mt-1 z-10 w-72 rounded border border-line bg-surface p-1"
+                  >
+                    {(plot.experimental ?? []).map((e, j) => (
+                      <div
+                        key={e.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-sm text-xs text-fg"
+                      >
+                        <span
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{
+                            backgroundColor:
+                              MULTI_SERIES_COLORS[
+                                (shownRuns.length + j) % MULTI_SERIES_COLORS.length
+                              ],
+                          }}
+                        />
+                        <span className="truncate flex-1" title={e.name}>
+                          {e.name}
+                        </span>
+                        <span className="text-[10px] text-fg-3 font-mono">{e.x.length} pts</span>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${e.name}`}
+                          onClick={() =>
+                            onUpdatePlot({
+                              ...plot,
+                              experimental: (plot.experimental ?? []).filter((x) => x.id !== e.id),
+                            })
+                          }
+                          className="text-fg-3 hover:text-fg"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => fileRef.current?.click()}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-sm text-xs text-fg hover:bg-surface-2 text-left"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-fg-3" />
+                      Import a CSV file
+                    </button>
+                    <p className="px-2 py-1.5 text-[10px] leading-snug text-fg-3">
+                      Two columns, x then y, in the same units as this plot's axes. A first row of
+                      names is fine.
+                    </p>
+                  </div>
+                )}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".csv,.txt,.dat,.tsv,text/csv,text/plain"
+                  className="hidden"
+                  aria-label="Data file"
+                  onChange={(e) => {
+                    void handleImportData(e.target.files?.[0]);
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            )}
             <button
               type="button"
               onClick={handleExportCsv}

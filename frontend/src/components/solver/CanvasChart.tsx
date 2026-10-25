@@ -5,6 +5,8 @@ export interface ChartSeries {
   key: string;
   name: string;
   color: string;
+  /** Draw points instead of a line (measured data). */
+  markers?: boolean;
 }
 
 interface CanvasChartProps {
@@ -155,7 +157,7 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         return {
           s,
           pts:
-            hasGaps && pts.length <= cap
+            s.markers || (hasGaps && pts.length <= cap)
               ? pts
               : lttb(
                   pts.filter(([_, y]) => isFinite(y)),
@@ -167,13 +169,22 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       let xMin = Infinity;
       let xMax = -Infinity;
       const allY: number[] = [];
-      for (const { pts } of lines) {
+      // Measured points always stay in view, even past the clipped tails.
+      let markLo = Infinity;
+      let markHi = -Infinity;
+      for (const { s, pts } of lines) {
         for (const [x, y] of pts) {
           if (x < xMin) xMin = x;
           if (x > xMax) xMax = x;
-          if (ys === 'log' ? y > 0 : isFinite(y)) allY.push(y);
+          if (ys === 'log' ? y > 0 : isFinite(y)) {
+            if (s.markers) {
+              if (y < markLo) markLo = y;
+              if (y > markHi) markHi = y;
+            } else allY.push(y);
+          }
         }
       }
+      if (allY.length === 0 && markHi >= markLo) allY.push(markLo, markHi);
       if (!isFinite(xMin) || allY.length === 0) return;
       // A genuinely constant X (e.g. a field-vs-field plot sampled where the
       // X field happens to be uniform along the whole probe line) must not
@@ -201,6 +212,8 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
         const pad = (yMax - yMin) * 0.1 || 1;
         yMin -= pad;
         yMax += pad;
+        if (markLo < yMin) yMin = markLo - pad * 0.2;
+        if (markHi > yMax) yMax = markHi + pad * 0.2;
       }
 
       const sx = (x: number) => PAD.l + ((x - xMin) / (xMax - xMin)) * plotW;
@@ -257,6 +270,20 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       ctx.lineWidth = 1.5;
       ctx.lineJoin = 'round';
       for (const { s, pts } of lines) {
+        if (s.markers) {
+          ctx.fillStyle = s.color;
+          ctx.strokeStyle = tk.tipBg;
+          ctx.lineWidth = 1;
+          for (const [x, y] of pts) {
+            if (!isFinite(y)) continue;
+            ctx.beginPath();
+            ctx.arc(sx(x), sy(y), 3.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+          ctx.lineWidth = 1.5;
+          continue;
+        }
         if (pts.length < 2) continue;
         ctx.strokeStyle = s.color;
         ctx.beginPath();
@@ -287,7 +314,11 @@ export const CanvasChart: React.FC<CanvasChartProps> = ({
       const ly = cssH - 12;
       for (const s of ser) {
         ctx.fillStyle = s.color;
-        ctx.fillRect(lx, ly - 3, 10, 3);
+        if (s.markers) {
+          ctx.beginPath();
+          ctx.arc(lx + 5, ly - 1.5, 3.2, 0, Math.PI * 2);
+          ctx.fill();
+        } else ctx.fillRect(lx, ly - 3, 10, 3);
         ctx.fillStyle = tk.label;
         ctx.fillText(s.name, lx + 14, ly);
         lx += 14 + ctx.measureText(s.name).width + 12;

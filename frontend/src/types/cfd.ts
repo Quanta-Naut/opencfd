@@ -291,6 +291,14 @@ export interface PlotSampleData {
   fields?: Record<string, number[]>;
 }
 
+/** Measured or reference data drawn over a plot as points. */
+export interface ExperimentalSeries {
+  id: string;
+  name: string;
+  x: number[];
+  y: number[];
+}
+
 export interface PlotDefinition {
   id: string;
   name: string; // user-editable label, default like "Plot 1", "Plot 2"
@@ -312,6 +320,8 @@ export interface PlotDefinition {
   rangeMin: number | null; // null = auto/full range
   rangeMax: number | null;
   data: PlotSampleData | null; // cached sampled result ('line' plots only)
+  /** Imported data drawn as points over a line or boundary plot. */
+  experimental?: ExperimentalSeries[];
   createdAt: number;
 }
 
