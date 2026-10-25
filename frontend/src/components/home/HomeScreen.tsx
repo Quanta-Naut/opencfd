@@ -50,8 +50,8 @@ function relativeTime(iso: string): string {
 
 // ── Geometry thumbnail ──────────────────────────────────────────────────────
 // Renders each CAD primitive faithfully (a circle stays round, an airfoil keeps
-// its curve) inside a light wind-tunnel frame, with flow arrows for external
-// cases. Coordinates are CAD-space; SVG y is flipped so"up" is up.
+// its curve), framed on the geometry itself so a small body in a big domain
+// still reads. Coordinates are CAD-space; SVG y is flipped so "up" is up.
 
 const shapeBounds = (s: PreviewShape): [number, number, number, number] => {
   if (s.kind === 'path') {
@@ -62,17 +62,14 @@ const shapeBounds = (s: PreviewShape): [number, number, number, number] => {
   return [s.c[0] - s.r, s.c[1] - s.r, s.c[0] + s.r, s.c[1] + s.r];
 };
 
-const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean }> = ({
-  preview,
-  meshed,
-}) => {
+const GeometryThumb: React.FC<{ preview: ProjectPreview | null }> = ({ preview }) => {
   const entities = preview?.entities ?? [];
   const hasContent = entities.length > 0 || !!preview?.domain;
 
   if (!preview || !hasContent) {
     return (
-      <div className="relative h-44 flex items-center justify-center bg-gradient-to-b from-surface-2 to-surface-3 text-fg-4">
-        <div className="absolute inset-0 opacity-[0.5] [background-image:radial-gradient(circle,var(--line-strong)_1px,transparent_1px)] [background-size:14px_14px]" />
+      <div className="relative h-44 flex items-center justify-center bg-surface-2 text-fg-4">
+        <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(circle,var(--line-strong)_1px,transparent_1px)] [background-size:14px_14px]" />
         <div className="relative text-center">
           <Pencil className="w-6 h-6 mx-auto mb-1.5" strokeWidth={1.5} />
           <span className="text-[10px] font-medium tracking-wide uppercase">Empty sketch</span>
@@ -81,19 +78,22 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
     );
   }
 
-  // Frame = union of geometry and (for external flow) the domain box.
+  // Frame on the geometry; fall back to the domain when there is none.
   let [minX, minY, maxX, maxY] = preview.bbox;
   const boxes: [number, number, number, number][] = entities.map(shapeBounds);
-  if (preview.domain && preview.flow === 'external') boxes.push(preview.domain);
-  for (const [bx0, by0, bx1, by1] of boxes) {
-    minX = Math.min(minX, bx0);
-    minY = Math.min(minY, by0);
-    maxX = Math.max(maxX, bx1);
-    maxY = Math.max(maxY, by1);
+  if (boxes.length === 0 && preview.domain) boxes.push(preview.domain);
+  if (boxes.length > 0) {
+    [minX, minY, maxX, maxY] = boxes[0];
+    for (const [bx0, by0, bx1, by1] of boxes) {
+      minX = Math.min(minX, bx0);
+      minY = Math.min(minY, by0);
+      maxX = Math.max(maxX, bx1);
+      maxY = Math.max(maxY, by1);
+    }
   }
   const w = Math.max(maxX - minX, 1e-6);
   const h = Math.max(maxY - minY, 1e-6);
-  const pad = Math.max(w, h) * 0.12;
+  const pad = Math.max(w, h) * 0.16;
   const vx = minX - pad;
   const vy = minY - pad;
   const vw = w + 2 * pad;
@@ -115,56 +115,14 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
     return `M${p0[0]} ${p0[1]} A${s.r} ${s.r} 0 ${large} 0 ${p1[0]} ${p1[1]}`;
   };
 
-  const domRect = preview.domain && preview.flow === 'external' ? preview.domain : null;
-  // free-stream arrows down the left edge of the frame
-  const arrowRows = [0.28, 0.5, 0.72];
-  const ax0 = vx + vw * 0.05;
-  const aLen = vw * 0.14;
-  const ah = 2.6 * k; // arrowhead half-height
-
   return (
-    <div className="relative h-44 bg-gradient-to-b from-surface-2 to-surface-3">
+    <div className="relative h-44 bg-surface-2">
       <div className="absolute inset-0 opacity-40 [background-image:radial-gradient(circle,var(--line-strong)_1px,transparent_1px)] [background-size:13px_13px]" />
       <svg
         viewBox={`${vx} ${vy} ${vw} ${vh}`}
         preserveAspectRatio="xMidYMid meet"
         className="relative w-full h-full"
       >
-        {/* wind-tunnel domain */}
-        {domRect && (
-          <rect
-            x={domRect[0]}
-            y={flipY(domRect[3])}
-            width={domRect[2] - domRect[0]}
-            height={domRect[3] - domRect[1]}
-            style={{ fill: 'var(--surface)', stroke: 'var(--fg-4)' }}
-            fillOpacity={0.45}
-            strokeWidth={1.1 * k}
-            strokeDasharray={`${4 * k} ${3 * k}`}
-          />
-        )}
-
-        {/* free-stream arrows */}
-        {preview.flow === 'external' &&
-          arrowRows.map((f, i) => {
-            const y = vy + vh - f * vh;
-            const tip = ax0 + aLen;
-            return (
-              <g
-                key={i}
-                style={{ stroke: 'var(--fg-4)', fill: 'var(--fg-4)' }}
-                strokeWidth={1.2 * k}
-                strokeLinecap="round"
-              >
-                <line x1={ax0} y1={y} x2={tip} y2={y} />
-                <path
-                  d={`M${tip - 2.4 * k} ${y - ah} L${tip + 1.6 * k} ${y} L${tip - 2.4 * k} ${y + ah} Z`}
-                  stroke="none"
-                />
-              </g>
-            );
-          })}
-
         {/* geometry */}
         {entities.map((s, i) => {
           // Theme colours via CSS (SVG presentation attributes can't use var()).
@@ -206,13 +164,6 @@ const GeometryThumb: React.FC<{ preview: ProjectPreview | null; meshed?: boolean
           );
         })}
       </svg>
-
-      {meshed && (
-        <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-sm bg-surface px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success border border-success-line">
-          <Layers className="w-2.5 h-2.5" />
-          Meshed
-        </span>
-      )}
     </div>
   );
 };
@@ -257,7 +208,7 @@ const ProjectCardView: React.FC<{
         className="block w-full text-left disabled:cursor-default"
         disabled={editing || disabled}
       >
-        <GeometryThumb preview={s.preview ?? null} meshed={s.hasMesh} />
+        <GeometryThumb preview={s.preview ?? null} />
         <div className="p-3.5 border-t border-line-soft">
           <div className="flex items-start justify-between gap-3">
             {editing ? (
