@@ -33,6 +33,8 @@ def _assemble_from_cells(nodes, elements: List, centres: np.ndarray,
 
     def field(cv: np.ndarray, smooth: int = 1) -> np.ndarray:
         cv = np.asarray(cv, dtype=float).ravel()
+        if cv.size == 1:  # a uniform field is one value for every cell
+            cv = np.full(len(centres), cv[0])
         if bind is None:
             v = cv[np.clip(_nearest(nodes_xy, centres), 0, len(cv) - 1)]
         else:
@@ -181,12 +183,22 @@ def read_field_results(case_dir: str | Path, mesh: Dict, time_value: Optional[st
         (str(case), n_cells, len(nodes), len(elements), owner.stat().st_mtime)
         if owner.is_file() else None
     )
-    payload = _assemble_from_cells(
-        nodes, elements, centres, U, p,
-        _read_field(tdir / "k"), _read_field(tdir / "omega"),
-        tdir.name, [path.name for _, path in times], geom_key,
-        _extra_cell_fields(case, tdir, U),
-    )
+    try:
+        payload = _assemble_from_cells(
+            nodes, elements, centres, U, p,
+            _read_field(tdir / "k"), _read_field(tdir / "omega"),
+            tdir.name, [path.name for _, path in times], geom_key,
+            _extra_cell_fields(case, tdir, U),
+        )
+    except IndexError as e:
+        tb = e.__traceback__
+        while tb.tb_next:
+            tb = tb.tb_next
+        raise ResultsUnavailable(
+            f"{e} [{Path(tb.tb_frame.f_code.co_filename).name}:{tb.tb_lineno} "
+            f"{tb.tb_frame.f_code.co_name}; {n_cells} cells, {len(centres)} centres, "
+            f"{len(nodes)} nodes, {len(elements)} elements]"
+        ) from e
     # Wall y+ and shear (on wall nodes, 0 elsewhere) and the force split,
     # when the run's function objects wrote them.
     try:

@@ -119,6 +119,30 @@ def discover_foam_env_command() -> str:
     return _FOAM_ENV
 
 
+def _clean_case_dir(case: Path) -> List[str]:
+    """Delete the previous run's time folders, processor dirs, postProcessing and
+    mesh. Returns the names that could not be removed."""
+    stuck: List[str] = []
+    targets = [case / "postProcessing", case / "constant" / "polyMesh"]
+    for d in case.iterdir():
+        if not d.is_dir():
+            continue
+        if d.name.startswith("processor"):
+            targets.append(d)
+            continue
+        try:
+            if float(d.name) != 0:
+                targets.append(d)
+        except ValueError:
+            pass
+    for t in targets:
+        if t.exists():
+            shutil.rmtree(t, ignore_errors=True)
+            if t.exists():
+                stuck.append(t.name)
+    return stuck
+
+
 class OpenFoamAdapter(SolverAdapter):
     name = "openfoam"
 
@@ -308,7 +332,14 @@ class OpenFoamAdapter(SolverAdapter):
             yield {"type": "error", "message": f"path translation failed: {e}"}
             return
 
-        # 2. clean any previous run so gmshToFoam / the solver start fresh
+        # 2. clean any previous run so gmshToFoam / the solver start fresh. Done
+        # from the host first: the shell clean below silently does nothing when it
+        # cannot delete (WSL on a Windows drive), and leftover time folders from an
+        # older mesh then get read as this run's result.
+        left = await asyncio.get_event_loop().run_in_executor(None, _clean_case_dir, case)
+        if left:
+            yield {"type": "log",
+                   "line": f"[OpenCFD] could not remove old output: {', '.join(left[:5])}"}
         try:
             async for ev in self._stream(
                 "rm -rf constant/polyMesh processor* postProcessing "

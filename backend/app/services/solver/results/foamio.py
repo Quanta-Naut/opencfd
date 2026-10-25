@@ -54,14 +54,44 @@ def _read_field(path: Path) -> Optional[np.ndarray]:
     return None
 
 
+_NCELLS = re.compile(r"nCells:\s*(\d+)")
+_DECLARED = re.compile(r"internalField\s+nonuniform\s+List<\w+>\s*(\d+)")
+
+
+def _mesh_cells(case: Path) -> Optional[int]:
+    """Cell count of constant/polyMesh, from the header note of its owner file."""
+    try:
+        with open(case / "constant" / "polyMesh" / "owner", "rb") as fh:
+            m = _NCELLS.search(fh.read(2048).decode("ascii", "ignore"))
+        return int(m.group(1)) if m else None
+    except OSError:
+        return None
+
+
+def _matches_mesh(tdir: Path, n_cells: Optional[int]) -> bool:
+    """False for a time folder whose fields were written for a different mesh
+    (left over from an older run), so it never gets read as this run's result."""
+    if not n_cells:
+        return True
+    try:
+        with open(tdir / "U", "rb") as fh:
+            m = _DECLARED.search(fh.read(8192).decode("ascii", "ignore"))
+    except OSError:
+        return True
+    return m is None or int(m.group(1)) == n_cells
+
+
 def _time_dirs(case: Path) -> List[tuple[float, Path]]:
     times = []
+    n_cells = _mesh_cells(case)
     for p in case.iterdir():
         if p.is_dir():
             try:
-                times.append((float(p.name), p))
+                t = float(p.name)
             except ValueError:
-                pass
+                continue
+            if _matches_mesh(p, n_cells):
+                times.append((t, p))
     times.sort(key=lambda t: t[0])
     return times
 
