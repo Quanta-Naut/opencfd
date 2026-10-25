@@ -242,3 +242,86 @@ pub unsafe extern "C" fn tm_sor(
     }
     done
 }
+
+// ── Nearest point (2D k-d tree) ─────────────────────────────────────────────
+
+struct Kd<'a> {
+    ref_xy: &'a [f64],
+    // Indices into `ref_xy`, arranged as an implicit balanced tree: the median
+    // of each range is its node, the halves are its children.
+    order: Vec<u32>,
+}
+
+impl<'a> Kd<'a> {
+    fn build(ref_xy: &'a [f64], m: usize) -> Self {
+        let mut order: Vec<u32> = (0..m as u32).collect();
+        fn rec(r: &[f64], o: &mut [u32], axis: usize) {
+            if o.len() <= 1 {
+                return;
+            }
+            let mid = o.len() / 2;
+            o.select_nth_unstable_by(mid, |&a, &b| {
+                r[2 * a as usize + axis]
+                    .partial_cmp(&r[2 * b as usize + axis])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let (lo, rest) = o.split_at_mut(mid);
+            rec(r, lo, 1 - axis);
+            rec(r, &mut rest[1..], 1 - axis);
+        }
+        rec(ref_xy, &mut order, 0);
+        Kd { ref_xy, order }
+    }
+
+    fn nearest(&self, qx: f64, qy: f64) -> u32 {
+        let mut best = (f64::INFINITY, 0u32);
+        self.search(0, self.order.len(), 0, qx, qy, &mut best);
+        best.1
+    }
+
+    fn search(&self, lo: usize, hi: usize, axis: usize, qx: f64, qy: f64, best: &mut (f64, u32)) {
+        if lo >= hi {
+            return;
+        }
+        let mid = lo + (hi - lo) / 2;
+        let idx = self.order[mid];
+        let px = self.ref_xy[2 * idx as usize];
+        let py = self.ref_xy[2 * idx as usize + 1];
+        let d = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+        if d < best.0 {
+            *best = (d, idx);
+        }
+        let diff = if axis == 0 { qx - px } else { qy - py };
+        let (near, far) = if diff < 0.0 {
+            ((lo, mid), (mid + 1, hi))
+        } else {
+            ((mid + 1, hi), (lo, mid))
+        };
+        self.search(near.0, near.1, 1 - axis, qx, qy, best);
+        if diff * diff < best.0 {
+            self.search(far.0, far.1, 1 - axis, qx, qy, best);
+        }
+    }
+}
+
+/// For each of the `n` query points (interleaved x,y) write the index of the
+/// nearest of the `m` reference points (interleaved x,y) into `out`.
+#[no_mangle]
+pub unsafe extern "C" fn nearest_points(
+    pts: *const f64,
+    n: usize,
+    refs: *const f64,
+    m: usize,
+    out: *mut i64,
+) {
+    if m == 0 {
+        return;
+    }
+    let refs = std::slice::from_raw_parts(refs, 2 * m);
+    let pts = std::slice::from_raw_parts(pts, 2 * n);
+    let out = std::slice::from_raw_parts_mut(out, n);
+    let kd = Kd::build(refs, m);
+    for i in 0..n {
+        out[i] = kd.nearest(pts[2 * i], pts[2 * i + 1]) as i64;
+    }
+}

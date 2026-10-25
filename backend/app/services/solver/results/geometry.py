@@ -22,18 +22,22 @@ def _nearest_brute(pts: np.ndarray, ref: np.ndarray, chunk: int = 256) -> np.nda
 def _nearest(pts: np.ndarray, ref: np.ndarray) -> np.ndarray:
     """Index of the nearest row of `ref` for each row of `pts`.
 
-    A k-d tree when scipy is there (dev, and any build that ships it): the old
-    brute force was O(N*M) in time and in temporary memory, several seconds and
-    hundreds of MB on the first live preview of a 10k+ cell mesh. The frozen
-    sidecar leaves scipy out, so it keeps a brute force with small chunks.
+    A k-d tree: scipy's where it is installed (dev), else the compiled kernel
+    that ships with the sidecar (which leaves scipy out). The brute force is
+    O(N*M) in time and in temporary memory, several seconds and hundreds of MB
+    on the first live preview of a 10k+ cell mesh, so it is the last resort.
     """
     if len(pts) == 0 or len(ref) == 0:
         return np.zeros(len(pts), dtype=int)
     try:
         from scipy.spatial import cKDTree
+        return cKDTree(ref).query(pts, k=1)[1].astype(int)
     except ImportError:
-        return _nearest_brute(pts, ref)
-    return cKDTree(ref).query(pts, k=1)[1].astype(int)
+        pass
+    from app.services.gmsh_service import native
+    if native.AVAILABLE and pts.shape[1] == 2 and ref.shape[1] == 2:
+        return native.nearest(pts, ref).astype(int)
+    return _nearest_brute(pts, ref)
 
 
 _POLYMESH_CACHE: Dict[tuple, np.ndarray] = {}

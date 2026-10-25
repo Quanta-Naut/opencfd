@@ -61,6 +61,8 @@ def _load() -> Optional[ctypes.CDLL]:
             _f64p, _f64p, _f64p, _f64p, ctypes.c_size_t, ctypes.c_size_t,
             ctypes.c_size_t, ctypes.c_double,
         ]
+        lib.nearest_points.restype = None
+        lib.nearest_points.argtypes = [_f64p, ctypes.c_size_t, _f64p, ctypes.c_size_t, _i64p]
         return lib
     return None
 
@@ -109,3 +111,16 @@ def tm_sor(X: np.ndarray, Y: np.ndarray, P: np.ndarray, Q: np.ndarray,
         ni, nj, int(iterations), float(omega),
     )
     return X, Y
+
+
+def nearest(pts: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Index of the nearest row of `ref` (m, 2) for each row of `pts` (n, 2)."""
+    assert _lib is not None
+    pts = np.ascontiguousarray(pts, dtype=np.float64)
+    ref = np.ascontiguousarray(ref, dtype=np.float64)
+    out = np.zeros(len(pts), dtype=np.int64)
+    _lib.nearest_points(
+        pts.ctypes.data_as(_f64p), len(pts), ref.ctypes.data_as(_f64p), len(ref),
+        out.ctypes.data_as(_i64p),
+    )
+    return out

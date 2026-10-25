@@ -64,9 +64,20 @@ _IS_WINDOWS = os.name == "nt"
 
 
 def _wsl(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [wsl_exe() or "wsl.exe", *args], capture_output=True, text=True, timeout=timeout
-    )
+    # wsl.exe's own messages are UTF-16LE, while output from inside the distro is
+    # UTF-8. Decode by hand so neither can raise on a stray byte.
+    p = subprocess.run([wsl_exe() or "wsl.exe", *args], capture_output=True, timeout=timeout)
+    p.stdout = _decode_out(p.stdout)
+    p.stderr = _decode_out(p.stderr)
+    return p
+
+
+def _decode_out(raw: bytes | None) -> str:
+    if not raw:
+        return ""
+    if len(raw) >= 2 and raw[1:2] == b"\x00":  # UTF-16LE: ASCII text has NUL high bytes
+        return raw.decode("utf-16-le", errors="ignore")
+    return raw.decode("utf-8", errors="ignore")
 
 
 def _clean(text: str) -> str:
