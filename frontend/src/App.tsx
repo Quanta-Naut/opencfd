@@ -8,7 +8,7 @@ import { SolverMonitorRail } from './components/solver/SolverMonitorRail';
 import { ResultsRightRail } from './components/results/ResultsRightRail';
 import { CreatePlotModal } from './components/results/CreatePlotModal';
 import { PlotViewDialog } from './components/results/PlotViewDialog';
-import { Crosshair } from 'lucide-react';
+import { CircleDot, Crop, Crosshair, Spline, StickyNote } from 'lucide-react';
 import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
 import { defaultPatchBC } from './caseSetup/bcCatalog';
@@ -21,6 +21,7 @@ import {
   SavedView,
 } from './types/cfd';
 import type { CameraApi } from './components/cad/workbenchCore';
+import { PickDialog } from './components/results/PickDialog';
 import {
   generateCaseFiles,
   uploadAndParseAirfoil,
@@ -1082,22 +1083,23 @@ export function App({
     heldRange,
   );
   const [probePicking, setProbePicking] = useState(false);
+  // The first pick of a two-pick tool, while the second is still to come.
+  const rubber = (s: TwoPicks | null) => (s && s.pts[0] && !s.pts[1] ? s.pts[0] : null);
   // Clip box picking: null when off, then the first corner once clicked.
-  const [clipPicking, setClipPicking] = useState<{ p1: [number, number] | null } | null>(null);
-  // Particle track seeding: points (until Done) or a line (two clicks).
-  const [trackPicking, setTrackPicking] = useState<{
-    kind: 'point' | 'line';
-    p1: [number, number] | null;
-  } | null>(null);
-  // Placing a note: one click on the field.
-  const [notePicking, setNotePicking] = useState(false);
+  const [clipPicking, setClipPicking] = useState<TwoPicks | null>(null);
+  // Particle track seeding: points (until Done) or a line (two picks).
+  const [trackPicking, setTrackPicking] = useState<(TwoPicks & { kind: 'point' | 'line' }) | null>(
+    null,
+  );
+  // Placing a note: one pick.
+  const [notePicking, setNotePicking] = useState<TwoPicks | null>(null);
   const cameraApiRef = useRef<CameraApi | null>(null);
   useEffect(() => {
     if (activeStage !== 'results') {
       setProbePicking(false);
       setClipPicking(null);
       setTrackPicking(null);
-      setNotePicking(false);
+      setNotePicking(null);
     }
   }, [activeStage]);
   useEffect(() => {
@@ -1107,13 +1109,18 @@ export function App({
       setProbePicking(false);
       setClipPicking(null);
       setTrackPicking(null);
-      setNotePicking(false);
+      setNotePicking(null);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [probePicking, clipPicking, trackPicking, notePicking]);
   const pickNote = useCallback((pt: [number, number]) => {
-    setNotePicking(false);
+    setNotePicking((s) => (s ? { ...s, pts: [pt, null] } : s));
+  }, []);
+  const commitNote = () => {
+    const pt = notePicking?.pts[0];
+    setNotePicking(null);
+    if (!pt) return;
     const r = (v: number) => Number(v.toPrecision(5));
     setState((prev) => ({
       ...prev,
@@ -1125,7 +1132,7 @@ export function App({
         ],
       },
     }));
-  }, []);
+  };
   const saveView = useCallback(
     (name: string) => {
       const cam = cameraApiRef.current?.get();
@@ -1165,39 +1172,35 @@ export function App({
     cameraApiRef.current?.set(v.camera);
     setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...v.settings } }));
   }, []);
+  // A pick fills the active field, then moves to the next empty one.
+  const fillPick = <T extends TwoPicks>(s: T, pt: [number, number]): T => {
+    const pts: TwoPicks['pts'] = [s.pts[0], s.pts[1]];
+    pts[s.active] = pt;
+    const empty = pts.findIndex((q) => q === null);
+    return { ...s, pts, active: empty >= 0 ? (empty as 0 | 1) : s.active };
+  };
+  const clearPick = <T extends TwoPicks>(s: T, i: number): T => {
+    const pts: TwoPicks['pts'] = [s.pts[0], s.pts[1]];
+    pts[i] = null;
+    return { ...s, pts, active: i as 0 | 1 };
+  };
   const pickTrackSeed = useCallback(
     (pt: [number, number]) => {
       if (!trackPicking) return;
-      const r = (v: number) => Number(v.toPrecision(5));
-      let seed: TrackSeed;
-      const id = `tr_${Date.now().toString(36)}`;
-      if (trackPicking.kind === 'point') {
-        seed = {
-          id,
-          kind: 'point',
-          x0: r(pt[0]),
-          y0: r(pt[1]),
-          x1: r(pt[0]),
-          y1: r(pt[1]),
-          count: 1,
-        };
-      } else if (!trackPicking.p1) {
-        setTrackPicking({ kind: 'line', p1: pt });
+      if (trackPicking.kind === 'line') {
+        setTrackPicking((s) => (s ? fillPick(s, pt) : s));
         return;
-      } else {
-        const p1 = trackPicking.p1;
-        setTrackPicking(null);
-        if (Math.hypot(pt[0] - p1[0], pt[1] - p1[1]) < 1e-12) return;
-        seed = {
-          id,
-          kind: 'line',
-          x0: r(p1[0]),
-          y0: r(p1[1]),
-          x1: r(pt[0]),
-          y1: r(pt[1]),
-          count: 12,
-        };
       }
+      const r = (v: number) => Number(v.toPrecision(5));
+      const seed: TrackSeed = {
+        id: `tr_${Date.now().toString(36)}`,
+        kind: 'point',
+        x0: r(pt[0]),
+        y0: r(pt[1]),
+        x1: r(pt[0]),
+        y1: r(pt[1]),
+        count: 1,
+      };
       setState((prev) => ({
         ...prev,
         postprocess: {
@@ -1205,35 +1208,52 @@ export function App({
           tracks: [...(prev.postprocess.tracks ?? []), seed],
         },
       }));
+      setTrackPicking((s) => (s ? { ...s, pts: [pt, null] } : s));
     },
     [trackPicking],
   );
-  const pickClipCorner = useCallback(
-    (pt: [number, number]) => {
-      const p1 = clipPicking?.p1;
-      if (!p1) {
-        setClipPicking({ p1: pt });
-        return;
-      }
-      setClipPicking(null);
-      if (Math.abs(pt[0] - p1[0]) < 1e-9 || Math.abs(pt[1] - p1[1]) < 1e-9) return;
-      // Clicked corners, to a readable number of digits.
-      const r = (v: number) => Number(v.toPrecision(4));
-      setState((prev) => ({
-        ...prev,
-        postprocess: {
-          ...prev.postprocess,
-          clipBox: [
-            r(Math.min(p1[0], pt[0])),
-            r(Math.min(p1[1], pt[1])),
-            r(Math.max(p1[0], pt[0])),
-            r(Math.max(p1[1], pt[1])),
-          ],
-        },
-      }));
-    },
-    [clipPicking],
-  );
+  const commitTrackLine = () => {
+    const [a, b] = trackPicking?.pts ?? [null, null];
+    setTrackPicking(null);
+    if (!a || !b || Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-12) return;
+    const r = (v: number) => Number(v.toPrecision(5));
+    const seed: TrackSeed = {
+      id: `tr_${Date.now().toString(36)}`,
+      kind: 'line',
+      x0: r(a[0]),
+      y0: r(a[1]),
+      x1: r(b[0]),
+      y1: r(b[1]),
+      count: 12,
+    };
+    setState((prev) => ({
+      ...prev,
+      postprocess: { ...prev.postprocess, tracks: [...(prev.postprocess.tracks ?? []), seed] },
+    }));
+  };
+  const pickClipCorner = useCallback((pt: [number, number]) => {
+    setClipPicking((s) => (s ? fillPick(s, pt) : s));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const commitClip = () => {
+    const [a, b] = clipPicking?.pts ?? [null, null];
+    setClipPicking(null);
+    if (!a || !b || Math.abs(b[0] - a[0]) < 1e-9 || Math.abs(b[1] - a[1]) < 1e-9) return;
+    // Clicked corners, to a readable number of digits.
+    const r = (v: number) => Number(v.toPrecision(4));
+    setState((prev) => ({
+      ...prev,
+      postprocess: {
+        ...prev.postprocess,
+        clipBox: [
+          r(Math.min(a[0], b[0])),
+          r(Math.min(a[1], b[1])),
+          r(Math.max(a[0], b[0])),
+          r(Math.max(a[1], b[1])),
+        ],
+      },
+    }));
+  };
   const addProbe = useCallback((pt: [number, number]) => {
     setState((prev) => ({
       ...prev,
@@ -1698,7 +1718,7 @@ export function App({
                       setPickingPointsState(null);
                       setClipPicking(null);
                       setTrackPicking(null);
-                      setNotePicking(false);
+                      setNotePicking(null);
                       setProbePicking((v) => !v);
                     },
                     clipPicking: !!clipPicking,
@@ -1712,24 +1732,26 @@ export function App({
                       setPickingPointsState(null);
                       setProbePicking(false);
                       setTrackPicking(null);
-                      setNotePicking(false);
-                      setClipPicking((v) => (v ? null : { p1: null }));
+                      setNotePicking(null);
+                      setClipPicking((v) => (v ? null : { pts: [null, null], active: 0 }));
                     },
                     trackPicking: trackPicking?.kind ?? null,
                     onTrackPicking: (kind: 'point' | 'line') => {
                       setPickingPointsState(null);
                       setProbePicking(false);
                       setClipPicking(null);
-                      setNotePicking(false);
-                      setTrackPicking((v) => (v?.kind === kind ? null : { kind, p1: null }));
+                      setNotePicking(null);
+                      setTrackPicking((v) =>
+                        v?.kind === kind ? null : { kind, pts: [null, null], active: 0 },
+                      );
                     },
-                    notePicking,
+                    notePicking: !!notePicking,
                     onToggleNotePicking: () => {
                       setPickingPointsState(null);
                       setProbePicking(false);
                       setClipPicking(null);
                       setTrackPicking(null);
-                      setNotePicking((v) => !v);
+                      setNotePicking((v) => (v ? null : { pts: [null, null], active: 0 }));
                     },
                     onSaveView: saveView,
                     onApplyView: applyView,
@@ -1841,7 +1863,7 @@ export function App({
                   probePicking ||
                   !!clipPicking ||
                   !!trackPicking ||
-                  notePicking
+                  !!notePicking
                 }
                 onPickPlotPoint={
                   notePicking
@@ -1855,90 +1877,137 @@ export function App({
                           : handlePickPlotPoint
                 }
                 plotPickPreviewP1={
-                  trackPicking?.p1 ?? clipPicking?.p1 ?? pickingPointsState?.p1 ?? null
+                  rubber(trackPicking) ?? rubber(clipPicking) ?? pickingPointsState?.p1 ?? null
                 }
               />
               {clipPicking && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
-                  <Crosshair className="w-4 h-4 text-accent" />
-                  <span>
-                    {clipPicking.p1
-                      ? 'Click the opposite corner of the box'
-                      : 'Click one corner of the box to show'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setClipPicking(null)}
-                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <PickDialog
+                  title="Clip box"
+                  icon={Crop}
+                  fields={[
+                    { label: 'Corner 1', value: fmtPt(clipPicking.pts[0]), empty: 'Select point' },
+                    { label: 'Corner 2', value: fmtPt(clipPicking.pts[1]), empty: 'Select point' },
+                  ]}
+                  active={clipPicking.active}
+                  onActive={(i) => setClipPicking((s) => (s ? { ...s, active: i as 0 | 1 } : s))}
+                  onClear={(i) => setClipPicking((s) => (s ? clearPick(s, i) : s))}
+                  hint="Opposite corners. Results show inside the box."
+                  ready={!!clipPicking.pts[0] && !!clipPicking.pts[1]}
+                  onOk={commitClip}
+                  onCancel={() => setClipPicking(null)}
+                />
               )}
               {notePicking && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
-                  <Crosshair className="w-4 h-4 text-accent" />
-                  <span>Click the point the note is about</span>
-                  <button
-                    type="button"
-                    onClick={() => setNotePicking(false)}
-                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <PickDialog
+                  title="Note"
+                  icon={StickyNote}
+                  fields={[
+                    { label: 'Point', value: fmtPt(notePicking.pts[0]), empty: 'Select point' },
+                  ]}
+                  active={0}
+                  onActive={() => undefined}
+                  onClear={() => setNotePicking((s) => (s ? clearPick(s, 0) : s))}
+                  hint="The point on the field the note is about. Edit its text in the sidebar."
+                  ready={!!notePicking.pts[0]}
+                  onOk={commitNote}
+                  onCancel={() => setNotePicking(null)}
+                />
               )}
               {trackPicking && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
-                  <Crosshair className="w-4 h-4 text-accent" />
-                  <span>
-                    {trackPicking.kind === 'point'
-                      ? 'Click on the field to release particles'
-                      : trackPicking.p1
-                        ? 'Click the other end of the line'
-                        : 'Click one end of the release line'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setTrackPicking(null)}
-                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
-                  >
-                    {trackPicking.kind === 'point' ? 'Done' : 'Cancel'}
-                  </button>
-                </div>
+                <PickDialog
+                  title="Particle tracks"
+                  icon={trackPicking.kind === 'line' ? Spline : CircleDot}
+                  fields={
+                    trackPicking.kind === 'line'
+                      ? [
+                          {
+                            label: 'Start',
+                            value: fmtPt(trackPicking.pts[0]),
+                            empty: 'Select point',
+                          },
+                          {
+                            label: 'End',
+                            value: fmtPt(trackPicking.pts[1]),
+                            empty: 'Select point',
+                          },
+                        ]
+                      : [
+                          {
+                            label: 'Last point',
+                            value: fmtPt(trackPicking.pts[0]),
+                            empty: 'Select point',
+                          },
+                        ]
+                  }
+                  active={trackPicking.kind === 'line' ? trackPicking.active : 0}
+                  onActive={(i) => setTrackPicking((s) => (s ? { ...s, active: i as 0 | 1 } : s))}
+                  onClear={(i) => setTrackPicking((s) => (s ? clearPick(s, i) : s))}
+                  hint={
+                    trackPicking.kind === 'line'
+                      ? 'Particles are released along the line.'
+                      : 'Each click releases a particle. OK when done.'
+                  }
+                  okLabel={trackPicking.kind === 'line' ? 'OK' : 'Done'}
+                  ready={
+                    trackPicking.kind === 'point' ||
+                    (!!trackPicking.pts[0] && !!trackPicking.pts[1])
+                  }
+                  onOk={
+                    trackPicking.kind === 'line' ? commitTrackLine : () => setTrackPicking(null)
+                  }
+                  onCancel={() => setTrackPicking(null)}
+                />
               )}
               {probePicking && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
-                  <Crosshair className="w-4 h-4 text-accent" />
-                  <span>Click on the field to add probe points</span>
-                  <button
-                    type="button"
-                    onClick={() => setProbePicking(false)}
-                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
-                  >
-                    Done
-                  </button>
-                </div>
+                <PickDialog
+                  title="Probes"
+                  icon={Crosshair}
+                  fields={[
+                    {
+                      label: 'Points',
+                      value: state.postprocess.probes.length
+                        ? `${state.postprocess.probes.length} placed`
+                        : null,
+                      empty: 'Select points',
+                    },
+                  ]}
+                  active={0}
+                  onActive={() => undefined}
+                  onClear={() =>
+                    setState((prev) => ({
+                      ...prev,
+                      postprocess: { ...prev.postprocess, probes: [] },
+                    }))
+                  }
+                  hint="Each click adds a probe. OK when done."
+                  okLabel="Done"
+                  ready
+                  onOk={() => setProbePicking(false)}
+                  onCancel={() => setProbePicking(false)}
+                />
               )}
               {pickingPointsState && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
-                  <Crosshair className="w-4 h-4 text-accent animate-pulse" />
-                  <span>
-                    {pickingPointsState.step === 1
-                      ? 'Click Point 1 on the geometry canvas'
-                      : `Point 1 set (${pickingPointsState.p1![0].toFixed(3)}m, ${pickingPointsState.p1![1].toFixed(3)}m). Click Point 2...`}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPickingPointsState(null);
-                      setCreatePlotModalOpen(true);
-                    }}
-                    className="px-2.5 py-0.5 rounded-sm bg-surface/20 hover:bg-surface/30 text-white font-semibold text-[11px] transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <PickDialog
+                  title="Line plot"
+                  icon={Crosshair}
+                  fields={[
+                    {
+                      label: 'Point 1',
+                      value: fmtPt(pickingPointsState.p1 ?? null),
+                      empty: 'Select point',
+                    },
+                    { label: 'Point 2', value: null, empty: 'Select point' },
+                  ]}
+                  active={pickingPointsState.step === 1 ? 0 : 1}
+                  onActive={() => undefined}
+                  onClear={() => undefined}
+                  hint="The plot is made when both points are picked."
+                  ready={false}
+                  onCancel={() => {
+                    setPickingPointsState(null);
+                    setCreatePlotModalOpen(true);
+                  }}
+                />
               )}
             </div>
           </main>
@@ -2049,3 +2118,13 @@ export function App({
 }
 
 export default App;
+
+/** A tool that takes up to two picks on the field; `active` is the field the
+ *  next click fills. */
+interface TwoPicks {
+  pts: [[number, number] | null, [number, number] | null];
+  active: 0 | 1;
+}
+
+const fmtPt = (p: [number, number] | null | undefined) =>
+  p ? `${Number(p[0].toPrecision(4))}, ${Number(p[1].toPrecision(4))}` : null;
