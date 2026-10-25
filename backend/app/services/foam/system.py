@@ -223,6 +223,16 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         "system/fvSchemes": foam_file("dictionary", "fvSchemes", schemes, "system"),
         "system/fvSolution": foam_file("dictionary", "fvSolution", solution_txt, "system"),
     }
+    if compressible:
+        # Keep p and T inside a sane band so one bad sweep cannot drive a
+        # negative T or p into the thermo (the usual start-up failure).
+        t0 = float(phys.get("inletTemperature", 288.15))
+        out["system/fvConstraints"] = foam_file(
+            "dictionary", "fvConstraints",
+            "#includeConstraint limitPressure(minFactor=0.1, maxFactor=2)\n"
+            f"#includeConstraint limitTemperature(min={round(0.35 * t0, 2)}, max={round(3.5 * t0, 2)})\n",
+            "system",
+        )
     return out
 
 

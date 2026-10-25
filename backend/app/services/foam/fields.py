@@ -47,9 +47,11 @@ def _is_supersonic(phys: Dict[str, Any]) -> bool:
 def _internal(field: str, phys: Dict[str, Any], turb: Dict[str, float], compressible: bool) -> str:
     if field == "U":
         # shockFluid (density-based) must start AT freestream or the start-up
-        # wave diverges it. The pressure-based `fluid` module and incompressible
-        # are gentler from rest on a coarse mesh.
-        if _is_supersonic(phys):
+        # wave diverges it. The pressure-based compressible `fluid` module needs
+        # it too: from rest against a fast inlet the first sweeps put huge
+        # continuity errors into rho and T and the wall function divides by zero.
+        # Incompressible is gentler from rest on a coarse mesh.
+        if _is_supersonic(phys) or compressible:
             return f"uniform ({float(phys.get('inletVelocity', 20.0))} 0 0)"
         return "uniform (0 0 0)"
     if field == "p":

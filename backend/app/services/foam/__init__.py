@@ -100,7 +100,7 @@ def generate_openfoam_case_files(
         # run's deltaT: a steady run's 1 s makes a transient run end before
         # its first step.
         shutil.rmtree(os.path.join(zero_dir, "uniform"), ignore_errors=True)
-    for stale in ("constant/g", "constant/thermophysicalProperties", "constant/pRef", "constant/hRef"):
+    for stale in ("constant/g", "constant/thermophysicalProperties", "constant/pRef", "constant/hRef", "system/fvConstraints"):
         sp = os.path.join(case_dir, stale)
         if os.path.isfile(sp) and stale not in fresh:
             os.remove(sp)
