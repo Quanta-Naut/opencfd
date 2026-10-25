@@ -87,6 +87,7 @@ import { BlockEditorTools } from './workbenchUi/BlockEditorTools';
 import { ViewModeBar } from './workbenchUi/ViewModeBar';
 import { DraftingStrip } from './workbenchUi/DraftingStrip';
 import { ToolRail } from './workbenchUi/ToolRail';
+import { MeasureLayer } from './workbenchUi/MeasureLayer';
 import { TransformDialog, GizmoValues } from './workbenchUi/TransformDialog';
 import { GeometryNotice } from './workbenchUi/GeometryNotice';
 import { useTransformCommand, isTransformTool } from './workbenchUi/useTransformCommand';
@@ -2697,6 +2698,16 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
                       : 'crosshair',
         }}
       >
+        <MeasureLayer
+          containerRef={containerRef}
+          canvasRef={canvasRef}
+          glCanvasRef={glCanvasRef}
+          toScreen={toScreen}
+          toWorld={toWorld}
+          onStart={() => setTool('select')}
+          besideRail={!displayOnly}
+        />
+
         <ToolRail
           {...{
             displayOnly,
