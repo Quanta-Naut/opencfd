@@ -32,6 +32,7 @@ const NumericInput: React.FC<{
   min?: number;
   max?: number;
   placeholder?: string;
+  disabled?: boolean;
 }> = ({ value, onCommit, className = num, ...props }) => {
   const [draft, setDraft] = React.useState(String(value));
   const [focused, setFocused] = React.useState(false);
@@ -318,12 +319,29 @@ export const SolverPanel: React.FC<SolverPanelProps> = ({
             />
           </Row>
         ))}
-        <Row label="Residual target">
+        <Row label="Stop at residual">
           <NumericInput
             value={c.controls.residualTargets.U}
+            disabled={c.controls.residualTargets.U === 0}
             onCommit={(v) => setControls({ residualTargets: { p: v, U: v, turbulence: v } })}
           />
         </Row>
+        <label className="flex items-center justify-between text-[11px] text-fg-2">
+          <span>Always run every iteration</span>
+          <input
+            type="checkbox"
+            className="accent-accent"
+            checked={c.controls.residualTargets.U === 0}
+            onChange={(e) => {
+              const v = e.target.checked ? 0 : 1e-4;
+              setControls({ residualTargets: { p: v, U: v, turbulence: v } });
+            }}
+          />
+        </label>
+        <p className="text-[10px] text-fg-3">
+          The run ends early once the residuals fall below this value, or after the iteration count,
+          whichever comes first.
+        </p>
 
         <Head>Report definitions</Head>
         <label className="flex items-center justify-between text-[11px] text-fg-2">
