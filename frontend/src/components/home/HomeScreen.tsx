@@ -27,6 +27,8 @@ import {
   PreviewShape,
 } from '../../utils/projectsApi';
 import { SESSION_STORAGE_KEY } from '../../utils/legacySession';
+import { useWindowControls } from '../../utils/desktop';
+import { WindowControls } from '../layout/WindowControls';
 
 interface HomeScreenProps {
   onOpen: (id: string) => void;
@@ -435,6 +437,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
+  const win = useWindowControls();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -513,6 +516,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onOpen, opening, openErr
 
   return (
     <div className="h-screen w-screen overflow-y-auto bg-surface-2 text-fg font-sans">
+      {win.active && (
+        <div
+          data-tauri-drag-region
+          className="fixed top-0 inset-x-0 h-11 z-40 flex items-center justify-end pr-2 select-none"
+        >
+          <WindowControls maximized={win.maximized} />
+        </div>
+      )}
       <div className="max-w-6xl mx-auto px-6 sm:px-8 py-10">
         {/* Header */}
         <div className="flex items-center gap-3">

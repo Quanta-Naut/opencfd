@@ -15,6 +15,8 @@ import { Kbd } from '../ui/Kbd';
 import { Tooltip } from '../ui/Tooltip';
 import { MOD_LABEL } from '../../utils/platform';
 import { useBackendHealth } from '../../hooks/useBackendHealth';
+import { useWindowControls } from '../../utils/desktop';
+import { WindowControls } from './WindowControls';
 import { STAGES, type StageId, type StageStatus } from './stages';
 
 interface AppBarProps {
@@ -67,6 +69,7 @@ export const AppBar: React.FC<AppBarProps> = ({
   const [draft, setDraft] = useState(projectName);
   const inputRef = useRef<HTMLInputElement>(null);
   const health = useBackendHealth();
+  const win = useWindowControls();
 
   useEffect(() => {
     if (editing) {
@@ -82,7 +85,10 @@ export const AppBar: React.FC<AppBarProps> = ({
   };
 
   return (
-    <header className="h-11 shrink-0 bg-app border-b border-line pl-2 pr-2 flex items-center gap-3 select-none z-30">
+    <header
+      data-tauri-drag-region
+      className="h-11 shrink-0 bg-app border-b border-line pl-2 pr-2 flex items-center gap-3 select-none z-30"
+    >
       {/* Identity */}
       <div className="flex items-center gap-2 min-w-0 shrink-0">
         {onExitHome && (
@@ -178,7 +184,7 @@ export const AppBar: React.FC<AppBarProps> = ({
         })}
       </nav>
 
-      <div className="flex-1" />
+      <div className="flex-1 self-stretch" data-tauri-drag-region />
 
       {/* Global actions */}
       <div className="flex items-center gap-1 shrink-0">
@@ -282,6 +288,8 @@ export const AppBar: React.FC<AppBarProps> = ({
           </button>
         </Tooltip>
       </div>
+
+      {win.active && <WindowControls maximized={win.maximized} />}
 
       <PreferencesDialog open={showPreferences} onClose={() => setShowPreferences(false)} />
     </header>

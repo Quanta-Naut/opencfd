@@ -2,19 +2,36 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Core permissions plus spawning the bundled backend sidecar.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-is-maximized",
+    "core:window:allow-set-decorations",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        { "name": "binaries/opencfd-backend", "sidecar": true, "args": true }
+        {
+          "name": "binaries/opencfd-backend",
+          "sidecar": true,
+          "args": true
+        }
       ]
     },
     {
       "identifier": "shell:allow-spawn",
       "allow": [
-        { "name": "binaries/opencfd-backend", "sidecar": true, "args": true }
+        {
+          "name": "binaries/opencfd-backend",
+          "sidecar": true,
+          "args": true
+        }
       ]
     }
   ]
