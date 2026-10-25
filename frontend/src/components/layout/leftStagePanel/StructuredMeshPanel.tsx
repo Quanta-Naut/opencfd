@@ -20,7 +20,6 @@ import {
 } from '../../../types/blocking';
 import { EdgeParams } from '../../cad/workbenchUi/blockEditor/BlockInspector';
 import { fmtLen } from '../../cad/workbenchUi/blockEditor/shared';
-import { computeFallbackYPlus } from '../../../utils/api';
 import { NumberField } from './NumberField';
 
 // The ICEM CFD Hexa blocking process, done on the canvas with the block tools.
@@ -76,6 +75,8 @@ export const StructuredMeshPanel: React.FC<{
   const [cornerCell, setCornerCell] = useState<number | null>(null);
   const [curvature, setCurvature] = useState(1);
   const [scaleWall, setScaleWall] = useState(false);
+  // First cell height at walls, in metres, typed in by the user.
+  const [firstCell, setFirstCell] = useState(1e-4);
   useEffect(() => {
     onStep?.(openStep === 2 ? 'sizing' : 'blocking');
   }, [openStep, onStep]);
@@ -146,32 +147,8 @@ export const StructuredMeshPanel: React.FC<{
       const ps = Array.from(new Set(ids.map((id) => edgeById(id).patch).filter(Boolean)));
       return ps.length ? ps.join(' / ') : 'interior';
     };
-    // First-cell height for the target y+. `state.yplus.first_layer_height_mm`
-    // is kept live by the auto-y+ effect in App.tsx; when it is missing,
-    // estimate it here from the physics.
-    const liveFirstCellMm = (() => {
-      const v = state.yplus.first_layer_height_mm;
-      if (typeof v === 'number' && isFinite(v) && v > 0) return v;
-      try {
-        const r = computeFallbackYPlus({
-          velocity: state.physics.inletVelocity || state.boundaries?.inletVelocity || 1,
-          length: state.geometry.chord || state.geometry.domainLength || 1,
-          density: state.physics.density || 1.225,
-          viscosity:
-            (state.physics.density || 1.225) * (state.physics.kinematicViscosity || 1.5e-5),
-          target_yplus: state.yplus.target_yplus || 30,
-          expansion_ratio: state.yplus.expansion_ratio ?? 1.2,
-          flow_regime: state.physics.regime === 'laminar' ? 'laminar' : 'turbulent',
-        });
-        const fc = r.first_layer_height_mm;
-        return typeof fc === 'number' && isFinite(fc) && fc > 0 ? fc : null;
-      } catch {
-        return null;
-      }
-    })();
     const walls = wallNormalEdges(blocking);
     const wallGroups = new Set([...walls.keys()].map((id) => String(groupOf.get(id) ?? 0)));
-    const firstCellM = liveFirstCellMm != null ? liveFirstCellMm / 1000 : null;
     const growth = state.yplus.expansion_ratio ?? 1.2;
     const lbl = 'text-[10px] text-fg-2 block mb-1';
     const cellNow = currentCellSize(bkNow);
@@ -225,28 +202,19 @@ export const StructuredMeshPanel: React.FC<{
               {walls.size} edge{walls.size === 1 ? '' : 's'} off walls
             </span>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <label>
-              <Tooltip content="Target y+ of the first cell at the wall.">
-                <span className={`${lbl} cursor-help`}>y+</span>
+              <Tooltip content="Height of the first cell off the wall, in metres.">
+                <span className={`${lbl} cursor-help`}>First cell height (m)</span>
               </Tooltip>
               <NumberField
-                value={state.yplus.target_yplus ?? 30}
-                min={0.1}
-                step="1"
-                fallback={30}
-                onChange={(n) => updateYPlus({ target_yplus: n })}
+                value={firstCell}
+                min={1e-9}
+                fallback={1e-4}
+                onChange={(n) => setFirstCell(n)}
                 className={field}
               />
             </label>
-            <div>
-              <Tooltip content="First cell height for this y+, from the flow conditions.">
-                <span className={`${lbl} cursor-help`}>First cell</span>
-              </Tooltip>
-              <div className="h-[29px] flex items-center font-mono text-[11px] text-fg">
-                {firstCellM != null ? fmtLen(firstCellM) : '-'}
-              </div>
-            </div>
             <label>
               <Tooltip content="Growth from one layer to the next. 1.1 to 1.2 for a boundary layer.">
                 <span className={`${lbl} cursor-help`}>Growth</span>
@@ -263,12 +231,9 @@ export const StructuredMeshPanel: React.FC<{
           </div>
           <button
             onClick={() =>
-              firstCellM &&
-              onUpdateBlocking?.(
-                applyWallSpacing(bkNow, firstCellM, growth, currentCellSize(bkNow)),
-              )
+              onUpdateBlocking?.(applyWallSpacing(bkNow, firstCell, growth, currentCellSize(bkNow)))
             }
-            disabled={!walls.size || !firstCellM}
+            disabled={!walls.size}
             className="w-full py-1.5 rounded-sm bg-accent hover:bg-accent-hover text-white text-[11px] font-medium disabled:opacity-40 disabled:pointer-events-none transition-colors"
           >
             Apply wall layers
@@ -307,41 +272,6 @@ export const StructuredMeshPanel: React.FC<{
               Along walls
             </button>
           </div>
-        </div>
-
-        <div className="flex items-center justify-between text-[10px]">
-          {jumps.length ? (
-            <span className="text-warning">
-              {jumps.length} spacing jump{jumps.length > 1 ? 's' : ''} at block joins
-            </span>
-          ) : (
-            <span className="text-fg-2">No spacing jumps at block joins</span>
-          )}
-          <Tooltip content="Match the cell size on both sides of every block join.">
-            <button
-              onClick={() => {
-                const r = syncSpacings(bkNow);
-                onUpdateBlocking?.(r.blocking);
-                const added = r.refined
-                  ? ` Added nodes to ${r.refined} edge group${r.refined > 1 ? 's' : ''} so ${r.refined > 1 ? 'they' : 'it'} could grade.`
-                  : '';
-                if (!r.left)
-                  toast.success('Spacings synced', {
-                    id: 'sync-spacings',
-                    description: `Fixed ${r.fixed} join${r.fixed > 1 ? 's' : ''}.${added}`,
-                  });
-                else
-                  toast.warning(`${r.left} join${r.left > 1 ? 's' : ''} left`, {
-                    id: 'sync-spacings',
-                    description: `Fixed ${r.fixed}.${added} The rest need more nodes than allowed (300) to grade smoothly; coarsen the fine side or set the edge by hand.`,
-                  });
-              }}
-              disabled={!jumps.length}
-              className={`${btn} disabled:opacity-40 disabled:pointer-events-none`}
-            >
-              Sync
-            </button>
-          </Tooltip>
         </div>
 
         <div className="space-y-1">
@@ -396,6 +326,33 @@ export const StructuredMeshPanel: React.FC<{
             );
           })}
         </div>
+
+        {jumps.length > 0 && (
+          <Tooltip content="Cell sizes differ across some block joins. Matching them evens out the mesh at the seams; not required.">
+            <button
+              onClick={() => {
+                const r = syncSpacings(bkNow);
+                onUpdateBlocking?.(r.blocking);
+                const added = r.refined
+                  ? ` Added nodes to ${r.refined} edge group${r.refined > 1 ? 's' : ''} so ${r.refined > 1 ? 'they' : 'it'} could grade.`
+                  : '';
+                if (!r.left)
+                  toast.success('Spacings matched', {
+                    id: 'sync-spacings',
+                    description: `Fixed ${r.fixed} join${r.fixed > 1 ? 's' : ''}.${added}`,
+                  });
+                else
+                  toast.warning(`${r.left} join${r.left > 1 ? 's' : ''} left`, {
+                    id: 'sync-spacings',
+                    description: `Fixed ${r.fixed}.${added} The rest need more nodes than allowed (300) to grade smoothly; coarsen the fine side or set the edge by hand.`,
+                  });
+              }}
+              className="text-[10px] text-fg-2 hover:text-accent-fg underline-offset-2 hover:underline"
+            >
+              Match spacing at block joins ({jumps.length})
+            </button>
+          </Tooltip>
+        )}
 
         {setStructuredSmooth && (
           <label className="flex items-center justify-between text-[10px] text-fg-2">
