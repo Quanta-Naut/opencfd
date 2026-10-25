@@ -227,12 +227,16 @@ def write_system(phys: Dict[str, Any], solver_controls: Dict[str, Any],
         # Keep p and T inside a sane band so one bad sweep cannot drive a
         # negative T or p into the thermo (the usual start-up failure).
         t0 = float(phys.get("inletTemperature", 288.15))
-        out["system/fvConstraints"] = foam_file(
-            "dictionary", "fvConstraints",
-            "#includeConstraint limitPressure(minFactor=0.1, maxFactor=2)\n"
-            f"#includeConstraint limitTemperature(min={round(0.35 * t0, 2)}, max={round(3.5 * t0, 2)})\n",
-            "system",
+        p0 = float(phys.get("inletPressure", 101325))
+        # Absolute bounds: the minFactor/maxFactor form needs a fixed-value
+        # pressure patch to take a reference from, and a case may not have one.
+        body = (
+            "limitp\n{\n    type            limitPressure;\n    cellZone        all;\n"
+            f"    min             {round(0.1 * p0, 2)};\n    max             {round(2 * p0, 2)};\n}}\n\n"
+            "limitT\n{\n    type            limitTemperature;\n    cellZone        all;\n"
+            f"    min             {round(0.35 * t0, 2)};\n    max             {round(3.5 * t0, 2)};\n}}\n"
         )
+        out["system/fvConstraints"] = foam_file("dictionary", "fvConstraints", body, "system")
     return out
 
 
