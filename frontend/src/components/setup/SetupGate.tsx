@@ -7,6 +7,7 @@ type Phase =
   | 'no-backend'
   | 'ready'
   | 'needs-wsl'
+  | 'needs-openfoam'
   | 'needs-pack'
   | 'needs-provision'
   | 'provisioning'
@@ -18,12 +19,23 @@ interface Step {
   progress?: number;
 }
 
+const SKIP_KEY = 'opencfd_openfoam_skipped';
+
+function readSkipped(): boolean {
+  try {
+    return localStorage.getItem(SKIP_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function SetupGate({ children }: { children: ReactNode }) {
   const [phase, setPhase] = useState<Phase>('checking');
   const [status, setStatus] = useState<any>(null);
   const [step, setStep] = useState<Step | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [skipped, setSkipped] = useState(false);
+  const [showCommands, setShowCommands] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   const check = useCallback(async () => {
@@ -42,6 +54,7 @@ export function SetupGate({ children }: { children: ReactNode }) {
       const s = await setupStatus();
       setStatus(s);
       if (!s.needs_provision) return setPhase('ready');
+      if (s.native) return setPhase(readSkipped() ? 'ready' : 'needs-openfoam');
       if (s.wsl && !s.wsl.installed) return setPhase('needs-wsl');
       if (!s.pack_configured) return setPhase('needs-pack');
       return setPhase('needs-provision');
@@ -79,6 +92,18 @@ export function SetupGate({ children }: { children: ReactNode }) {
       setPhase('error');
     };
   }, [check]);
+
+  // Sketching and meshing work without a solver, so a native user may carry on
+  // and the choice is remembered; installing OpenFOAM later is picked up
+  // automatically.
+  const skipNative = () => {
+    try {
+      localStorage.setItem(SKIP_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+    setSkipped(true);
+  };
 
   if (phase === 'ready' || skipped) return <>{children}</>;
 
@@ -122,6 +147,54 @@ export function SetupGate({ children }: { children: ReactNode }) {
               , reboot, then come back.
             </p>
             <p className="text-[12px] text-fg-3 mt-2">{status?.wsl?.detail}</p>
+            <Recheck onClick={check} />
+          </>
+        )}
+
+        {phase === 'needs-openfoam' && (
+          <>
+            <Header
+              icon={<ServerCog className="w-5 h-5 text-accent" />}
+              title="OpenFOAM is not installed"
+            />
+            {status?.install_kind === 'apt' ? (
+              <>
+                <p className="text-[13px] text-fg-2 leading-relaxed mt-3">
+                  OpenCFD solves with OpenFOAM 13. It can install it for you from the official
+                  OpenFOAM repository. You will be asked for your administrator password, and the
+                  download is large (about 1 GB).
+                </p>
+                <button
+                  onClick={provision}
+                  className="mt-5 w-full py-2 rounded-sm bg-accent hover:bg-accent-hover text-white text-[13px] font-medium"
+                >
+                  Install OpenFOAM
+                </button>
+                <button
+                  onClick={() => setShowCommands((v) => !v)}
+                  className="mt-2 w-full py-1.5 text-[12px] text-fg-3 hover:text-fg-2"
+                >
+                  {showCommands ? 'Hide the commands' : 'Show the commands instead'}
+                </button>
+              </>
+            ) : (
+              <p className="text-[13px] text-fg-2 leading-relaxed mt-3">
+                {status?.os === 'Darwin'
+                  ? 'OpenFOAM has no official macOS build, so OpenCFD cannot install it for you. If you have your own native build, set its environment script in Preferences. Otherwise you can still sketch and mesh without a solver.'
+                  : 'OpenCFD could not install OpenFOAM automatically on this system. Install OpenFOAM 13 from openfoam.org/download and OpenCFD will find it.'}
+              </p>
+            )}
+            {(showCommands || status?.install_kind !== 'apt') && status?.commands?.length > 0 && (
+              <pre className="mt-3 p-2.5 bg-app border border-line rounded font-mono text-[11px] text-fg-2 whitespace-pre-wrap break-all select-text">
+                {status.commands.join('\n')}
+              </pre>
+            )}
+            <button
+              onClick={skipNative}
+              className="mt-2 w-full py-2 text-[12px] text-fg-3 hover:text-fg-2"
+            >
+              Continue without a solver (sketch and mesh only)
+            </button>
             <Recheck onClick={check} />
           </>
         )}

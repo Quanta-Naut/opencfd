@@ -54,9 +54,13 @@ Every run is saved with its project.
 
 - **Windows:** OpenFOAM runs in a managed WSL2 environment that the app sets
   up for you on first launch.
-- **Linux and macOS:** the app runs natively and uses an OpenFOAM
-  installation already on your machine. Without one, you can still sketch
-  and mesh, but solving needs OpenFOAM installed.
+- **Linux:** the app runs natively. On x86_64 Ubuntu and its derivatives it
+  offers to install OpenFOAM 13 for you from the official repository (you
+  approve it with your administrator password). On other distributions
+  it uses an OpenFOAM installation already on your machine.
+- **macOS (Apple Silicon):** the app runs natively and uses an OpenFOAM
+  build you have installed yourself. Without one you can still sketch and
+  mesh, but solving needs OpenFOAM. macOS is untested so far.
 
 ## Documentation
 

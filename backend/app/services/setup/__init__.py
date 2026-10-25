@@ -8,8 +8,10 @@ solver distro is missing it streams `provision()` behind a progress screen.
 tarball (minimal Ubuntu + a prebuilt trimmed OpenFOAM, produced in CI). Nothing
 here touches the user's own distros, and `teardown()` removes it cleanly.
 
-On Linux/macOS there is nothing to provision (OpenFOAM runs natively), so
-`setup_status()` reports `needs_provision: False` and the app starts straight up.
+On Linux/macOS OpenFOAM runs natively. If none is found, `setup_status()` says so
+and, on x86_64 Ubuntu-family systems, `provision()` installs the OpenFOAM
+Foundation's official apt package behind the system's administrator prompt
+(pkexec). Anywhere else the app shows how to install it by hand.
 """
 from __future__ import annotations
 
@@ -128,15 +130,98 @@ def _read_marker() -> Dict[str, Any]:
         return {}
 
 
+# --- Linux / macOS: native OpenFOAM --------------------------------------------
+
+# Run as root through pkexec, as one argument (no file on disk a user process
+# could swap). Mirrors https://openfoam.org/download/13-ubuntu/.
+_APT_SCRIPT = r"""
+set -e
+export DEBIAN_FRONTEND=noninteractive
+echo "STEP prepare"
+command -v wget >/dev/null 2>&1 || apt-get install -y wget
+command -v add-apt-repository >/dev/null 2>&1 || apt-get install -y software-properties-common
+echo "STEP key"
+wget -qO /etc/apt/trusted.gpg.d/openfoam.asc https://dl.openfoam.org/gpg.key
+rm -f /etc/apt/sources.list.d/*dl_openfoam_org*list
+add-apt-repository -y "http://dl.openfoam.org/ubuntu main dev"
+if grep -q '^VERSION_ID="26' /etc/os-release; then
+  sed -i "s/^\(deb\).*\(http\)/\1 [arch=amd64] \2/" /etc/apt/sources.list.d/*dl_openfoam_org*list
+fi
+echo "STEP update"
+apt-get update
+echo "STEP install"
+apt-get -y install openfoam13
+echo "STEP done"
+"""
+
+APT_COMMANDS = [
+    'sudo sh -c "wget -O - https://dl.openfoam.org/gpg.key > /etc/apt/trusted.gpg.d/openfoam.asc"',
+    'sudo add-apt-repository "http://dl.openfoam.org/ubuntu main dev"',
+    "sudo apt update",
+    "sudo apt -y install openfoam13",
+]
+
+_STEPS = {  # marker -> (progress, message)
+    "prepare": (0.05, "Preparing"),
+    "key": (0.12, "Adding the OpenFOAM repository"),
+    "update": (0.2, "Refreshing the package list"),
+    "install": (0.3, "Downloading and installing OpenFOAM (this is the long step)"),
+    "done": (0.95, "Verifying the solver"),
+}
+
+
+def _os_release() -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                out[k] = v.strip().strip('"')
+    except OSError:
+        pass
+    return out
+
+
+def native_install_kind() -> str:
+    """'apt' when we can install OpenFOAM ourselves, else 'manual'."""
+    if platform.system() != "Linux" or platform.machine() not in ("x86_64", "AMD64"):
+        return "manual"
+    rel = _os_release()
+    family = f"{rel.get('ID', '')} {rel.get('ID_LIKE', '')}".split()
+    if "ubuntu" not in family:
+        return "manual"
+    if not (shutil.which("pkexec") and shutil.which("apt-get")):
+        return "manual"
+    return "apt"
+
+
+def _native_openfoam_ok() -> bool:
+    from app.services.solver import detect_environment
+
+    return bool(detect_environment().get("adapters", {}).get("openfoam-local", {}).get("ok"))
+
+
 def setup_status() -> Dict[str, Any]:
     system = platform.system()
     if not _IS_WINDOWS:
+        if _native_openfoam_ok():
+            return {
+                "os": system,
+                "needs_provision": False,
+                "distro_ready": False,
+                "pack_configured": bool(PACK_URL),
+                "detail": "OpenFOAM found.",
+            }
+        kind = native_install_kind()
         return {
             "os": system,
-            "needs_provision": False,
+            "native": True,
+            "needs_provision": True,
+            "install_kind": kind,
+            "commands": APT_COMMANDS if kind == "apt" or system == "Linux" else [],
             "distro_ready": False,
-            "pack_configured": bool(PACK_URL),
-            "detail": "Native OpenFOAM path - no WSL provisioning needed.",
+            "pack_configured": True,
+            "detail": "OpenFOAM was not found on this computer.",
         }
 
     wsl = wsl_status()
@@ -198,9 +283,49 @@ async def _download(url: str, dest: Path) -> AsyncGenerator[Dict[str, Any], None
     yield _ev("download", "Download complete", 0.6, sha256=sha.hexdigest())
 
 
+async def _provision_apt() -> AsyncGenerator[Dict[str, Any], None]:
+    if native_install_kind() != "apt":
+        yield {"type": "error", "message": "Automatic install is not available on this system."}
+        return
+    yield _ev("prepare", "Waiting for your administrator password", 0.02)
+    proc = await asyncio.create_subprocess_exec(
+        "pkexec", "sh", "-c", _APT_SCRIPT,
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    assert proc.stdout is not None
+    tail: List[str] = []
+    async for raw in proc.stdout:
+        line = raw.decode(errors="replace").rstrip()
+        if not line:
+            continue
+        if line.startswith("STEP "):
+            frac, msg = _STEPS.get(line[5:].strip(), (None, line))
+            yield _ev(line[5:].strip(), msg, frac)
+            continue
+        tail.append(line)
+        del tail[:-12]
+        if "Get:" in line or "Unpacking" in line or "Setting up" in line:
+            yield _ev("install", line[:90], None)
+    rc = await proc.wait()
+    if rc in (126, 127):
+        yield {"type": "error", "message": "The administrator prompt was cancelled or is not available."}
+        return
+    if rc != 0:
+        yield {"type": "error", "message": "The install failed: " + " | ".join(tail[-4:])}
+        return
+    if not await asyncio.get_event_loop().run_in_executor(None, _native_openfoam_ok):
+        yield {"type": "error", "message": "OpenFOAM installed but OpenCFD could not run it."}
+        return
+    yield _ev("done", "OpenFOAM is ready", 1.0)
+    yield {"type": "done", "message": "OpenFOAM is ready."}
+
+
 async def provision() -> AsyncGenerator[Dict[str, Any], None]:
     if not _IS_WINDOWS:
-        yield {"type": "done", "message": "Nothing to provision on this platform."}
+        async for e in _provision_apt():
+            yield e
         return
     if not PACK_URL:
         yield {"type": "error", "message": "No solver pack is configured for this build yet."}
