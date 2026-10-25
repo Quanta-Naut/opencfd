@@ -24,28 +24,15 @@ import { computeFallbackYPlus } from '../../../utils/api';
 import { NumberField } from './NumberField';
 
 // The ICEM CFD Hexa blocking process, done on the canvas with the block tools.
-const WORKFLOW: [string, string][] = [
-  ['Initialize', ''],
-  ['Split', 'K'],
-  ['O-grid', 'O'],
-  ['Delete blocks in bodies', 'X'],
-  ['Associate', 'A'],
-  ['Move vertices', 'V'],
-  ['Edge params', 'E'],
-  ['Pre-mesh', 'P'],
-];
-
-// Rules of thumb from structured meshing practice (ICEM, Pointwise, and the
-// usual CFD texts).
-const GUIDELINES = [
-  'Put block corners on geometry corners and on every change of boundary patch.',
-  'Wrap every wall in an O-grid (or C-grid for a sharp trailing edge) so grid lines leave the wall square.',
-  'Keep block corners near 90 deg. Under 45 or over 135 deg makes skewed cells.',
-  'Keep neighbouring cells within a growth of about 1.2 to 1.3, also across block joins.',
-  'Match the cell size on both sides of a block join: no sudden jumps.',
-  'Place points where 3 or 5 blocks meet away from walls and strong gradients.',
-  'Align blocks with the flow, and run a block line down the wake.',
-  'Give the first cell at a wall the height your y+ target needs.',
+const WORKFLOW = [
+  'Initialize',
+  'Split',
+  'O-grid',
+  'Delete blocks in bodies',
+  'Associate',
+  'Move vertices',
+  'Edge params',
+  'Pre-mesh',
 ];
 
 /**
@@ -84,7 +71,6 @@ export const StructuredMeshPanel: React.FC<{
 }) => {
   const hasBlocks = !!blocking && blocking.blocks.length > 0;
   const [openStep, setOpenStep] = useState<1 | 2>(1);
-  const [showRules, setShowRules] = useState(false);
   const [openDir, setOpenDir] = useState<string | null>(null);
   // Along-wall clustering inputs; the corner cell defaults from the cell size.
   const [cornerCell, setCornerCell] = useState<number | null>(null);
@@ -134,33 +120,13 @@ export const StructuredMeshPanel: React.FC<{
       )}
 
       <ol className="flex flex-wrap items-center gap-x-1 gap-y-1 text-[10px] text-fg-2">
-        {WORKFLOW.map(([title, key], i) => (
+        {WORKFLOW.map((title, i) => (
           <li key={title} className="flex items-center gap-1">
             {i > 0 && <span className="text-fg-3">›</span>}
             <span className="text-fg">{title}</span>
-            {key && <span className="font-mono text-fg-3">{key}</span>}
           </li>
         ))}
       </ol>
-
-      <div className="border-t border-line pt-2">
-        <button
-          onClick={() => setShowRules((v) => !v)}
-          className="w-full flex items-center justify-between text-[10px] font-semibold text-fg-2 uppercase tracking-wider"
-        >
-          Blocking guidelines
-          <ChevronDown
-            className={`w-3.5 h-3.5 transition-transform ${showRules ? 'rotate-180' : ''}`}
-          />
-        </button>
-        {showRules && (
-          <ul className="mt-1.5 space-y-1 list-disc pl-4 text-[10px] text-fg-2 leading-snug">
-            {GUIDELINES.map((g) => (
-              <li key={g}>{g}</li>
-            ))}
-          </ul>
-        )}
-      </div>
     </div>
   );
 
@@ -452,11 +418,11 @@ export const StructuredMeshPanel: React.FC<{
     const open = openStep === n;
     const locked = n === 2 && !hasBlocks;
     return (
-      <div className="border-t border-line first:border-t-0">
+      <div className="border border-line rounded bg-surface overflow-hidden">
         <button
           onClick={() => !locked && setOpenStep(n)}
           disabled={locked}
-          className={`w-full flex items-center gap-2 py-2.5 text-left ${locked ? 'opacity-40 cursor-not-allowed' : ''}`}
+          className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${open ? 'bg-surface-2' : 'hover:bg-surface-2'} ${locked ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           <span
             className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold shrink-0 border ${open ? 'bg-accent-soft text-accent border-accent' : 'bg-surface-3 text-fg-4 border-transparent'}`}
@@ -472,13 +438,13 @@ export const StructuredMeshPanel: React.FC<{
             className={`w-3.5 h-3.5 text-fg-4 transition-transform ${open ? 'rotate-180' : ''}`}
           />
         </button>
-        {open && <div className="pb-3">{body}</div>}
+        {open && <div className="px-3 pb-3.5 pt-1">{body}</div>}
       </div>
     );
   };
 
   return (
-    <div>
+    <div className="space-y-2">
       {stepRow(1, 'Blocking', step1)}
       {stepRow(2, 'Mesh sizing', step2)}
     </div>
