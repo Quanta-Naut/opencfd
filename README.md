@@ -1,65 +1,71 @@
 # OpenCFD
 
-An open source, GUI-first Computational Fluid Dynamics application, built on
-top of [OpenFOAM](https://www.openfoam.com/) and [Gmsh](https://gmsh.info/).
-OpenCFD is 2D only today - geometry, meshing, physics setup, solving, and
-post-processing all currently work in two dimensions.
+An open source, GUI-first CFD application. Draw or import a 2D geometry,
+mesh it, set up the physics, run a real [OpenFOAM](https://www.openfoam.com/)
+solve and look at the results, all in one desktop app.
+
+OpenCFD is 2D today. Geometry, meshing, setup, solving and post-processing
+all work in two dimensions, and 2D is the starting point, not the ceiling.
 
 ## Why this project exists
 
-Open source software has produced genuinely great tools in other technical
-domains. Blender is a full 3D content creation suite - modeling, animation,
-rendering, entire films made on it - and it's free. FreeCAD gives anyone a
-real parametric CAD tool. Both are maintained by large communities and are
-good enough to be a first choice, not just a free fallback.
+Blender and FreeCAD show that open source can be a first choice, not just a
+free fallback. CFD does not have that yet. OpenFOAM is a serious solver, but
+it is a command-line tool with no built-in way to build geometry, mesh it or
+look at results. Commercial tools solved usability long ago, but they are
+expensive and closed. OpenCFD is an attempt to close that gap with a GUI
+that takes you from a sketch to a converged, visualized result without
+having to learn OpenFOAM's file layout first.
 
-CFD doesn't have that yet. OpenFOAM is a serious, capable, free solver used
-in real industry and research - but it's a command-line tool with a steep
-setup curve and no built-in way to build geometry, mesh it, or look at
-results. Commercial tools like ANSYS Fluent solved the usability problem
-decades ago, but they're commercial: expensive, licensed, closed. There is
-no open source equivalent that pairs a real solver with a GUI someone can
-actually sit down and use.
+## What it does
 
-OpenCFD is an attempt to start closing that gap - a GUI built around
-OpenFOAM that takes you from drawing geometry to a converged, visualized
-result, without needing to already know OpenFOAM's file format and
-directory structure to get there. It's an early-stage initiative, not a
-finished product, and 2D is the starting point, not the ceiling.
+**Geometry.** A 2D sketcher with snapping, live dimensions, fillets,
+offsets, splines, ellipses, trim and transforms. You can also import an
+airfoil `.dat` or CSV file, or a DXF drawing.
 
-## What you can do with it today
+**Meshing.** Two routes, both on top of [Gmsh](https://gmsh.info/):
+- Unstructured meshing for quick results.
+- An ICEM-style structured mesher where you build the block topology
+  yourself, associate blocks to geometry, set spacing and grading, and
+  smooth the result. It works for any shape, not just airfoils.
 
-- **Sketch geometry** directly in the app - a 2D CAD tool with snapping,
-  live dimensions, fillets, offsets, and an ellipse/circle/airfoil toolset,
-  or import an airfoil `.dat`/CSV or a DXF file.
-- **Mesh it** two ways: fast unstructured meshing via Gmsh, or an
-  ICEM-style interactive structured (block) mesher with draggable block
-  topology, O-grids around bodies, and grading control.
-- **Size the boundary layer properly** with a built-in y+ calculator that
-  computes first-cell height from your flow conditions and can apply it
-  directly to wall-normal mesh clustering.
-- **Set up the physics** - laminar or turbulent (k-omega SST, k-epsilon and
-  its variants, Spalart-Allmaras), internal or external flow, boundary
-  conditions with auto-derived turbulence quantities.
-- **Run the real OpenFOAM solver** - not a mock or a simplified
-  approximation - with live residual and force-coefficient monitoring
-  while it runs.
-- **Post-process results** on a GPU-accelerated field viewer (velocity,
-  pressure, turbulence quantities, vorticity), with streamlines, mesh
-  quality inspection, and a line-probe plotting tool for custom XY plots
-  along any path through the geometry - or hand off to ParaView for full
-  3D-capable post-processing.
-- **Keep your work** - every solver run and every plot you create is
-  saved to disk and is still there the next time you open the project.
-- **Run it as a real desktop app** on Linux, macOS, or Windows (via a
-  managed WSL2 OpenFOAM environment), packaged with Tauri.
+Mesh quality is shown on the mesh itself so problems are easy to spot.
+
+**Setup and solving.** Choose laminar or turbulent flow (k-omega SST,
+k-epsilon variants, Spalart-Allmaras), incompressible or compressible,
+internal, external or axisymmetric. Boundary conditions and turbulence
+quantities are derived for you. The case is written for the real OpenFOAM
+solver and run with live residuals and force coefficients.
+
+**Results.** A fast field viewer for velocity, pressure, turbulence and
+vorticity, with streamlines, probes, reports, integrals and line plots.
+Every run is saved with its project.
+
+## Built with
+
+- [OpenFOAM](https://www.openfoam.com/) for solving
+- [Gmsh](https://gmsh.info/) for meshing
+- [Tauri](https://tauri.app/) for the desktop shell
+- React, TypeScript and Vite for the interface
+- Python and FastAPI for the backend
+- Rust for the performance-critical mesh and field kernels
+
+## Platforms
+
+- **Windows:** OpenFOAM runs in a managed WSL2 environment that the app sets
+  up for you on first launch.
+- **Linux and macOS:** the app runs natively and uses an OpenFOAM
+  installation already on your machine. Without one, you can still sketch
+  and mesh, but solving needs OpenFOAM installed.
 
 ## Documentation
 
-- [Developing OpenCFD](./docs/DEVELOPING.md) - running it locally, cutting
-  a release, and how the OpenFOAM integration works.
-- [Packaging](./docs/PACKAGING.md) - how OpenCFD ships as a desktop
-  installer on each platform.
-- [Design guidelines](./docs/DESIGN.md) - the visual direction for the UI.
-- [Contributing](./docs/CONTRIBUTING.md) - how to contribute, and what's
-  most useful to work on right now.
+- [Developing OpenCFD](./docs/DEVELOPING.md): running it locally and how the
+  OpenFOAM integration works.
+- [Packaging](./docs/PACKAGING.md): how OpenCFD ships on each platform.
+- [Design guidelines](./docs/DESIGN.md): the visual direction for the UI.
+- [Contributing](./docs/CONTRIBUTING.md): how to help.
+
+## License
+
+MIT

@@ -9,10 +9,8 @@ feedback on the direction.
 
 - Read [DEVELOPING.md](./DEVELOPING.md) to get the app running locally
   (backend, frontend, and how the OpenFOAM solver is discovered).
-- For anything touching the structured (block) mesher specifically, read
-  [STRUCTURED_MESH_TODO.md](./STRUCTURED_MESH_TODO.md) first - it records
-  the intended design and known open problems, so you don't duplicate
-  work or fight the existing architecture.
+- The structured (block) mesher is manual and ICEM-style, and it is
+  general-purpose: keep it working for any geometry, not just airfoils.
 - For UI work, read [DESIGN.md](./DESIGN.md) - OpenCFD aims to read as
   engineering software, not a consumer app, and that document lays out
   the concrete rules (no shadows, borders only, one restrained accent
@@ -47,8 +45,7 @@ Open a GitHub issue with:
 ## What's most useful right now
 
 OpenCFD is 2D-only today. The areas most in need of help:
-- Structured (block) meshing - see the open problems in
-  [STRUCTURED_MESH_TODO.md](./STRUCTURED_MESH_TODO.md).
+- Structured (block) meshing, and hybrid boundary-layer meshing.
 - Broader turbulence model and boundary condition coverage.
 - Windows/WSL2 solver packaging robustness.
 - Eventually, a path toward 3D - not started, and a serious undertaking
