@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Calculator,
   ChevronDown,
@@ -31,6 +31,7 @@ import {
 import { FieldCalculatorDialog } from '../../results/FieldCalculatorDialog';
 import type { ProbeRow } from '../../../hooks/useResultsView';
 import type { PatchReport } from '../../../utils/boundaryData';
+import type { SurfaceRef, SurfaceResult } from '../../../utils/surfaceIntegrals';
 
 const COLORMAPS: PostProcessConfig['colormap'][] = [
   'viridis',
@@ -137,6 +138,10 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const [calc, setCalc] = useState<CustomField | null | undefined>(undefined);
   const [isoText, setIsoText] = useState('');
   const [viewName, setViewName] = useState('');
+  // Surface integrals: the surface, and the two for a pressure drop.
+  const [surfSel, setSurfSel] = useState('');
+  const [dropFrom, setDropFrom] = useState('');
+  const [dropTo, setDropTo] = useState('');
 
   if (activeStage !== 'results') return null;
   if (stageStatus?.results?.locked)
@@ -159,6 +164,22 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const net = flows.reduce((s, r) => s + r.flow!, 0);
   const custom = pp.customFields ?? [];
   const tracks = pp.tracks ?? [];
+  // What can be integrated over: each boundary, and each line plotted along.
+  const surfaces = useMemo<SurfaceChoice[]>(() => {
+    const list: SurfaceChoice[] = p.patches.map((x) => ({
+      value: `patch:${x}`,
+      label: x,
+      ref: { kind: 'patch', patch: x },
+    }));
+    for (const pl of state.plots ?? [])
+      if (pl.kind !== 'monitor' && pl.kind !== 'boundary' && pl.line)
+        list.push({
+          value: `line:${pl.id}`,
+          label: `Line of ${pl.name}`,
+          ref: { kind: 'line', p1: pl.line.p1, p2: pl.line.p2 },
+        });
+    return list;
+  }, [p.patches, state.plots]);
   const views = pp.views ?? [];
   const notes = pp.notes ?? [];
   const allIds: ResultFieldId[] = [...RESULT_FIELDS.map((f) => f.id), ...custom.map((f) => f.id)];
@@ -1094,6 +1115,24 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
           )}
         </Section>
 
+        <Section id="surfaces" title="Surface integrals" open={open} setOpen={setOpen}>
+          {view.integrate ? (
+            <SurfaceIntegrals
+              integrate={view.integrate}
+              surfaces={surfaces}
+              activeField={pp.activeField}
+              sel={surfSel}
+              setSel={setSurfSel}
+              from={dropFrom}
+              setFrom={setDropFrom}
+              to={dropTo}
+              setTo={setDropTo}
+            />
+          ) : (
+            <p className="text-[10px] text-fg-2">Load a field to integrate over a boundary.</p>
+          )}
+        </Section>
+
         <Section id="plots" title="Plots" open={open} setOpen={setOpen}>
           <button type="button" onClick={p.onCreatePlot} className={ghostBtn}>
             <Plus className="w-3.5 h-3.5" />
@@ -1231,6 +1270,7 @@ export interface ResultsStagePanelProps {
     allFields: Record<string, ArrayLike<number> | undefined> | undefined;
     wallReports: import('../../../hooks/useResultsView').WallReport[];
     forces: import('../../../hooks/useResultsView').ForceBreakdown | null;
+    integrate: ((s: SurfaceRef, id: string) => SurfaceResult | null) | null;
   };
   patches: string[];
   probePicking: boolean;
@@ -1253,4 +1293,134 @@ export interface ResultsStagePanelProps {
   onAddBoundaryPlot: (patch: string, variable: ResultFieldId, axis: 'x' | 'y' | 's') => boolean;
   runForces: { label: string; cd?: number; cl?: number } | null;
   onSaveImage: () => void;
+}
+
+interface SurfaceChoice {
+  value: string;
+  label: string;
+  ref: SurfaceRef;
+}
+
+/** Flow, averages and integrals of the shown field over one surface, and the
+ *  pressure change between two. */
+function SurfaceIntegrals(p: {
+  integrate: (s: SurfaceRef, id: string) => SurfaceResult | null;
+  surfaces: SurfaceChoice[];
+  activeField: ResultFieldId;
+  sel: string;
+  setSel: (v: string) => void;
+  from: string;
+  setFrom: (v: string) => void;
+  to: string;
+  setTo: (v: string) => void;
+}) {
+  const find = (v: string) => p.surfaces.find((s) => s.value === v) ?? null;
+  const surf = find(p.sel) ?? p.surfaces[0] ?? null;
+  const a = find(p.from) ?? p.surfaces[0] ?? null;
+  const b = find(p.to) ?? p.surfaces[1] ?? p.surfaces[0] ?? null;
+  const def = fieldDef(p.activeField);
+  const u = def.unit ? ` ${def.unit}` : '';
+  const row = (label: string, value: string, hint?: string) => (
+    <tr key={label} className="border-t border-line-soft">
+      <td className="py-0.5 font-sans text-fg-2">
+        {hint ? (
+          <Tooltip content={hint} delay={300}>
+            <span className="cursor-help">{label}</span>
+          </Tooltip>
+        ) : (
+          label
+        )}
+      </td>
+      <td className="text-right text-fg">{value}</td>
+    </tr>
+  );
+  const main = surf ? p.integrate(surf.ref, p.activeField) : null;
+  const sa = a ? p.integrate(a.ref, 'p') : null;
+  const sb = b ? p.integrate(b.ref, 'p') : null;
+  const ta = a ? p.integrate(a.ref, 'p_total') : null;
+  const tb = b ? p.integrate(b.ref, 'p_total') : null;
+  const choose = (value: string, set: (v: string) => void, label: string) => (
+    <select
+      aria-label={label}
+      value={value}
+      onChange={(e) => set(e.target.value)}
+      className={select}
+    >
+      {p.surfaces.map((s) => (
+        <option key={s.value} value={s.value}>
+          {s.label}
+        </option>
+      ))}
+    </select>
+  );
+  return (
+    <>
+      <div>
+        <span className={`${lbl} block mb-1`}>Surface</span>
+        {choose(surf?.value ?? '', p.setSel, 'Surface')}
+      </div>
+      {main ? (
+        <table className="w-full text-[10px] font-mono">
+          <tbody>
+            {row('Length', fmtValue(main.length), 'Its area per metre of depth')}
+            {row(
+              'Flow rate (m²/s)',
+              fmtValue(main.flow),
+              main.normal
+                ? `Counted to the right of the line from its first point to its second, along (${fmtValue(main.normal[0])}, ${fmtValue(main.normal[1])}).`
+                : 'Positive leaves the domain, negative enters it.',
+            )}
+            {row(
+              'Mass flow (kg/s)',
+              fmtValue(main.massFlow),
+              'Flow rate times the density, per metre of depth',
+            )}
+            {row(`∫ ${def.short} dl${def.unit ? ` (${def.unit}·m)` : ''}`, fmtValue(main.integral))}
+            {row(`Average ${def.short}${u}`, fmtValue(main.avg), 'Weighted by length')}
+            {row(
+              `Mass-weighted ${def.short}${u}`,
+              main.fluxAvg === null ? '-' : fmtValue(main.fluxAvg),
+              'Weighted by the flow through each part of the surface',
+            )}
+          </tbody>
+        </table>
+      ) : (
+        <p className="text-[10px] text-fg-2">Nothing to integrate here.</p>
+      )}
+
+      {p.surfaces.length > 1 && (
+        <div className="rounded-sm border border-line p-2 space-y-1.5">
+          <span className={`${lbl} block`}>Pressure drop</span>
+          <div className="grid grid-cols-2 gap-1.5">
+            <label>
+              <span className={`${lbl} block mb-0.5`}>From</span>
+              {choose(a?.value ?? '', p.setFrom, 'Pressure drop from')}
+            </label>
+            <label>
+              <span className={`${lbl} block mb-0.5`}>To</span>
+              {choose(b?.value ?? '', p.setTo, 'Pressure drop to')}
+            </label>
+          </div>
+          {sa && sb && ta && tb ? (
+            <table className="w-full text-[10px] font-mono">
+              <tbody>
+                {row(
+                  'Static (Pa)',
+                  fmtValue(sa.avg - sb.avg),
+                  'Average static pressure on From minus on To',
+                )}
+                {row(
+                  'Total (Pa)',
+                  fmtValue((ta.fluxAvg ?? ta.avg) - (tb.fluxAvg ?? tb.avg)),
+                  'Mass-weighted total pressure on From minus on To: what the flow lost between them',
+                )}
+              </tbody>
+            </table>
+          ) : (
+            <p className="text-[10px] text-fg-2">Needs pressure in this run.</p>
+          )}
+        </div>
+      )}
+    </>
+  );
 }

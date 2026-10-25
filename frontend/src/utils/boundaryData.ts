@@ -48,6 +48,49 @@ export function snapshotBoundaries(
   return {};
 }
 
+/** A boundary patch as short segments: node pair, length, and the unit
+ *  normal pointing out of the domain. */
+export interface PatchSegment {
+  a: number;
+  b: number;
+  len: number;
+  nx: number;
+  ny: number;
+}
+
+export function patchSegments(mesh: MeshLike, patch: string): PatchSegment[] {
+  const ids = mesh.boundaries?.[patch];
+  if (!ids?.length) return [];
+  const inPatch = new Set(ids);
+  const N = mesh.nodes;
+  const out: PatchSegment[] = [];
+  for (const [a, b, cell] of edgesOf(mesh)) {
+    if (!inPatch.has(a) || !inPatch.has(b)) continue;
+    const dx = N[b][0] - N[a][0],
+      dy = N[b][1] - N[a][1];
+    const len = Math.hypot(dx, dy);
+    if (!(len > 0)) continue;
+    let nx = dy / len,
+      ny = -dx / len;
+    // Outward: away from the centre of the cell the edge belongs to.
+    let cx = 0,
+      cy = 0;
+    const el = mesh.elements[cell];
+    for (const ni of el) {
+      cx += N[ni][0];
+      cy += N[ni][1];
+    }
+    cx /= el.length;
+    cy /= el.length;
+    if (nx * ((N[a][0] + N[b][0]) / 2 - cx) + ny * ((N[a][1] + N[b][1]) / 2 - cy) < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    out.push({ a, b, len, nx, ny });
+  }
+  return out;
+}
+
 export function patchReports(
   mesh: MeshLike,
   vals: ArrayLike<number>,

@@ -14,6 +14,7 @@ import {
 import { buildMeshLocator } from '../utils/meshLocator';
 import { patchReports, type PatchReport } from '../utils/boundaryData';
 import { isoSegments } from '../utils/isoLines';
+import { integrateSurface, type SurfaceRef, type SurfaceResult } from '../utils/surfaceIntegrals';
 import { seedPoints, traceTrack, type Track } from '../utils/particleTracks';
 
 interface FieldPayload {
@@ -322,6 +323,18 @@ export function useResultsView(
     }));
   }, [isoValues, activeVals, mesh?.nodes, mesh?.elements, active]);
 
+  /** Integrals of any field over a boundary or line (for the loaded run). */
+  const integrate = useMemo(() => {
+    const ux = fields?.Ux,
+      uy = fields?.Uy;
+    if (!mesh?.nodes?.length || !ux || !uy || ux.length !== mesh.nodes.length) return null;
+    return (surf: SurfaceRef, id: string): SurfaceResult | null => {
+      const v = fieldValues(fields, id, ref);
+      if (!v || v.length !== mesh.nodes.length) return null;
+      return integrateSurface(mesh, surf, v, ux, uy, ref.rho);
+    };
+  }, [fields, mesh, ref]);
+
   const def = fieldDef(active);
   const overlay = useMemo<ResultsOverlay>(
     () => ({
@@ -375,5 +388,6 @@ export function useResultsView(
     diffing,
     wallReports,
     forces,
+    integrate,
   };
 }
