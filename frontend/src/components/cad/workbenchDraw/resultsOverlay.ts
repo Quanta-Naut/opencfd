@@ -130,6 +130,19 @@ export function drawResultsOverlay(
   ov.probes.forEach((p, i) => {
     const s = ws(p.x, p.y);
     if (s.x < -20 || s.y < -20 || s.x > cw + 20 || s.y > ch + 20) return;
+    if (p.selected) {
+      // The probe picked in the table: a wide ring around it.
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 10, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(17,17,17,0.85)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 11.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#111111';
     ctx.lineWidth = 1.5;

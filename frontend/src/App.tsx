@@ -22,6 +22,8 @@ import {
 } from './types/cfd';
 import type { CameraApi } from './components/cad/workbenchCore';
 import { PickDialog } from './components/results/PickDialog';
+import { ProbesTab, ReportsTab, IntegralsTab } from './components/results/ResultsTables';
+import type { DrawerTab } from './components/layout/BottomSolverDrawer';
 import {
   generateCaseFiles,
   uploadAndParseAirfoil,
@@ -1254,7 +1256,12 @@ export function App({
       },
     }));
   };
+  // The probe picked in the Probes table, ringed on the field; and a nudge
+  // that opens the table when a probe is placed.
+  const [selectedProbe, setSelectedProbe] = useState<string | null>(null);
+  const [drawerFocus, setDrawerFocus] = useState<{ id: string; n: number } | null>(null);
   const addProbe = useCallback((pt: [number, number]) => {
+    setDrawerFocus({ id: 'probes', n: Date.now() });
     setState((prev) => ({
       ...prev,
       postprocess: {
@@ -1267,7 +1274,88 @@ export function App({
     }));
   }, []);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const overlayShown = useMemo(
+    () => ({
+      ...resultsView.overlay,
+      probes: resultsView.overlay.probes.map((p) => ({ ...p, selected: p.id === selectedProbe })),
+    }),
+    [resultsView.overlay, selectedProbe],
+  );
   const viewedRun = (state.solverRuns ?? []).find((r) => r.id === targetRunForPlot.id) ?? null;
+  // The Results tables, in the bottom drawer beside the console.
+  const resultsTabs = useMemo<DrawerTab[]>(() => {
+    if (activeStage !== 'results' || !effectiveFieldData?.fields) return [];
+    const pp = state.postprocess;
+    const patches = Object.keys(effectiveMesh?.boundaries ?? {}).filter(
+      (b) => b !== 'frontAndBack',
+    );
+    return [
+      {
+        id: 'probes',
+        label: 'Probes',
+        count: pp.probes.length,
+        node: (
+          <ProbesTab
+            rows={resultsView.probeRows}
+            activeField={pp.activeField}
+            customIds={(pp.customFields ?? []).map((f) => f.id)}
+            selectedId={selectedProbe}
+            onSelect={setSelectedProbe}
+            onRemove={(id) =>
+              setState((prev) => ({
+                ...prev,
+                postprocess: {
+                  ...prev.postprocess,
+                  probes: prev.postprocess.probes.filter((x) => x.id !== id),
+                },
+              }))
+            }
+            onClear={() =>
+              setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, probes: [] } }))
+            }
+          />
+        ),
+      },
+      {
+        id: 'reports',
+        label: 'Reports',
+        node: (
+          <ReportsTab
+            activeField={pp.activeField}
+            runForces={
+              viewedRun
+                ? { label: viewedRun.label, cd: viewedRun.finalCd, cl: viewedRun.finalCl }
+                : null
+            }
+            forces={resultsView.forces}
+            wallReports={resultsView.wallReports}
+            reports={resultsView.reports}
+          />
+        ),
+      },
+      {
+        id: 'integrals',
+        label: 'Integrals',
+        node: (
+          <IntegralsTab
+            integrate={resultsView.integrate}
+            patches={patches}
+            plots={state.plots ?? []}
+            activeField={pp.activeField}
+          />
+        ),
+      },
+    ];
+  }, [
+    activeStage,
+    effectiveFieldData?.fields,
+    effectiveMesh?.boundaries,
+    state.postprocess,
+    state.plots,
+    resultsView,
+    selectedProbe,
+    viewedRun,
+  ]);
 
   const handleAddBoundaryPlot = useCallback(
     (patch: string, variable: ResultFieldId, axis: 'x' | 'y' | 's') => {
@@ -1798,7 +1886,7 @@ export function App({
                 fieldData={
                   activeStage === 'results' ? resultsView.displayFieldData : effectiveFieldData
                 }
-                resultsOverlay={activeStage === 'results' ? resultsView.overlay : null}
+                resultsOverlay={activeStage === 'results' ? overlayShown : null}
                 activeField={state.postprocess.activeField}
                 colormap={state.postprocess.colormap}
                 initialEntities={cadEntities}
@@ -2017,6 +2105,8 @@ export function App({
             className={`absolute bottom-0 left-0 right-0 z-30 pointer-events-auto${activeStage === 'caseSetup' ? ' hidden' : ''}`}
           >
             <BottomSolverDrawer
+              tabs={resultsTabs}
+              focus={drawerFocus}
               terminalLogs={state.terminalLogs}
               executionStatus={state.executionStatus}
               onClearLogs={() => setState((prev) => ({ ...prev, terminalLogs: [] }))}

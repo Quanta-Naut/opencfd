@@ -5,16 +5,48 @@ interface BottomSolverDrawerProps {
   terminalLogs: string[];
   executionStatus: string;
   onClearLogs: () => void;
+  /** Extra tabs after Console (the Results tables). */
+  tabs?: DrawerTab[];
+  /** Open this tab when `n` changes (a probe was just placed). */
+  focus?: { id: string; n: number } | null;
 }
 
-/** Bottom drawer - solver console only. Residuals / forces live in the right-hand
+export interface DrawerTab {
+  id: string;
+  label: string;
+  /** Shown beside the label, e.g. the number of probes. */
+  count?: number;
+  node: React.ReactNode;
+}
+
+/** Bottom drawer: the solver console, and on the Results stage the probe,
+ * report and integral tables. Residuals / forces live in the right-hand
  * SolverMonitorRail; OpenFOAM dictionaries open from the top bar. */
 export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
   terminalLogs,
   executionStatus,
   onClearLogs,
+  tabs = [],
+  focus = null,
 }) => {
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const [tabId, setTabId] = useState('console');
+  // A tab that is no longer offered (left the Results stage) falls back.
+  const activeExtra = tabs.find((t) => t.id === tabId) ?? null;
+  const onConsole = !activeExtra;
+  useEffect(() => {
+    if (!focus) return;
+    setTabId(focus.id);
+    setIsExpanded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.n]);
+  const pick = (id: string) => {
+    if (isExpanded && (id === tabId || (id === 'console' && onConsole))) setIsExpanded(false);
+    else {
+      setTabId(id);
+      setIsExpanded(true);
+    }
+  };
 
   // Console auto-follow: pinned to the bottom until the user scrolls up.
   const consoleRef = React.useRef<HTMLDivElement | null>(null);
@@ -113,22 +145,31 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
     <div className="w-full bg-surface border-t border-line flex flex-col select-none shrink-0 z-20">
       {/* Header */}
       <div className="h-8 bg-app px-4 flex items-center justify-between border-b border-line text-xs">
-        <button
-          onClick={() => setIsExpanded((v) => !v)}
-          className={`px-2.5 py-0.5 rounded text-xs font-medium transition-colors ${
-            isExpanded
-              ? 'bg-surface text-fg font-semibold border border-line'
-              : 'text-fg-2 hover:text-fg'
-          }`}
-        >
-          Console
-        </button>
+        <div className="flex items-center gap-1">
+          {[{ id: 'console', label: 'Console', count: undefined }, ...tabs].map((t) => {
+            const on = isExpanded && (t.id === 'console' ? onConsole : t.id === tabId);
+            return (
+              <button
+                key={t.id}
+                onClick={() => pick(t.id)}
+                className={`px-2.5 py-0.5 rounded text-xs font-medium transition-colors ${
+                  on
+                    ? 'bg-surface text-fg font-semibold border border-line'
+                    : 'text-fg-2 hover:text-fg'
+                }`}
+              >
+                {t.label}
+                {t.count ? <span className="ml-1.5 font-mono text-fg-3">{t.count}</span> : null}
+              </button>
+            );
+          })}
+        </div>
 
         <div className="flex items-center gap-3 text-[11px] font-mono text-fg-2">
           {executionStatus === 'running' && <span className="text-accent">running</span>}
           {executionStatus === 'completed' && <span className="text-success">converged</span>}
           {executionStatus === 'error' && <span className="text-danger">failed</span>}
-          {isExpanded && terminalLogs.length > 0 && (
+          {isExpanded && onConsole && terminalLogs.length > 0 && (
             <button
               onClick={onClearLogs}
               title="Clear console"
@@ -158,28 +199,34 @@ export const BottomSolverDrawer: React.FC<BottomSolverDrawerProps> = ({
             className="h-1.5 -mt-1.5 cursor-ns-resize bg-transparent hover:bg-accent/40 transition-colors"
             title="Drag to resize"
           />
-          <div
-            ref={consoleRef}
-            onScroll={onConsoleScroll}
-            className="w-full p-3 font-mono text-[11px] leading-relaxed text-fg overflow-y-auto bg-app/60 select-text cursor-text [user-select:text] selection:bg-accent/25"
-            style={{ height: bodyH }}
-          >
-            {terminalLogs.length === 0 && <span className="text-fg-4">No output yet.</span>}
-            {terminalLogs.map((log, i) => (
-              <div
-                key={i}
-                className={`py-0.5 whitespace-pre-wrap ${
-                  /converged|finished/i.test(log)
-                    ? 'text-success font-semibold'
-                    : /error|fail|cannot|not found|no such/i.test(log)
-                      ? 'text-danger'
-                      : ''
-                }`}
-              >
-                {log}
-              </div>
-            ))}
-          </div>
+          {activeExtra ? (
+            <div className="w-full overflow-auto bg-surface select-text" style={{ height: bodyH }}>
+              {activeExtra.node}
+            </div>
+          ) : (
+            <div
+              ref={consoleRef}
+              onScroll={onConsoleScroll}
+              className="w-full p-3 font-mono text-[11px] leading-relaxed text-fg overflow-y-auto bg-app/60 select-text cursor-text [user-select:text] selection:bg-accent/25"
+              style={{ height: bodyH }}
+            >
+              {terminalLogs.length === 0 && <span className="text-fg-4">No output yet.</span>}
+              {terminalLogs.map((log, i) => (
+                <div
+                  key={i}
+                  className={`py-0.5 whitespace-pre-wrap ${
+                    /converged|finished/i.test(log)
+                      ? 'text-success font-semibold'
+                      : /error|fail|cannot|not found|no such/i.test(log)
+                        ? 'text-danger'
+                        : ''
+                  }`}
+                >
+                  {log}
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
     </div>

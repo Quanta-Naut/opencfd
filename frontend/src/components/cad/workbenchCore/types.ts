@@ -118,7 +118,7 @@ export interface ResultsOverlay {
   vectorSpacing: number;
   vectorScale: number;
   /** Probe points (model coordinates) and the text shown beside each. */
-  probes: { id: string; x: number; y: number; label: string }[];
+  probes: { id: string; x: number; y: number; label: string; selected?: boolean }[];
   legend: { title: string; unit: string };
   /** Leave out values outside the colour range. */
   clipOutside: boolean;
