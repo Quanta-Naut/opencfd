@@ -398,42 +398,47 @@ function SurfaceIntegrals(p: {
     </select>
   );
   return (
-    <>
-      <div>
-        <span className={`${lbl} block mb-1`}>Surface</span>
-        {choose(surf?.value ?? '', p.setSel, 'Surface')}
+    <div className="flex flex-wrap items-start gap-x-8 gap-y-4">
+      <div className="w-72 max-w-full space-y-3">
+        <div>
+          <span className={`${lbl} block mb-1`}>Surface</span>
+          {choose(surf?.value ?? '', p.setSel, 'Surface')}
+        </div>
+        {main ? (
+          <table className="w-full text-[11px] font-mono">
+            <tbody>
+              {row('Length', fmtValue(main.length), 'Its area per metre of depth')}
+              {row(
+                'Flow rate (m²/s)',
+                fmtValue(main.flow),
+                main.normal
+                  ? `Counted to the right of the line from its first point to its second, along (${fmtValue(main.normal[0])}, ${fmtValue(main.normal[1])}).`
+                  : 'Positive leaves the domain, negative enters it.',
+              )}
+              {row(
+                'Mass flow (kg/s)',
+                fmtValue(main.massFlow),
+                'Flow rate times the density, per metre of depth',
+              )}
+              {row(
+                `∫ ${def.short} dl${def.unit ? ` (${def.unit}·m)` : ''}`,
+                fmtValue(main.integral),
+              )}
+              {row(`Average ${def.short}${u}`, fmtValue(main.avg), 'Weighted by length')}
+              {row(
+                `Mass-weighted ${def.short}${u}`,
+                main.fluxAvg === null ? '-' : fmtValue(main.fluxAvg),
+                'Weighted by the flow through each part of the surface',
+              )}
+            </tbody>
+          </table>
+        ) : (
+          <p className="text-[11px] text-fg-2">Nothing to integrate here.</p>
+        )}
       </div>
-      {main ? (
-        <table className="w-full text-[11px] font-mono">
-          <tbody>
-            {row('Length', fmtValue(main.length), 'Its area per metre of depth')}
-            {row(
-              'Flow rate (m²/s)',
-              fmtValue(main.flow),
-              main.normal
-                ? `Counted to the right of the line from its first point to its second, along (${fmtValue(main.normal[0])}, ${fmtValue(main.normal[1])}).`
-                : 'Positive leaves the domain, negative enters it.',
-            )}
-            {row(
-              'Mass flow (kg/s)',
-              fmtValue(main.massFlow),
-              'Flow rate times the density, per metre of depth',
-            )}
-            {row(`∫ ${def.short} dl${def.unit ? ` (${def.unit}·m)` : ''}`, fmtValue(main.integral))}
-            {row(`Average ${def.short}${u}`, fmtValue(main.avg), 'Weighted by length')}
-            {row(
-              `Mass-weighted ${def.short}${u}`,
-              main.fluxAvg === null ? '-' : fmtValue(main.fluxAvg),
-              'Weighted by the flow through each part of the surface',
-            )}
-          </tbody>
-        </table>
-      ) : (
-        <p className="text-[11px] text-fg-2">Nothing to integrate here.</p>
-      )}
 
       {p.surfaces.length > 1 && (
-        <div className="rounded-sm border border-line p-2 space-y-1.5">
+        <div className="w-72 max-w-full space-y-1.5">
           <span className={`${lbl} block`}>Pressure drop</span>
           <div className="grid grid-cols-2 gap-1.5">
             <label>
@@ -465,7 +470,7 @@ function SurfaceIntegrals(p: {
           )}
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -500,7 +505,7 @@ export function IntegralsTab(p: IntegralsTabProps) {
   if (!p.integrate)
     return <p className="p-4 text-[11px] text-fg-3">Load a field to integrate over a boundary.</p>;
   return (
-    <div className="p-4 max-w-md space-y-3">
+    <div className="p-4">
       <SurfaceIntegrals
         integrate={p.integrate}
         surfaces={surfaces}
