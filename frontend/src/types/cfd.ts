@@ -222,11 +222,50 @@ export interface PostProcessConfig {
   clipBox: [number, number, number, number] | null;
   /** Show the viewed run minus this run (null = off). */
   diffRunId: string | null;
+  /** Named views: the camera and the display settings. */
+  views: SavedView[];
+  /** Text notes pinned to points on the field, drawn in saved images. */
+  notes: FieldNote[];
   /** Where particle tracks are released, model coordinates. */
   tracks: TrackSeed[];
   /** What colours the tracks: '' one colour, 'time' time since release,
    *  else a field id. */
   trackColorBy: string;
+}
+
+/** The display settings a saved view brings back. */
+export type ViewSettings = Pick<
+  PostProcessConfig,
+  | 'activeField'
+  | 'colormap'
+  | 'rangeMode'
+  | 'rangeMin'
+  | 'rangeMax'
+  | 'levels'
+  | 'contourLines'
+  | 'showMeshWireframe'
+  | 'showStreamlines'
+  | 'showVectors'
+  | 'clipBox'
+  | 'clipOutside'
+  | 'isoValues'
+  | 'tracks'
+  | 'trackColorBy'
+>;
+
+export interface SavedView {
+  id: string;
+  name: string;
+  /** Pixels per model unit, and the pan in pixels. */
+  camera: { zoom: number; pan: { x: number; y: number } };
+  settings: ViewSettings;
+}
+
+export interface FieldNote {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
 }
 
 /** A particle track release: one point, or `count` points along a line. */

@@ -122,6 +122,7 @@ export function drawResultsOverlay(
   }
 
   if (ov.tracks.length || ov.trackSeeds.length) drawTracks(f, ov);
+  if (ov.notes.length) drawNotes(f, ov);
 
   // Probes: a ringed dot and a numbered tag with the active field's value.
   ctx.font = '600 10px ui-monospace, monospace';
@@ -285,5 +286,53 @@ export function drawTrackLegend(f: DrawFrame, ov: ResultsOverlay): void {
     }
     ctx.fillStyle = '#ffffff';
     ctx.fillText(text, x + 68, y + 10.5);
+  }
+}
+
+/** Notes: a dot on the point, a leader, and the text on a tag. Long text
+ *  wraps at about 28 characters. */
+function drawNotes(f: DrawFrame, ov: ResultsOverlay): void {
+  const { ctx, cw, ch, ws } = f;
+  ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  for (const n of ov.notes) {
+    const p = ws(n.x, n.y);
+    if (p.x < -40 || p.y < -40 || p.x > cw + 40 || p.y > ch + 40) continue;
+    const lines: string[] = [];
+    for (const para of (n.text || 'Note').split('\n')) {
+      let cur = '';
+      for (const word of para.split(' ')) {
+        if (cur && (cur + ' ' + word).length > 28) {
+          lines.push(cur);
+          cur = word;
+        } else cur = cur ? cur + ' ' + word : word;
+      }
+      lines.push(cur);
+    }
+    const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14;
+    const h = lines.length * 15 + 8;
+    // Tag up and to the right of the point, flipped when it would leave.
+    const dx = p.x + 18 + w > cw ? -18 - w : 18;
+    const dy = p.y - 18 - h < 0 ? 18 : -18 - h;
+    const bx = p.x + dx,
+      by = p.y + dy;
+    ctx.strokeStyle = 'rgba(17,17,17,0.85)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    ctx.lineTo(Math.max(bx, Math.min(bx + w, p.x)), dy < 0 ? by + h : by);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(17,17,17,0.9)';
+    ctx.fillRect(bx, by, w, h);
+    ctx.fillStyle = '#ffffff';
+    lines.forEach((l, i) => ctx.fillText(l, bx + 7, by + 4 + 7.5 + i * 15));
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#111111';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
   }
 }

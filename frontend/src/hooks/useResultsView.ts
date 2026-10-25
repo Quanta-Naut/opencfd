@@ -355,6 +355,7 @@ export function useResultsView(
         : null,
       trackSeeds: pp.tracks ?? [],
       colormap: pp.colormap,
+      notes: pp.notes ?? [],
     }),
     [pp, available, probeRows, active, def, isoLines, diffing, tracks, trackColors, colorBy],
   );

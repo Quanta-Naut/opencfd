@@ -175,6 +175,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   onPickPlotPoint,
   plotPickPreviewP1 = null,
   resultsOverlay = null,
+  cameraApiRef,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -280,6 +281,22 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   // ── Camera ──────────────────────────────────────────────────────────────────
   const [zoom, setZoom] = useState(INITIAL_ZOOM);
   const [pan, setPan] = useState<Point2D>({ x: 0, y: 0 });
+  // Hands the Results tab the camera, to save and restore views.
+  const cameraNow = useRef({ zoom, pan });
+  cameraNow.current = { zoom, pan };
+  useEffect(() => {
+    if (!cameraApiRef) return;
+    cameraApiRef.current = {
+      get: () => cameraNow.current,
+      set: (c) => {
+        setZoom(c.zoom);
+        setPan(c.pan);
+      },
+    };
+    return () => {
+      cameraApiRef.current = null;
+    };
+  }, [cameraApiRef]);
   // Live canvas size - watched so a layout change (the solver monitor rail
   // pushing the canvas, a window resize) re-renders and re-frames the view.
   const [viewport, setViewport] = useState({ w: 0, h: 0 });

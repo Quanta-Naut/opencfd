@@ -161,6 +161,8 @@ export function buildInitialCFDState(savedState: Partial<CFDProjectState> | unde
       clipBox: null,
       diffRunId: null,
       tracks: [],
+      views: [],
+      notes: [],
       trackColorBy: 'time',
       ...(savedState?.postprocess || {}),
     },

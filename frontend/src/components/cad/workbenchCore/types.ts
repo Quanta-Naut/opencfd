@@ -103,6 +103,11 @@ export type CadAction =
 
 /** How the Results tab draws the field: contour style, overlays, probes and
  *  the legend title. Null outside Results. */
+export interface CameraApi {
+  get: () => { zoom: number; pan: { x: number; y: number } };
+  set: (c: { zoom: number; pan: { x: number; y: number } }) => void;
+}
+
 export interface ResultsOverlay {
   levels: number;
   contourLines: boolean;
@@ -129,6 +134,8 @@ export interface ResultsOverlay {
   trackLegend: string | null;
   trackSeeds: { kind: 'point' | 'line'; x0: number; y0: number; x1: number; y1: number }[];
   colormap: string;
+  /** Notes pinned to points. */
+  notes: { id: string; x: number; y: number; text: string }[];
 }
 
 export interface CadWorkbenchProps {
@@ -224,4 +231,6 @@ export interface CadWorkbenchProps {
   onPickPlotPoint?: (pt: [number, number]) => void;
   plotPickPreviewP1?: [number, number] | null;
   resultsOverlay?: ResultsOverlay | null;
+  /** Filled by the canvas with get / set for its camera (zoom and pan). */
+  cameraApiRef?: React.MutableRefObject<CameraApi | null>;
 }

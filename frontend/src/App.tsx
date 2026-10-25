@@ -13,7 +13,14 @@ import { CaseFilesModal } from './components/solver/CaseFilesModal';
 import { CaseSetupPanel } from './components/caseSetup/CaseSetupPanel';
 import { defaultPatchBC } from './caseSetup/bcCatalog';
 import { directionsForAoA } from './solver/solverConfig';
-import { CFDProjectState, SolverRunRecord, PlotDefinition, TrackSeed } from './types/cfd';
+import {
+  CFDProjectState,
+  SolverRunRecord,
+  PlotDefinition,
+  TrackSeed,
+  SavedView,
+} from './types/cfd';
+import type { CameraApi } from './components/cad/workbenchCore';
 import {
   generateCaseFiles,
   uploadAndParseAirfoil,
@@ -1082,24 +1089,82 @@ export function App({
     kind: 'point' | 'line';
     p1: [number, number] | null;
   } | null>(null);
+  // Placing a note: one click on the field.
+  const [notePicking, setNotePicking] = useState(false);
+  const cameraApiRef = useRef<CameraApi | null>(null);
   useEffect(() => {
     if (activeStage !== 'results') {
       setProbePicking(false);
       setClipPicking(null);
       setTrackPicking(null);
+      setNotePicking(false);
     }
   }, [activeStage]);
   useEffect(() => {
-    if (!probePicking && !clipPicking && !trackPicking) return;
+    if (!probePicking && !clipPicking && !trackPicking && !notePicking) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       setProbePicking(false);
       setClipPicking(null);
       setTrackPicking(null);
+      setNotePicking(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [probePicking, clipPicking, trackPicking]);
+  }, [probePicking, clipPicking, trackPicking, notePicking]);
+  const pickNote = useCallback((pt: [number, number]) => {
+    setNotePicking(false);
+    const r = (v: number) => Number(v.toPrecision(5));
+    setState((prev) => ({
+      ...prev,
+      postprocess: {
+        ...prev.postprocess,
+        notes: [
+          ...(prev.postprocess.notes ?? []),
+          { id: `nt_${Date.now().toString(36)}`, x: r(pt[0]), y: r(pt[1]), text: 'Note' },
+        ],
+      },
+    }));
+  }, []);
+  const saveView = useCallback(
+    (name: string) => {
+      const cam = cameraApiRef.current?.get();
+      if (!cam) return;
+      const pp = state.postprocess;
+      const settings = {
+        activeField: pp.activeField,
+        colormap: pp.colormap,
+        rangeMode: pp.rangeMode,
+        rangeMin: pp.rangeMin,
+        rangeMax: pp.rangeMax,
+        levels: pp.levels,
+        contourLines: pp.contourLines,
+        showMeshWireframe: pp.showMeshWireframe,
+        showStreamlines: pp.showStreamlines,
+        showVectors: pp.showVectors,
+        clipBox: pp.clipBox,
+        clipOutside: pp.clipOutside,
+        isoValues: pp.isoValues,
+        tracks: pp.tracks,
+        trackColorBy: pp.trackColorBy,
+      };
+      const view = {
+        id: `vw_${Date.now().toString(36)}`,
+        name,
+        camera: { zoom: cam.zoom, pan: { ...cam.pan } },
+        settings,
+      };
+      setState((prev) => ({
+        ...prev,
+        postprocess: { ...prev.postprocess, views: [...(prev.postprocess.views ?? []), view] },
+      }));
+    },
+    [state.postprocess],
+  );
+  const applyView = useCallback((v: SavedView) => {
+    cameraApiRef.current?.set(v.camera);
+    setState((prev) => ({ ...prev, postprocess: { ...prev.postprocess, ...v.settings } }));
+  }, []);
   const pickTrackSeed = useCallback(
     (pt: [number, number]) => {
       if (!trackPicking) return;
@@ -1633,6 +1698,7 @@ export function App({
                       setPickingPointsState(null);
                       setClipPicking(null);
                       setTrackPicking(null);
+                      setNotePicking(false);
                       setProbePicking((v) => !v);
                     },
                     clipPicking: !!clipPicking,
@@ -1646,6 +1712,7 @@ export function App({
                       setPickingPointsState(null);
                       setProbePicking(false);
                       setTrackPicking(null);
+                      setNotePicking(false);
                       setClipPicking((v) => (v ? null : { p1: null }));
                     },
                     trackPicking: trackPicking?.kind ?? null,
@@ -1653,8 +1720,19 @@ export function App({
                       setPickingPointsState(null);
                       setProbePicking(false);
                       setClipPicking(null);
+                      setNotePicking(false);
                       setTrackPicking((v) => (v?.kind === kind ? null : { kind, p1: null }));
                     },
+                    notePicking,
+                    onToggleNotePicking: () => {
+                      setPickingPointsState(null);
+                      setProbePicking(false);
+                      setClipPicking(null);
+                      setTrackPicking(null);
+                      setNotePicking((v) => !v);
+                    },
+                    onSaveView: saveView,
+                    onApplyView: applyView,
                     onAddBoundaryPlot: handleAddBoundaryPlot,
                     runForces: viewedRun
                       ? { label: viewedRun.label, cd: viewedRun.finalCd, cl: viewedRun.finalCl }
@@ -1745,6 +1823,7 @@ export function App({
                 onSelectTransientFrame={selectTransientFrame}
                 onToggleTransientPlay={handleToggleTransientPlay}
                 onExportAnimation={() => setAnimDialog(true)}
+                cameraApiRef={cameraApiRef}
                 onSelectTransientSpeed={setTransientSpeed}
                 historicalStatus={
                   isViewingHistorical
@@ -1758,16 +1837,22 @@ export function App({
                 onRestoreLive={selectLatestFinishedRun}
                 activePlotLine={activePlotLineForCanvas}
                 isPickingPlotPoints={
-                  !!pickingPointsState || probePicking || !!clipPicking || !!trackPicking
+                  !!pickingPointsState ||
+                  probePicking ||
+                  !!clipPicking ||
+                  !!trackPicking ||
+                  notePicking
                 }
                 onPickPlotPoint={
-                  trackPicking
-                    ? pickTrackSeed
-                    : clipPicking
-                      ? pickClipCorner
-                      : probePicking
-                        ? addProbe
-                        : handlePickPlotPoint
+                  notePicking
+                    ? pickNote
+                    : trackPicking
+                      ? pickTrackSeed
+                      : clipPicking
+                        ? pickClipCorner
+                        : probePicking
+                          ? addProbe
+                          : handlePickPlotPoint
                 }
                 plotPickPreviewP1={
                   trackPicking?.p1 ?? clipPicking?.p1 ?? pickingPointsState?.p1 ?? null
@@ -1784,6 +1869,19 @@ export function App({
                   <button
                     type="button"
                     onClick={() => setClipPicking(null)}
+                    className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {notePicking && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 bg-inverse text-on-inverse px-4 py-2 rounded flex items-center gap-3 text-xs font-medium border border-white/20">
+                  <Crosshair className="w-4 h-4 text-accent" />
+                  <span>Click the point the note is about</span>
+                  <button
+                    type="button"
+                    onClick={() => setNotePicking(false)}
                     className="px-2.5 py-0.5 rounded-sm bg-on-inverse/15 hover:bg-on-inverse/25 text-on-inverse font-semibold text-[11px] transition-colors cursor-pointer"
                   >
                     Cancel

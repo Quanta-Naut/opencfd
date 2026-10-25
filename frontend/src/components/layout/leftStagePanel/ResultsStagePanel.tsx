@@ -8,11 +8,13 @@ import {
   ImageDown,
   Pencil,
   Plus,
+  StickyNote,
+  Eye,
   Spline,
   X,
 } from 'lucide-react';
 import type { StageId, StageStatus } from '../stages';
-import { CFDProjectState, PostProcessConfig } from '../../../types/cfd';
+import { CFDProjectState, PostProcessConfig, type SavedView } from '../../../types/cfd';
 import { StageGate } from './StageGate';
 import { NumberField } from './NumberField';
 import { Tooltip } from '../../ui/Tooltip';
@@ -134,6 +136,7 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   // Calculator dialog: closed, a new field (null) or the field being edited.
   const [calc, setCalc] = useState<CustomField | null | undefined>(undefined);
   const [isoText, setIsoText] = useState('');
+  const [viewName, setViewName] = useState('');
 
   if (activeStage !== 'results') return null;
   if (stageStatus?.results?.locked)
@@ -156,6 +159,8 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
   const net = flows.reduce((s, r) => s + r.flow!, 0);
   const custom = pp.customFields ?? [];
   const tracks = pp.tracks ?? [];
+  const views = pp.views ?? [];
+  const notes = pp.notes ?? [];
   const allIds: ResultFieldId[] = [...RESULT_FIELDS.map((f) => f.id), ...custom.map((f) => f.id)];
   const saveCustom = (f: CustomField) => {
     const exists = custom.some((c) => c.id === f.id);
@@ -574,6 +579,108 @@ export function ResultsStagePanel(p: ResultsStagePanelProps) {
                 </label>
               </div>
             )
+          )}
+        </Section>
+
+        <Section id="views" title="Views and notes" open={open} setOpen={setOpen}>
+          <div>
+            <span className={`${lbl} block mb-1`}>Saved views</span>
+            <form
+              className="flex gap-1.5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                p.onSaveView(viewName.trim() || `View ${views.length + 1}`);
+                setViewName('');
+              }}
+            >
+              <input
+                value={viewName}
+                onChange={(e) => setViewName(e.target.value)}
+                placeholder={`View ${views.length + 1}`}
+                aria-label="View name"
+                disabled={!p.hasField}
+                className={`${field} flex-1 min-w-0 !font-sans`}
+              />
+              <Tooltip content="Save the camera and display settings as they are now" delay={300}>
+                <button
+                  type="submit"
+                  disabled={!p.hasField}
+                  aria-label="Save view"
+                  className="px-2.5 rounded-sm border border-line bg-surface text-fg-2 hover:text-fg hover:border-line-strong disabled:opacity-40"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </Tooltip>
+            </form>
+          </div>
+          {views.length > 0 && (
+            <ul className="space-y-1">
+              {views.map((v) => (
+                <li key={v.id} className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => p.onApplyView(v)}
+                    className="flex-1 min-w-0 flex items-center gap-1.5 rounded-sm border border-line bg-surface-2 px-2 py-1 text-[11px] text-fg hover:border-line-strong text-left"
+                    title={`Show ${fieldDef(v.settings.activeField).label}, as saved`}
+                  >
+                    <Eye className="w-3 h-3 text-fg-3 shrink-0" />
+                    <span className="truncate">{v.name}</span>
+                    <span className="ml-auto text-[10px] text-fg-3 shrink-0">
+                      {fieldDef(v.settings.activeField).short}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete view ${v.name}`}
+                    onClick={() => set({ views: views.filter((x) => x.id !== v.id) })}
+                    className="text-fg-3 hover:text-fg"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className="pt-1">
+            <span className={`${lbl} block mb-1`}>Notes</span>
+            <button
+              type="button"
+              onClick={p.onToggleNotePicking}
+              disabled={!p.hasField}
+              className={`${ghostBtn} disabled:opacity-40 ${
+                p.notePicking ? '!bg-accent-soft !text-accent-fg !border-accent-line' : ''
+              }`}
+            >
+              <StickyNote className="w-3.5 h-3.5" />
+              {p.notePicking ? 'Click on the field' : 'Add a note'}
+            </button>
+          </div>
+          {notes.map((n) => (
+            <div key={n.id} className="flex items-start gap-1.5">
+              <textarea
+                value={n.text}
+                rows={Math.min(4, n.text.split('\n').length)}
+                aria-label="Note text"
+                onChange={(e) =>
+                  set({
+                    notes: notes.map((x) => (x.id === n.id ? { ...x, text: e.target.value } : x)),
+                  })
+                }
+                className={`${field} flex-1 min-w-0 resize-none !font-sans`}
+              />
+              <button
+                type="button"
+                aria-label="Delete note"
+                onClick={() => set({ notes: notes.filter((x) => x.id !== n.id) })}
+                className="mt-1 text-fg-3 hover:text-fg"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+          {notes.length > 0 && (
+            <p className="text-[10px] text-fg-3">Notes are drawn in saved images and animations.</p>
           )}
         </Section>
 
@@ -1133,6 +1240,11 @@ export interface ResultsStagePanelProps {
   /** Seeding particle tracks: by point, by line, or not. */
   trackPicking: 'point' | 'line' | null;
   onTrackPicking: (kind: 'point' | 'line') => void;
+  /** Placing a note on the field. */
+  notePicking: boolean;
+  onToggleNotePicking: () => void;
+  onSaveView: (name: string) => void;
+  onApplyView: (v: SavedView) => void;
   /** Runs that can be subtracted from the viewed one. */
   diffRuns: { id: string; label: string }[];
   viewedRunLabel: string;

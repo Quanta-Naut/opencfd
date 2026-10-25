@@ -12,6 +12,7 @@ export type {
   CadAction,
   CadWorkbenchProps,
   ResultsOverlay,
+  CameraApi,
 } from './types';
 
 export {
