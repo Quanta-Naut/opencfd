@@ -1,4 +1,4 @@
-import { Play, Pause, SkipBack, SkipForward, ChevronFirst, ChevronLast } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, ChevronFirst, ChevronLast, Film } from 'lucide-react';
 
 /** Results stage: transient time-step player. */
 export function TransientPlayer(p: TransientPlayerProps) {
@@ -12,6 +12,7 @@ export function TransientPlayer(p: TransientPlayerProps) {
     transientPlaying,
     onSelectTransientSpeed,
     transientSpeed,
+    onExportAnimation,
   } = p;
   return (
     <>
@@ -19,7 +20,7 @@ export function TransientPlayer(p: TransientPlayerProps) {
       {showField && isTransient && (
         <div
           className="absolute left-1/2 -translate-x-1/2 z-30 w-[92%] max-w-2xl bg-surface border border-line rounded px-4 py-2 flex items-center gap-3 select-none transition-all duration-150"
-          style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 4px)' }}
+          style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 52px)' }}
         >
           {/* 5 Playback Control Buttons: First, Prev, Play/Pause, Next, Last */}
           <div className="flex items-center gap-1 shrink-0">
@@ -129,6 +130,18 @@ export function TransientPlayer(p: TransientPlayerProps) {
               </button>
             ))}
           </div>
+          {onExportAnimation && (
+            <button
+              type="button"
+              onClick={onExportAnimation}
+              disabled={transientTimes.length < 2}
+              title="Export as GIF or video"
+              aria-label="Export animation"
+              className="shrink-0 p-1.5 rounded text-fg-2 hover:text-fg hover:bg-app disabled:opacity-30 disabled:pointer-events-none transition-colors"
+            >
+              <Film className="w-4 h-4" />
+            </button>
+          )}
         </div>
       )}
     </>
@@ -145,4 +158,6 @@ export interface TransientPlayerProps {
   transientPlaying: boolean;
   onSelectTransientSpeed: (speed: number) => void;
   transientSpeed: number;
+  /** Open the animation export. */
+  onExportAnimation?: () => void;
 }

@@ -260,6 +260,37 @@ export function useResultsPlayback(params: {
     [prefetchAdjacent],
   );
 
+  /** One frame's data, from the cache or fetched (and cached); null on
+   *  failure. Does not change what is on screen. */
+  const fetchFrameData = useCallback(async (index: number): Promise<any | null> => {
+    const cached = frameCacheRef.current.get(index);
+    if (cached) return cached;
+    const time = transientTimesRef.current[index];
+    const mesh = meshDataRef.current;
+    if (time === undefined || !mesh?.nodes?.length) return null;
+    const { data } = await fetchSolverResults(
+      { nodes: mesh.nodes, elements: mesh.elements },
+      projectIdRef.current,
+      time,
+    );
+    if (!data) return null;
+    frameCacheRef.current.set(index, data);
+    if (frameCacheRef.current.size > CACHE_MAX) {
+      const oldest = frameCacheRef.current.keys().next().value;
+      if (oldest !== undefined) frameCacheRef.current.delete(oldest);
+    }
+    return data;
+  }, []);
+  /** Put a frame's data on screen. */
+  const showFrameData = useCallback(
+    (index: number, data: any) => {
+      setFieldData(data);
+      setTransientFrameIndex(index);
+      transientFrameIndexRef.current = index;
+    },
+    [setFieldData],
+  );
+
   // Single stable interval/timeout loop - calibrated to actual physical simulation time
   const playTimeoutRef = useRef<number | null>(null);
   const stopPlayback = useCallback(() => {
@@ -352,5 +383,7 @@ export function useResultsPlayback(params: {
     loadResults,
     selectTransientFrame,
     handleToggleTransientPlay,
+    fetchFrameData,
+    showFrameData,
   };
 }

@@ -167,6 +167,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   onSelectTransientFrame,
   onToggleTransientPlay,
   onSelectTransientSpeed,
+  onExportAnimation,
   historicalStatus,
   onRestoreLive,
   activePlotLine = null,
@@ -2876,6 +2877,7 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
             onToggleTransientPlay,
             transientPlaying,
             onSelectTransientSpeed,
+            onExportAnimation,
             transientSpeed,
           }}
         />

@@ -26,9 +26,11 @@ import { buildInitialCFDState } from './hooks/appInitialState';
 import { useHistoricalRunField } from './hooks/useHistoricalRunField';
 import { useResultsPlayback } from './hooks/useResultsPlayback';
 import { useResultsView, type DiffSource } from './hooks/useResultsView';
-import { fieldDef, fieldValues, type ResultFieldId } from './utils/resultFields';
+import { fieldDef, fieldValues, valueRange, type ResultFieldId } from './utils/resultFields';
 import { patchSamples, snapshotBoundaries } from './utils/boundaryData';
 import { exportViewImage } from './utils/exportView';
+import { exportAnimation, type AnimationOptions } from './utils/exportAnimation';
+import { AnimationExportDialog } from './components/results/AnimationExportDialog';
 import { useSolverRun } from './hooks/useSolverRun';
 import { toast } from './components/ui/Toast';
 import { CommandPalette, Command } from './components/ui/CommandPalette';
@@ -816,6 +818,8 @@ export function App({
     loadResults,
     selectTransientFrame,
     handleToggleTransientPlay,
+    fetchFrameData,
+    showFrameData,
   } = useResultsPlayback({ fieldData, setFieldData, meshData, projectId, setState });
 
   const handleDeleteRun = useCallback(
@@ -894,14 +898,41 @@ export function App({
       : null
     : meshData;
 
+  // The latest run's time steps are still in the case, so a transient run
+  // viewed there plays its frames (loaded live) instead of its one snapshot.
+  const latestRunId = useMemo(() => {
+    const finished = (state.solverRuns ?? []).filter((r) => r.status !== 'running');
+    return finished.length ? [...finished].sort((a, b) => b.startedAt - a.startedAt)[0].id : null;
+  }, [state.solverRuns]);
+  const viewingLatestRun = !isViewingHistorical || selectedRunId === latestRunId;
+  const isTransientRun = state.physics.timeFormulation === 'transient';
+  const liveFrame =
+    isViewingHistorical &&
+    isTransientRun &&
+    viewingLatestRun &&
+    fieldData?.fields?.U_mag?.length &&
+    fieldData.fields.U_mag.length === historicalFieldData?.mesh?.nodes?.length
+      ? fieldData
+      : null;
+  const framesRequested = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeStage !== 'results' || !isTransientRun || !viewingLatestRun || fieldData) return;
+    if (!latestRunId || framesRequested.current === latestRunId) return;
+    framesRequested.current = latestRunId;
+    void loadResults(true, undefined, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeStage, isTransientRun, viewingLatestRun, fieldData, latestRunId]);
+
   const effectiveFieldData = isViewingHistorical
-    ? historicalFieldData
-      ? {
-          ...historicalFieldData,
-          source: 'openfoam',
-          streamlines: historicalFieldData.streamlines || [],
-        }
-      : null
+    ? liveFrame
+      ? { ...liveFrame, mesh: historicalFieldData.mesh }
+      : historicalFieldData
+        ? {
+            ...historicalFieldData,
+            source: 'openfoam',
+            streamlines: historicalFieldData.streamlines || [],
+          }
+        : null
     : fieldData;
 
   const targetRunForPlot = useMemo(() => {
@@ -1031,12 +1062,17 @@ export function App({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [diffRunId, projectId]);
 
+  // A colour range held while an animation is exported.
+  const [heldRange, setHeldRange] = useState<[number, number] | null>(null);
+  const [animDialog, setAnimDialog] = useState(false);
+  const animCancel = useRef(false);
   const resultsView = useResultsView(
     effectiveFieldData,
     effectiveMesh,
     state.postprocess,
     state.physics,
     diffSource,
+    heldRange,
   );
   const [probePicking, setProbePicking] = useState(false);
   // Clip box picking: null when off, then the first corner once clicked.
@@ -1183,6 +1219,65 @@ export function App({
       resultsView.ref,
       resultsView.allFields,
       handleCreatePlot,
+    ],
+  );
+
+  const handleExportAnimation = useCallback(
+    async (o: AnimationOptions) => {
+      const root = viewportRef.current;
+      if (!root) return;
+      setAnimDialog(false);
+      animCancel.current = false;
+      const def = fieldDef(state.postprocess.activeField);
+      const pp = state.postprocess;
+      const ref = resultsView.ref;
+      const nodes = effectiveMesh?.nodes ?? [];
+      const legendFor = (r: [number, number] | null) =>
+        r
+          ? {
+              title: resultsView.overlay.legend.title,
+              unit: def.unit,
+              lo: r[0],
+              hi: r[1],
+              colormap: pp.colormap,
+              levels: pp.levels,
+            }
+          : null;
+      const t = toast.loading('Exporting animation', {
+        duration: Infinity,
+        progress: 2,
+        action: { label: 'Cancel', onClick: () => (animCancel.current = true) },
+      });
+      const err = await exportAnimation(o, {
+        root,
+        times: transientTimes,
+        fetchFrame: fetchFrameData,
+        showFrame: showFrameData,
+        frameRange: (d) => {
+          const f = { ...d.fields, x: nodes.map((n) => n[0]), y: nodes.map((n) => n[1]) };
+          const v = fieldValues(f, pp.activeField, ref);
+          return v ? valueRange(v, pp.rangeMode === 'full' ? 'full' : 'auto', def.symmetric) : null;
+        },
+        holdRange: setHeldRange,
+        legend: legendFor,
+        currentRange: () => resultsView.range,
+        name: `${projectName || 'results'}-${def.short.replace(/[^\w.-]+/g, '_')}`,
+        onProgress: (fraction, text) =>
+          toast.update(t, { description: text, progress: Math.round(fraction * 100) }),
+        cancelled: () => animCancel.current,
+      });
+      if (err) toast.error('Could not export', { id: t, description: err });
+      else if (animCancel.current) toast.dismiss(t);
+      else toast.success('Animation saved', { id: t });
+    },
+    [
+      state.postprocess,
+      resultsView,
+      effectiveMesh,
+      transientTimes,
+      fetchFrameData,
+      showFrameData,
+      projectName,
     ],
   );
 
@@ -1642,13 +1737,14 @@ export function App({
                 onRequestDownloadBlockMeshDictRef={requestDownloadBlockMeshDictRef}
                 cadName={state.geometry.name}
                 onCadNameChange={handleCadNameChange}
-                isTransient={state.physics.timeFormulation === 'transient'}
+                isTransient={isTransientRun && viewingLatestRun}
                 transientTimes={transientTimes}
                 transientFrameIndex={transientFrameIndex}
                 transientPlaying={transientPlaying}
                 transientSpeed={transientSpeed}
                 onSelectTransientFrame={selectTransientFrame}
                 onToggleTransientPlay={handleToggleTransientPlay}
+                onExportAnimation={() => setAnimDialog(true)}
                 onSelectTransientSpeed={setTransientSpeed}
                 historicalStatus={
                   isViewingHistorical
@@ -1843,6 +1939,13 @@ export function App({
       )}
 
       {shortcutsOpen && <ShortcutsDialog open onClose={() => setShortcutsOpen(false)} />}
+      <AnimationExportDialog
+        open={animDialog}
+        times={transientTimes}
+        frame={transientFrameIndex}
+        onExport={(o) => void handleExportAnimation(o)}
+        onClose={() => setAnimDialog(false)}
+      />
     </div>
   );
 }

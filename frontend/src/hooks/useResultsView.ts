@@ -73,6 +73,8 @@ export function useResultsView(
   pp: PostProcessConfig,
   physics: PhysicsConfig,
   diff: DiffSource | null = null,
+  /** A colour range held over the settings (an animation export). */
+  heldRange: [number, number] | null = null,
 ) {
   const custom = pp.customFields;
   const ref = useMemo<FlowReference>(() => {
@@ -168,11 +170,12 @@ export function useResultsView(
 
   const range = useMemo<[number, number] | null>(() => {
     if (!autoRange) return null;
+    if (heldRange) return heldRange;
     if (pp.rangeMode !== 'custom') return autoRange;
     const lo = pp.rangeMin ?? autoRange[0];
     const hi = pp.rangeMax ?? autoRange[1];
     return hi > lo ? [lo, hi] : autoRange;
-  }, [autoRange, pp.rangeMode, pp.rangeMin, pp.rangeMax]);
+  }, [autoRange, pp.rangeMode, pp.rangeMin, pp.rangeMax, heldRange]);
 
   const displayFieldData = useMemo(() => {
     if (!fieldData || !activeVals || !range) return fieldData ?? null;

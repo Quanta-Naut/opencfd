@@ -212,6 +212,7 @@ export interface CadWorkbenchProps {
   onSelectTransientFrame?: (index: number) => void;
   onToggleTransientPlay?: () => void;
   onSelectTransientSpeed?: (speed: number) => void;
+  onExportAnimation?: () => void;
   historicalStatus?: {
     runLabel?: string;
     loading?: boolean;
