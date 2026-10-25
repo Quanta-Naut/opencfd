@@ -4,19 +4,16 @@ import {
   Keyboard,
   LayoutGrid,
   Lock,
-  Moon,
   Pencil,
   Ruler,
   Search,
   Settings,
-  Sun,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { PreferencesDialog } from '../settings/PreferencesDialog';
 import { Kbd } from '../ui/Kbd';
 import { Tooltip } from '../ui/Tooltip';
 import { MOD_LABEL } from '../../utils/platform';
-import { toggleTheme, useResolvedTheme } from '../../utils/theme';
 import { useBackendHealth } from '../../hooks/useBackendHealth';
 import { STAGES, type StageId, type StageStatus } from './stages';
 
@@ -69,7 +66,6 @@ export const AppBar: React.FC<AppBarProps> = ({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(projectName);
   const inputRef = useRef<HTMLInputElement>(null);
-  const theme = useResolvedTheme();
   const health = useBackendHealth();
 
   useEffect(() => {
@@ -186,23 +182,6 @@ export const AppBar: React.FC<AppBarProps> = ({
 
       {/* Global actions */}
       <div className="flex items-center gap-1 shrink-0">
-        {onToggleMeasure && (
-          <Tooltip content="Measure distances (D)">
-            <button
-              onClick={onToggleMeasure}
-              aria-label="Measure"
-              aria-pressed={!!measureOn}
-              className={clsx(
-                'h-7 w-7 inline-flex items-center justify-center rounded transition-colors',
-                measureOn
-                  ? 'bg-accent-soft text-accent-fg'
-                  : 'text-fg-2 hover:text-fg hover:bg-surface-3',
-              )}
-            >
-              <Ruler className="w-4 h-4" />
-            </button>
-          </Tooltip>
-        )}
         {onOpenCaseFiles && (
           <button
             onClick={onOpenCaseFiles}
@@ -219,17 +198,18 @@ export const AppBar: React.FC<AppBarProps> = ({
           </button>
         )}
         {onOpenCommandPalette && (
-          <button
-            onClick={onOpenCommandPalette}
-            className="h-7 ml-1 flex items-center gap-2 pl-2 pr-1 border border-line bg-surface hover:border-line-strong rounded text-fg-3 transition-colors"
+          <Tooltip
+            content={
+              <span className="flex items-center gap-2">
+                Search commands <Kbd>{MOD_LABEL}</Kbd>
+                <Kbd>K</Kbd>
+              </span>
+            }
           >
-            <Search className="w-3.5 h-3.5" />
-            <span className="hidden md:inline text-[12px] w-36 text-left">Search commands</span>
-            <span className="hidden md:flex items-center gap-0.5">
-              <Kbd>{MOD_LABEL}</Kbd>
-              <Kbd>K</Kbd>
-            </span>
-          </button>
+            <button onClick={onOpenCommandPalette} className={iconBtn} aria-label="Search commands">
+              <Search className="w-4 h-4" />
+            </button>
+          </Tooltip>
         )}
 
         <span className="h-5 w-px bg-line mx-1" />
@@ -262,11 +242,6 @@ export const AppBar: React.FC<AppBarProps> = ({
           </span>
         </Tooltip>
 
-        <Tooltip content={theme === 'dark' ? 'Light theme' : 'Dark theme'}>
-          <button onClick={toggleTheme} className={iconBtn} aria-label="Toggle theme">
-            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
-        </Tooltip>
         {onOpenShortcuts && (
           <Tooltip
             content={
@@ -277,6 +252,23 @@ export const AppBar: React.FC<AppBarProps> = ({
           >
             <button onClick={onOpenShortcuts} className={iconBtn} aria-label="Keyboard shortcuts">
               <Keyboard className="w-4 h-4" />
+            </button>
+          </Tooltip>
+        )}
+        {onToggleMeasure && (
+          <Tooltip content="Measure distances (D)">
+            <button
+              onClick={onToggleMeasure}
+              aria-label="Measure"
+              aria-pressed={!!measureOn}
+              className={clsx(
+                'h-7 w-7 inline-flex items-center justify-center rounded transition-colors',
+                measureOn
+                  ? 'bg-accent-soft text-accent-fg'
+                  : 'text-fg-2 hover:text-fg hover:bg-surface-3',
+              )}
+            >
+              <Ruler className="w-4 h-4" />
             </button>
           </Tooltip>
         )}
