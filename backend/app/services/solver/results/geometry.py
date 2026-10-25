@@ -10,14 +10,30 @@ import numpy as np
 from .foamio import ResultsUnavailable, _read_field
 
 
-def _nearest(pts: np.ndarray, ref: np.ndarray, chunk: int = 4096) -> np.ndarray:
-    """Index of the nearest row of `ref` for each row of `pts`."""
+def _nearest_brute(pts: np.ndarray, ref: np.ndarray, chunk: int = 256) -> np.ndarray:
     out = np.empty(len(pts), dtype=int)
     for s in range(0, len(pts), chunk):
         block = pts[s:s + chunk]
         d = ((block[:, None, :] - ref[None, :, :]) ** 2).sum(axis=2)
         out[s:s + chunk] = d.argmin(axis=1)
     return out
+
+
+def _nearest(pts: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """Index of the nearest row of `ref` for each row of `pts`.
+
+    A k-d tree when scipy is there (dev, and any build that ships it): the old
+    brute force was O(N*M) in time and in temporary memory, several seconds and
+    hundreds of MB on the first live preview of a 10k+ cell mesh. The frozen
+    sidecar leaves scipy out, so it keeps a brute force with small chunks.
+    """
+    if len(pts) == 0 or len(ref) == 0:
+        return np.zeros(len(pts), dtype=int)
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        return _nearest_brute(pts, ref)
+    return cKDTree(ref).query(pts, k=1)[1].astype(int)
 
 
 _POLYMESH_CACHE: Dict[tuple, np.ndarray] = {}
