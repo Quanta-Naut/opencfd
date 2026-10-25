@@ -204,6 +204,36 @@ class OpenFoamAdapter(SolverAdapter):
             "probe_rc": probe.returncode,
         }
 
+    async def _stop_solver(self, proc: "asyncio.subprocess.Process", solver_bin: str) -> None:
+        """End the solver and everything it started. Killing only the shell leaves
+        the solver running (and writing) in the background."""
+        import signal
+
+        try:
+            if os.name != "nt":
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            try:
+                if os.name != "nt":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+        if self._prefix():  # WSL: killing wsl.exe leaves the solver alive inside the distro
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self._run_sync(f"pkill -x {shlex.quote(solver_bin)} || true", timeout=15)
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
     # ---- the run --------------------------------------------------------
     async def _stream(self, body: str, tag: str, retries: int = 1) -> AsyncGenerator[Dict[str, Any], None]:
         """Run a preparation step (gmshToFoam / checkMesh / ...), forwarding its
@@ -389,6 +419,8 @@ class OpenFoamAdapter(SolverAdapter):
         yield {"type": "log", "line": f"[{solver_bin}] starting"}
         proc = await asyncio.create_subprocess_exec(
             *self._script(solver_cmd),
+            # own process group on POSIX, so Stop can end bash and the solver together
+            **({} if os.name == "nt" else {"start_new_session": True}),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -433,9 +465,12 @@ class OpenFoamAdapter(SolverAdapter):
                         last_preview_time = fp["time"]
                         yield {"type": "field", "data": fp}
             rc = await proc.wait()
-        except asyncio.CancelledError:
-            proc.kill()
+        except (asyncio.CancelledError, GeneratorExit):
+            await self._stop_solver(proc, solver_bin)
             raise
+        finally:
+            if proc.returncode is None:
+                await self._stop_solver(proc, solver_bin)
 
         # Emit the final written time snapshot so the live viewer and run
         # persistence reflect the completed state even if the periodic ~3s

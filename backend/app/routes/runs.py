@@ -157,12 +157,14 @@ async def websocket_solver_stream(websocket: WebSocket):
 
         recorder = run_service.RunRecorder(project_id, run_id, config)
         recorder.open()
+        gen = None
         try:
             init_log = {"type": "log", "line": f"[OpenCFD] solver backend: {adapter.name}"}
             await recorder.record_event(init_log)
             await websocket.send_json(init_log)
 
-            async for item in adapter.run(case_dir, config):
+            gen = adapter.run(case_dir, config)
+            async for item in gen:
                 await recorder.record_event(item)
                 if item.get("type") == "field":
                     # A live preview is several MB of floats on a big mesh:
@@ -174,6 +176,9 @@ async def websocket_solver_stream(websocket: WebSocket):
 
             await recorder.finish(case_dir)
         except WebSocketDisconnect:
+            # Stop: end the solver first, then save what it had written.
+            if gen is not None:
+                await gen.aclose()
             await recorder.finish(case_dir)
             raise
         except Exception as e:
