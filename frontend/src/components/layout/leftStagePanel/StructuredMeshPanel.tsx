@@ -418,11 +418,11 @@ export const StructuredMeshPanel: React.FC<{
     const open = openStep === n;
     const locked = n === 2 && !hasBlocks;
     return (
-      <div className="border border-line rounded bg-surface overflow-hidden">
+      <div className="border-t border-line first:border-t-0">
         <button
           onClick={() => !locked && setOpenStep(n)}
           disabled={locked}
-          className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${open ? 'bg-surface-2' : 'hover:bg-surface-2'} ${locked ? 'opacity-40 cursor-not-allowed' : ''}`}
+          className={`w-full flex items-center gap-2 py-2.5 text-left ${locked ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           <span
             className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold shrink-0 border ${open ? 'bg-accent-soft text-accent border-accent' : 'bg-surface-3 text-fg-4 border-transparent'}`}
@@ -438,13 +438,13 @@ export const StructuredMeshPanel: React.FC<{
             className={`w-3.5 h-3.5 text-fg-4 transition-transform ${open ? 'rotate-180' : ''}`}
           />
         </button>
-        {open && <div className="px-3 pb-3.5 pt-1">{body}</div>}
+        {open && <div className="pb-3">{body}</div>}
       </div>
     );
   };
 
   return (
-    <div className="space-y-2">
+    <div>
       {stepRow(1, 'Blocking', step1)}
       {stepRow(2, 'Mesh sizing', step2)}
     </div>

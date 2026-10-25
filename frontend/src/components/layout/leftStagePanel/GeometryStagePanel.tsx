@@ -91,10 +91,10 @@ export function GeometryStagePanel(p: GeometryStagePanelProps) {
           const section = (n: CadWorkflowStep, label: string, body: React.ReactNode) => {
             const isOpen = openGeoSection === n;
             return (
-              <div className="border border-line rounded bg-surface overflow-hidden">
+              <div className="border-t border-line first:border-t-0">
                 <button
                   onClick={() => toggle(n)}
-                  className={`w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors ${isOpen ? 'bg-surface-2' : 'hover:bg-surface-2'}`}
+                  className={`w-full flex items-center gap-2 py-2.5 text-left`}
                 >
                   <span
                     className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold shrink-0 border ${isOpen ? 'bg-accent-soft text-accent border-accent' : 'bg-surface-3 text-fg-4 border-transparent'}`}
@@ -110,13 +110,13 @@ export function GeometryStagePanel(p: GeometryStagePanelProps) {
                     className={`w-3.5 h-3.5 text-fg-4 transition-transform ${isOpen ? 'rotate-180' : ''}`}
                   />
                 </button>
-                {isOpen && <div className="px-3 pb-3.5 pt-1">{body}</div>}
+                {isOpen && <div className="pb-3">{body}</div>}
               </div>
             );
           };
 
           return (
-            <div className="p-3 pb-10 space-y-2 text-xs text-fg">
+            <div className="px-3 pt-1 pb-10 text-xs text-fg">
               {/* ══════════ 1 · GEOMETRY ══════════ */}
               {section(
                 1,
