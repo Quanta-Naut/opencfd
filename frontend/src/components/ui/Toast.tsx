@@ -366,7 +366,7 @@ export const ToastHost: React.FC = () => {
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
       className="fixed z-[10000] flex flex-col gap-2 items-end pointer-events-none"
-      // Above the bottom status bar / console strip, clear of the viewport chips.
+      // Pinned to the bottom right corner; it floats over the console drawer.
       style={{ bottom: '1rem', right: '1rem' }}
     >
       {rows.map((r) => (
