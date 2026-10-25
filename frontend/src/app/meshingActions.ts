@@ -204,7 +204,7 @@ export async function runGenerateStructuredMesh(wb: GenerateStructuredMeshContex
       toast.warning(`${unpatched} boundary edge${unpatched > 1 ? 's have' : ' has'} no patch`, {
         id: 'unpatched-edges',
         description:
-          'They become wall. Use Associate to give them inlet, outlet or symmetry (shown red and dashed in Blocking).',
+          'They become wall. Use Associate to give them inlet, outlet or symmetry (marked red and dashed on the canvas).',
       });
     setMeshData(mesh);
     meshSigRef.current = geomSignature;

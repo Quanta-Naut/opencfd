@@ -222,6 +222,34 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
     return;
   }
 
+  // Boundary edges with no patch become wall, so they stay marked in every
+  // view (dashed red, with a label) until they are associated.
+  if (unpatchedEdgeIds.size > 0) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    unpatchedEdgeIds.forEach((id) => {
+      const chain = chainOf(id);
+      if (chain.length < 2) return;
+      ctx.strokeStyle = '#DC2626';
+      ctx.lineWidth = 4;
+      ctx.setLineDash([6, 5]);
+      tracePath(chain);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const m = chain[Math.floor(chain.length / 2)];
+      const sp = ws(m.x, m.y);
+      ctx.font = '600 11px Inter, sans-serif';
+      const label = 'No patch: becomes wall';
+      const w = ctx.measureText(label).width + 10;
+      ctx.fillStyle = '#DC2626';
+      ctx.fillRect(sp.x - w / 2, sp.y - 20, w, 16);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, sp.x, sp.y - 12);
+    });
+    ctx.restore();
+  }
   // Editor highlights on top of the edges.
   if (editing) {
     const strokeEdge = (id: string, color: string, width: number, dash: number[] = []) => {
@@ -234,8 +262,6 @@ export function drawBlockTopology(f: DrawFrame, scene: DrawScene): void {
       ctx.stroke();
       ctx.setLineDash([]);
     };
-    // Boundary edges with no patch need associating (dashed red).
-    unpatchedEdgeIds.forEach((id) => strokeEdge(id, '#DC2626', 2, [5, 4]));
     if (hoverEdgeId && !pickedEdges.has(hoverEdgeId) && hoverEdgeId !== selectedEdgeId)
       strokeEdge(hoverEdgeId, 'rgba(224, 90, 0, 0.55)', 4);
     // Picked edges; O-grid pass-through edges dashed (the grid runs through them).
