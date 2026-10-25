@@ -194,6 +194,18 @@ export async function runGenerateStructuredMesh(wb: GenerateStructuredMeshContex
   try {
     const req = toStructuredRequest(propagateNodeCounts(blocking));
     const mesh = await generateStructuredMesh(req, structuredSmooth);
+    // A boundary edge with no patch is written as a wall. Say so, since a
+    // forgotten outlet or inlet would otherwise only show up as a solver error.
+    const uses = new Map<string, number>();
+    for (const blk of blocking.blocks)
+      for (const id of blk.edges) uses.set(id, (uses.get(id) ?? 0) + 1);
+    const unpatched = blocking.edges.filter((e) => uses.get(e.id) === 1 && !e.patch).length;
+    if (unpatched > 0)
+      toast.warning(`${unpatched} boundary edge${unpatched > 1 ? 's have' : ' has'} no patch`, {
+        id: 'unpatched-edges',
+        description:
+          'They become wall. Use Associate to give them inlet, outlet or symmetry (shown red and dashed in Blocking).',
+      });
     setMeshData(mesh);
     meshSigRef.current = geomSignature;
     meshCoreSigRef.current = geomSigCore;
