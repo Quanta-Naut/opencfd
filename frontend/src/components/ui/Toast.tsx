@@ -367,7 +367,7 @@ export const ToastHost: React.FC = () => {
       onBlur={() => setPaused(false)}
       className="fixed z-[10000] flex flex-col gap-2 items-end pointer-events-none"
       // Above the bottom status bar / console strip, clear of the viewport chips.
-      style={{ bottom: 'calc(var(--app-bottom-bar, 0px) + 3rem)', right: '1rem' }}
+      style={{ bottom: '1rem', right: '1rem' }}
     >
       {rows.map((r) => (
         <ToastItem key={r.id} row={r} />
