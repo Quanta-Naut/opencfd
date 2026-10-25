@@ -380,3 +380,24 @@ export interface CFDProjectState {
   plots: PlotDefinition[];
   terminalLogs: string[];
 }
+
+/** Structured mesh smoothing: per-block elliptic relaxation, then an optional
+ * pass across the block seams. */
+export interface SmoothingSettings {
+  /** Relax each block's interior with Thomas-Middlecoff control. */
+  blocks: boolean;
+  /** Relaxation sweeps per block. */
+  blockIterations: number;
+  /** How strongly the boundary curvature is fed into the interior: 0 is plain
+   * Laplace, 1 is full Thomas-Middlecoff. */
+  blockControl: number;
+  /** Relax the nodes across block seams so grid lines flow through them. */
+  seams: boolean;
+}
+
+export const DEFAULT_SMOOTHING: SmoothingSettings = {
+  blocks: true,
+  blockIterations: 400,
+  blockControl: 1,
+  seams: true,
+};

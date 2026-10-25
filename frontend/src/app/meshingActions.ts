@@ -1,5 +1,5 @@
 import React from 'react';
-import { CFDProjectState } from '../types/cfd';
+import { CFDProjectState, SmoothingSettings } from '../types/cfd';
 import { generateMesh, generateStructuredMesh } from '../utils/api';
 import { toast } from '../components/ui/Toast';
 import { FlowType, BoundaryTag, CadEntity } from '../types/cadWorkflow';
@@ -193,7 +193,7 @@ export async function runGenerateStructuredMesh(wb: GenerateStructuredMeshContex
   }));
   try {
     const req = toStructuredRequest(propagateNodeCounts(blocking));
-    const mesh = await generateStructuredMesh(req, { smooth: structuredSmooth });
+    const mesh = await generateStructuredMesh(req, structuredSmooth);
     setMeshData(mesh);
     meshSigRef.current = geomSignature;
     meshCoreSigRef.current = geomSigCore;
@@ -245,7 +245,7 @@ export interface GenerateStructuredMeshContext {
   setMeshError: React.Dispatch<React.SetStateAction<string>>;
   clearResultsCache: () => void;
   setState: React.Dispatch<React.SetStateAction<CFDProjectState>>;
-  structuredSmooth: boolean;
+  structuredSmooth: SmoothingSettings;
   meshSigRef: React.RefObject<string>;
   geomSignature: string;
   meshCoreSigRef: React.RefObject<string>;

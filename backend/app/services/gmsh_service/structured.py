@@ -349,7 +349,12 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
         # already well-shaped). Kept per block only if it doesn't make that
         # block's own worst cell worse.
         tm_notes: List[str] = []
+        want_tm = params.get("blockSmooth") is not False
+        tm_iters = max(0, min(5000, int(params.get("blockIterations", 400))))
+        tm_control = max(0.0, min(2.0, float(params.get("blockControl", 1.0))))
         for surf, (bottom, right, top, left) in block_sides.items():
+            if not want_tm or tm_iters == 0:
+                break
             surf_elems = surface_elements.get(surf) or []
             if len(surf_elems) < 4:
                 continue
@@ -371,6 +376,7 @@ def generate_structured_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
             q_before = _mesh_quality(nodes, surf_elems)
             smoothed = thomas_middlecoff_smooth(
                 np.array(bottom), np.array(top), np.array(left), np.array(right),
+                iterations=tm_iters, control=tm_control,
             )
             # Only ever reassigns trial[idx] wholesale below (never mutates an
             # existing node's [x, y, z] list in place), so a shallow copy of the

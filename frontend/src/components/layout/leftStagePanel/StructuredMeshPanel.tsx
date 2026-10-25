@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Tooltip } from '../../ui/Tooltip';
 import { toast } from '../../ui/Toast';
-import { CFDProjectState } from '../../../types/cfd';
+import { CFDProjectState, SmoothingSettings, DEFAULT_SMOOTHING } from '../../../types/cfd';
 import {
   Blocking,
   emptyBlocking,
@@ -44,8 +44,8 @@ export const StructuredMeshPanel: React.FC<{
   blocking: Blocking | null;
   onInitializeBlocking?: () => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
-  structuredSmooth?: boolean;
-  setStructuredSmooth?: (v: boolean) => void;
+  structuredSmooth?: SmoothingSettings;
+  setStructuredSmooth?: (v: SmoothingSettings) => void;
   field: string;
   state: CFDProjectState;
   updateYPlus: (p: any) => void;
@@ -354,19 +354,69 @@ export const StructuredMeshPanel: React.FC<{
           </Tooltip>
         )}
 
-        {setStructuredSmooth && (
-          <label className="flex items-center justify-between text-[10px] text-fg-2">
-            <Tooltip content="After meshing, relax the interior grid with an elliptic (Winslow) pass so grid lines flow across block seams. Kept only if it does not make the worst cell worse.">
-              <span className="cursor-help">Elliptic smoothing</span>
-            </Tooltip>
-            <input
-              type="checkbox"
-              checked={structuredSmooth !== false}
-              onChange={(ev) => setStructuredSmooth(ev.target.checked)}
-              className="accent-accent"
-            />
-          </label>
-        )}
+        {setStructuredSmooth &&
+          (() => {
+            const sm = structuredSmooth ?? DEFAULT_SMOOTHING;
+            const set = (m: Partial<SmoothingSettings>) => setStructuredSmooth({ ...sm, ...m });
+            return (
+              <div className="border-t border-line pt-2 space-y-2">
+                <span className="text-[11px] font-semibold text-fg">Smoothing</span>
+                <label className="flex items-center justify-between text-[10px] text-fg-2">
+                  <Tooltip content="Relax each block's interior so grid lines leave curved walls smoothly (Thomas-Middlecoff). Kept per block only if its worst angle improves.">
+                    <span className="cursor-help">Smooth inside blocks</span>
+                  </Tooltip>
+                  <input
+                    type="checkbox"
+                    checked={sm.blocks}
+                    onChange={(ev) => set({ blocks: ev.target.checked })}
+                    className="accent-accent"
+                  />
+                </label>
+                {sm.blocks && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <label>
+                      <Tooltip content="Relaxation sweeps per block. More is smoother and slower.">
+                        <span className={`${lbl} cursor-help`}>Iterations</span>
+                      </Tooltip>
+                      <NumberField
+                        value={sm.blockIterations}
+                        integer
+                        min={1}
+                        max={5000}
+                        fallback={400}
+                        onChange={(n) => set({ blockIterations: n })}
+                        className={field}
+                      />
+                    </label>
+                    <label>
+                      <Tooltip content="How strongly each wall's curvature shapes the interior. 0 is plain Laplace smoothing, 1 is full control, up to 2.">
+                        <span className={`${lbl} cursor-help`}>Wall control</span>
+                      </Tooltip>
+                      <NumberField
+                        value={sm.blockControl}
+                        min={0}
+                        max={2}
+                        fallback={1}
+                        onChange={(n) => set({ blockControl: n })}
+                        className={field}
+                      />
+                    </label>
+                  </div>
+                )}
+                <label className="flex items-center justify-between text-[10px] text-fg-2">
+                  <Tooltip content="After meshing, relax the grid across block seams (Winslow) so grid lines flow through the joins. Kept only if it does not make the worst cell worse.">
+                    <span className="cursor-help">Smooth across seams</span>
+                  </Tooltip>
+                  <input
+                    type="checkbox"
+                    checked={sm.seams}
+                    onChange={(ev) => set({ seams: ev.target.checked })}
+                    className="accent-accent"
+                  />
+                </label>
+              </div>
+            );
+          })()}
       </div>
     );
   }

@@ -1,7 +1,7 @@
 import React from 'react';
 import type { StageId, StageStatus } from '../stages';
 import { Tooltip } from '../../ui/Tooltip';
-import { CFDProjectState } from '../../../types/cfd';
+import { CFDProjectState, SmoothingSettings } from '../../../types/cfd';
 import { Layers, ChevronRight, ChevronDown } from 'lucide-react';
 import { Blocking } from '../../../types/blocking';
 import { NumberField } from './NumberField';
@@ -455,8 +455,8 @@ export interface MeshStagePanelProps {
   blocking: Blocking;
   onInitializeBlocking: () => void;
   onUpdateBlocking: (bk: Blocking | null) => void;
-  structuredSmooth: boolean;
-  setStructuredSmooth: (v: boolean) => void;
+  structuredSmooth: SmoothingSettings;
+  setStructuredSmooth: (v: SmoothingSettings) => void;
   updateYPlus: (p: any) => void;
   onApplyYPlusToMesh: () => void;
   onDirectionColors: (colors: Record<string, string> | null) => void;

@@ -5,6 +5,7 @@ import {
   PhysicsConfig,
   BoundaryConditions,
   SolverControls,
+  SmoothingSettings,
 } from '../types/cfd';
 import { API_BASE, WS_BASE } from './backend';
 import { MESH_MEDIA_TYPE, readMeshResponse } from './meshCodec';
@@ -340,7 +341,7 @@ export async function generateMesh(geometryType: string, params: any) {
   }
 }
 
-export async function generateStructuredMesh(blocking: any, opts?: { smooth?: boolean }) {
+export async function generateStructuredMesh(blocking: any, smoothing?: SmoothingSettings) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 120_000);
   try {
@@ -349,7 +350,13 @@ export async function generateStructuredMesh(blocking: any, opts?: { smooth?: bo
       headers: MESH_REQUEST_HEADERS,
       body: JSON.stringify({
         geometry_type: 'structured',
-        params: { blocking, smooth: opts?.smooth !== false },
+        params: {
+          blocking,
+          smooth: smoothing?.seams !== false,
+          blockSmooth: smoothing?.blocks !== false,
+          blockIterations: smoothing?.blockIterations ?? 400,
+          blockControl: smoothing?.blockControl ?? 1,
+        },
       }),
       signal: controller.signal,
     });

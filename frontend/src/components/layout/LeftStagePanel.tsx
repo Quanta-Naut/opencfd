@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { StageId, StageStatus } from './stages';
 import { SolverPanel } from '../solver/SolverPanel';
-import { CFDProjectState } from '../../types/cfd';
+import { CFDProjectState, SmoothingSettings } from '../../types/cfd';
 import {
   CadWorkflowStep,
   FlowType,
@@ -104,8 +104,8 @@ interface LeftStagePanelProps {
   onInitializeBlocking?: () => void;
   onUpdateBlocking?: (bk: Blocking | null) => void;
   onGenerateStructuredMesh?: () => void;
-  structuredSmooth?: boolean;
-  setStructuredSmooth?: (v: boolean) => void;
+  structuredSmooth?: SmoothingSettings;
+  setStructuredSmooth?: (v: SmoothingSettings) => void;
   meshTopology?: 'unstructured' | 'structured';
   onMeshTopologyChange?: (t: 'unstructured' | 'structured') => void;
   width?: number;

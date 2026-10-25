@@ -19,6 +19,8 @@ import {
   PlotDefinition,
   TrackSeed,
   SavedView,
+  SmoothingSettings,
+  DEFAULT_SMOOTHING,
 } from './types/cfd';
 import type { CameraApi } from './components/cad/workbenchCore';
 import { PickDialog } from './components/results/PickDialog';
@@ -183,7 +185,7 @@ export function App({
   const [directionColors, setDirectionColors] = useState<Record<string, string> | null>(null);
   // Which structured-meshing section is open: it picks what the canvas shows.
   const [structuredStep, setStructuredStep] = useState<'blocking' | 'sizing'>('blocking');
-  const [structuredSmooth, setStructuredSmooth] = useState<boolean>(true);
+  const [structuredSmooth, setStructuredSmooth] = useState<SmoothingSettings>(DEFAULT_SMOOTHING);
   const [meshTopology, setMeshTopology] = useState<'unstructured' | 'structured'>(
     () => savedSession?.meshTopology ?? 'unstructured',
   );

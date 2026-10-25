@@ -126,7 +126,7 @@ def _boundary_control(curve: np.ndarray) -> np.ndarray:
 
 def thomas_middlecoff_smooth(
     bottom: np.ndarray, top: np.ndarray, left: np.ndarray, right: np.ndarray,
-    iterations: int = 400, omega: float = 1.85,
+    iterations: int = 400, omega: float = 1.85, control: float = 1.0,
 ) -> np.ndarray:
     """Relax a block's interior grid with Thomas-Middlecoff control functions.
     `bottom`/`top` are (ni,2) curves (j=0 and j=nj-1), `left`/`right` are
@@ -152,6 +152,10 @@ def thomas_middlecoff_smooth(
     u = np.linspace(0.0, 1.0, ni)
     P = (1 - v)[None, :] * P_bottom[:, None] + v[None, :] * P_top[:, None]      # (ni, nj)
     Q = (1 - u)[:, None] * Q_left[None, :] + u[:, None] * Q_right[None, :]      # (ni, nj)
+    # control = 0 is plain Laplace (Winslow without forcing); 1 is full
+    # Thomas-Middlecoff boundary-curvature control.
+    P = P * control
+    Q = Q * control
 
     X = grid[:, :, 0].copy()
     Y = grid[:, :, 1].copy()
