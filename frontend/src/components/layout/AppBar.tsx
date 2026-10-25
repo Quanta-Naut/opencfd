@@ -6,6 +6,7 @@ import {
   Lock,
   Moon,
   Pencil,
+  Ruler,
   Search,
   Settings,
   Sun,
@@ -30,6 +31,9 @@ interface AppBarProps {
   caseFilesCount?: number;
   onOpenCommandPalette?: () => void;
   onOpenShortcuts?: () => void;
+  /** Measure tool toggle; undefined hides the button (no canvas on this stage). */
+  measureOn?: boolean;
+  onToggleMeasure?: () => void;
   /** Controlled by App so the command palette can open this dialog too. */
   preferencesOpen?: boolean;
   onPreferencesOpenChange?: (open: boolean) => void;
@@ -54,6 +58,8 @@ export const AppBar: React.FC<AppBarProps> = ({
   caseFilesCount = 0,
   onOpenCommandPalette,
   onOpenShortcuts,
+  measureOn,
+  onToggleMeasure,
   preferencesOpen,
   onPreferencesOpenChange,
 }) => {
@@ -180,6 +186,23 @@ export const AppBar: React.FC<AppBarProps> = ({
 
       {/* Global actions */}
       <div className="flex items-center gap-1 shrink-0">
+        {onToggleMeasure && (
+          <Tooltip content="Measure distances (D)">
+            <button
+              onClick={onToggleMeasure}
+              aria-label="Measure"
+              aria-pressed={!!measureOn}
+              className={clsx(
+                'h-7 w-7 inline-flex items-center justify-center rounded transition-colors',
+                measureOn
+                  ? 'bg-accent-soft text-accent-fg'
+                  : 'text-fg-2 hover:text-fg hover:bg-surface-3',
+              )}
+            >
+              <Ruler className="w-4 h-4" />
+            </button>
+          </Tooltip>
+        )}
         {onOpenCaseFiles && (
           <button
             onClick={onOpenCaseFiles}

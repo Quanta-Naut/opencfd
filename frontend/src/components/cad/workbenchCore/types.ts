@@ -233,4 +233,7 @@ export interface CadWorkbenchProps {
   resultsOverlay?: ResultsOverlay | null;
   /** Filled by the canvas with get / set for its camera (zoom and pan). */
   cameraApiRef?: React.MutableRefObject<CameraApi | null>;
+  /** Measure tool on or off; the toggle is in the top bar. */
+  measureOn?: boolean;
+  onMeasureChange?: (on: boolean) => void;
 }

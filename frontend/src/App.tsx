@@ -1258,6 +1258,7 @@ export function App({
   };
   // The probe picked in the Probes table, ringed on the field; and a nudge
   // that opens the table when a probe is placed.
+  const [measureOn, setMeasureOn] = useState(false);
   const [selectedProbe, setSelectedProbe] = useState<string | null>(null);
   const [drawerFocus, setDrawerFocus] = useState<{ id: string; n: number } | null>(null);
   const addProbe = useCallback((pt: [number, number]) => {
@@ -1633,6 +1634,8 @@ export function App({
         caseFilesCount={Object.keys(caseFiles).length}
         onOpenCommandPalette={() => setPaletteOpen(true)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
+        measureOn={measureOn}
+        onToggleMeasure={activeStage === 'caseSetup' ? undefined : () => setMeasureOn((v) => !v)}
         preferencesOpen={preferencesOpen}
         onPreferencesOpenChange={setPreferencesOpen}
       />
@@ -1860,6 +1863,8 @@ export function App({
           <main className="absolute inset-0 w-full h-full bg-surface overflow-hidden">
             <div ref={viewportRef} className="w-full h-full">
               <CadWorkbench2D
+                measureOn={measureOn}
+                onMeasureChange={setMeasureOn}
                 displayOnly={activeStage !== 'geometry'}
                 meshData={effectiveMesh}
                 meshStale={meshStale}

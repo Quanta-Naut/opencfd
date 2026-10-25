@@ -1,7 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Ruler, X, Copy } from 'lucide-react';
 import type { Point2D } from '../../../types/cadWorkflow';
-import { Tooltip } from '../../ui/Tooltip';
 
 export interface MeasureLayerProps {
   /** The container the canvas lives in; clicks on the bare canvas place points. */
@@ -10,6 +8,9 @@ export interface MeasureLayerProps {
   glCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   toScreen: (wx: number, wy: number) => Point2D;
   toWorld: (cx: number, cy: number) => Point2D;
+  /** Whether measuring is on; the toggle lives in the top bar. */
+  on: boolean;
+  onChange: (on: boolean) => void;
   /** Called when measuring starts, so a drawing tool does not stay armed. */
   onStart?: () => void;
   /** The sketch tool rail is on the left; sit beside it. */
@@ -39,22 +40,34 @@ export const MeasureLayer: React.FC<MeasureLayerProps> = ({
   glCanvasRef,
   toScreen,
   toWorld,
+  on,
+  onChange,
   onStart,
   besideRail = false,
 }) => {
-  const [on, setOn] = useState(false);
   const [pts, setPts] = useState<Point2D[]>([]);
   const [cursor, setCursor] = useState<Point2D | null>(null);
   const down = useRef({ x: 0, y: 0 });
   const live = useRef({ toWorld, pts });
   live.current = { toWorld, pts };
 
-  const toggle = () => {
-    setOn((v) => {
-      if (!v) onStart?.();
-      return !v;
-    });
-  };
+  // D toggles measuring, like the top bar button.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== 'd' || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (/INPUT|SELECT|TEXTAREA/.test(t.tagName) || t.isContentEditable)) return;
+      onChange(!on);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [on, onChange]);
+
+  useEffect(() => {
+    if (on) onStart?.();
+    else setPts([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [on]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -90,7 +103,7 @@ export const MeasureLayer: React.FC<MeasureLayerProps> = ({
       if (t && /INPUT|SELECT|TEXTAREA/.test(t.tagName)) return;
       if (e.key === 'Escape') {
         if (live.current.pts.length) setPts([]);
-        else setOn(false);
+        else onChange(false);
       } else if (e.key === 'Backspace' || e.key === 'Delete') {
         if (live.current.pts.length) {
           e.preventDefault();
@@ -115,7 +128,7 @@ export const MeasureLayer: React.FC<MeasureLayerProps> = ({
       window.removeEventListener('keydown', onKey, true);
       setCursor(null);
     };
-  }, [on, besideRail, containerRef, canvasRef, glCanvasRef]);
+  }, [on, onChange, besideRail, containerRef, canvasRef, glCanvasRef]);
 
   const pairs = useMemo(() => {
     const out: Pair[] = [];
@@ -127,20 +140,8 @@ export const MeasureLayer: React.FC<MeasureLayerProps> = ({
       }
     return out;
   }, [pts]);
-  const path = pairs.filter((p) => p.b === p.a + 1).reduce((s, p) => s + p.d, 0);
-
-  const copy = () => {
-    const rows = [
-      'from,to,distance_m,dx_m,dy_m',
-      ...pairs.map((p) => `${p.a + 1},${p.b + 1},${p.d},${p.dx},${p.dy}`),
-    ];
-    navigator.clipboard?.writeText(rows.join('\n')).catch(() => {});
-  };
-
   const sp = pts.map((p) => toScreen(p.x, p.y));
-  // Every pair is drawn up to five points, after that only the chain, so the
-  // canvas stays readable; the table always lists them all.
-  const drawn = pts.length <= 5 ? pairs : pairs.filter((p) => p.b === p.a + 1);
+  const drawn = pairs;
   const last = sp[sp.length - 1];
   const live2 = on && cursor && last ? Math.hypot(cursor.x - last.x, cursor.y - last.y) : 0;
   let liveDist = 0;
@@ -180,86 +181,14 @@ export const MeasureLayer: React.FC<MeasureLayerProps> = ({
 
   return (
     <>
-      <div
-        className="absolute z-20 flex flex-col gap-2 items-start select-none"
-        style={{
-          left: besideRail ? 56 : 12,
-          bottom: 'calc(var(--app-bottom-bar, 0px) + 44px)',
-        }}
-      >
-        {on && (
-          <div className="w-60 bg-surface border border-line rounded text-[11px] text-fg">
-            <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-line-soft">
-              <span className="font-semibold">Measure</span>
-              <span className="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={copy}
-                  disabled={!pairs.length}
-                  title="Copy as CSV"
-                  className="p-1 rounded text-fg-2 hover:bg-surface-3 hover:text-fg disabled:opacity-30"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPts([])}
-                  disabled={!pts.length}
-                  className="px-1.5 py-0.5 rounded text-fg-2 hover:bg-surface-3 hover:text-fg disabled:opacity-30"
-                >
-                  Clear
-                </button>
-              </span>
-            </div>
-            {pts.length < 2 ? (
-              <p className="px-2.5 py-2 text-fg-2">
-                {pts.length === 0
-                  ? 'Click a point, then another. Add as many as you like.'
-                  : 'Click a second point.'}
-              </p>
-            ) : (
-              <div className="max-h-48 overflow-auto">
-                <table className="w-full font-mono">
-                  <tbody>
-                    {pairs.map((p) => (
-                      <tr key={`${p.a}-${p.b}`} className="border-b border-line-soft last:border-0">
-                        <td className="pl-2.5 py-1 text-fg-2">
-                          {p.a + 1} to {p.b + 1}
-                        </td>
-                        <td className="pr-2.5 py-1 text-right font-semibold">{fmtLen(p.d)}</td>
-                      </tr>
-                    ))}
-                    {pts.length > 2 && (
-                      <tr className="bg-surface-2">
-                        <td className="pl-2.5 py-1 text-fg-2">Path</td>
-                        <td className="pr-2.5 py-1 text-right font-semibold">{fmtLen(path)}</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <div className="px-2.5 py-1.5 border-t border-line-soft text-[10px] text-fg-3">
-              Backspace removes the last point. Esc clears, then exits.
-            </div>
-          </div>
-        )}
-        <Tooltip content="Measure distances" delay={350} side="right">
-          <button
-            type="button"
-            aria-label="Measure"
-            aria-pressed={on}
-            onClick={toggle}
-            className={`w-8 h-8 inline-flex items-center justify-center rounded border transition-colors ${
-              on
-                ? 'bg-accent-soft text-accent-fg border-accent-line'
-                : 'bg-surface text-fg-2 border-line hover:text-fg hover:bg-surface-3'
-            }`}
-          >
-            <Ruler className="w-4 h-4" />
-          </button>
-        </Tooltip>
-      </div>
+      {on && (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 z-20 px-2.5 py-1 bg-surface border border-line rounded text-[11px] text-fg-2 pointer-events-none select-none"
+          style={{ top: besideRail ? 64 : 12 }}
+        >
+          Measure: click points. Backspace undoes, Esc clears, Esc again exits.
+        </div>
+      )}
 
       {pts.length > 0 && (
         <svg className="absolute inset-0 w-full h-full pointer-events-none z-[15]">

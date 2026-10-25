@@ -177,6 +177,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
   plotPickPreviewP1 = null,
   resultsOverlay = null,
   cameraApiRef,
+  measureOn = false,
+  onMeasureChange = () => {},
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2704,6 +2706,8 @@ const CadWorkbench2DComponent: React.FC<CadWorkbenchProps> = ({
           glCanvasRef={glCanvasRef}
           toScreen={toScreen}
           toWorld={toWorld}
+          on={measureOn}
+          onChange={onMeasureChange}
           onStart={() => setTool('select')}
           besideRail={!displayOnly}
         />
